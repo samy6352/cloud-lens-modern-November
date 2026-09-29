@@ -29,8 +29,10 @@ const $ = (id) => document.getElementById(id);
 
 // Always Overview on a fresh load — a dashboard opens on its headline the same way a site
 // opens on its front page, regardless of which tab a previous visit happened to end on. Only
-// the period and scope are remembered across a reload; which tab is showing is not.
-let current = "overview";
+// the period and scope are remembered across a reload; which tab is showing is not. The one
+// exception is a link that names a tab (`/?tab=budgets`): that is how the v3 interface at /v2
+// hands over a screen it has not rebuilt yet. It is validated against the rail like any other.
+let current = new URLSearchParams(location.search).get("tab") || "overview";
 let days = Number(readStore("costDays", 30));
 if (!ROLLING_DAYS.includes(days)) days = 30;
 let periodMonth = readStore("costPeriodMonth", "");

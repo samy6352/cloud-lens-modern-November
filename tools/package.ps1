@@ -7,7 +7,10 @@ param(
     [Parameter(Mandatory)]
     [string]$Destination,
     [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    # Package the web/v2 build already on disk instead of running npm (for example in CI, where
+    # the UI was built in an earlier step).
+    [switch]$SkipUiBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +20,31 @@ $root = (Get-Item -LiteralPath $SourceRoot).FullName.TrimEnd('\', '/')
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $destinationPath) {
     throw "Destination already exists: $destinationPath"
+}
+
+# The v3 interface (ui/) is built into web/v2, which is git-ignored, so a package made from a clean
+# checkout would otherwise ship without it. Built here, before files are collected, so the output
+# goes through exactly the same filtering and reference checks as the rest of web/.
+$ui = Join-Path $root 'ui'
+$hasUi = Test-Path -LiteralPath (Join-Path $ui 'package.json') -PathType Leaf
+$builtUi = $false
+if ($hasUi -and -not $SkipUiBuild) {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        # Not fatal while the classic interface at / is still the product: /v2 answers with an
+        # explanation instead. Failing here would stop a deployment after its infrastructure exists.
+        Write-Warning 'Node.js (npm) was not found, so the v3 preview interface at /v2 was not rebuilt. Install Node.js 20+ to include it.'
+    } else {
+        Push-Location -LiteralPath $ui
+        try {
+            & npm ci --no-audit --no-fund --loglevel=error
+            if ($LASTEXITCODE -ne 0) { throw 'npm ci failed for ui/.' }
+            & npm run build --silent
+            if ($LASTEXITCODE -ne 0) { throw 'The v3 interface (ui/) failed to build.' }
+            $builtUi = $true
+        } finally {
+            Pop-Location
+        }
+    }
 }
 $files = [System.Collections.Generic.List[object]]::new()
 $allowedWeb = @('.html', '.js', '.css', '.svg', '.png', '.ico', '.woff', '.woff2', '.ttf')
@@ -54,8 +82,10 @@ $files.Add([pscustomobject]@{
 })
 $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($file in $files) { $paths.Add($file.Path) | Out-Null }
-foreach ($required in @('app/__init__.py', 'app/main.py', 'web/index.html', 'web/login.html',
-                        'web/assets/dashboard.js', 'web/assets/app.js', 'web/assets/app.css')) {
+$requiredFiles = @('app/__init__.py', 'app/main.py', 'web/index.html', 'web/login.html',
+                   'web/assets/dashboard.js', 'web/assets/app.js', 'web/assets/app.css')
+if ($builtUi) { $requiredFiles += 'web/v2/index.html' }
+foreach ($required in $requiredFiles) {
     if (-not $paths.Contains($required)) { throw "Package is missing $required." }
 }
 

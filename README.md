@@ -37,6 +37,8 @@ Install these from their official websites. Git and Docker are not required.
 - [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli-windows)
 - [Python 3.11 or newer](https://www.python.org/downloads/windows/) -- enable **Add Python to PATH** if the installer offers it.
+- Optional: [Node.js 20 or newer](https://nodejs.org/) -- builds the new v3 preview interface, served at
+  `/v2` beside the current one. Without it the deployment still works; `/v2` just says it was not built.
 
 Close and reopen your terminal after installation. Use **PowerShell 7**, not Command Prompt
 or the older Windows PowerShell.

@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "test:browser": "node tests/run_browser_suites.mjs",
+    "test:v2": "node tests/v2_smoke.mjs",
     "audit:a11y": "node tests/audit_a11y.mjs"
   },
   "repository": {

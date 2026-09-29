@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens. Components use the semantic names (bg-surface, text-muted, …) so the dark
+   theme is a change of values, never a change of markup. */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+
+  --color-canvas: var(--cl-canvas);
+  --color-surface: var(--cl-surface);
+  --color-surface-2: var(--cl-surface-2);
+  --color-border: var(--cl-border);
+  --color-fg: var(--cl-fg);
+  --color-muted: var(--cl-muted);
+  --color-accent: var(--cl-accent);
+  --color-accent-fg: var(--cl-accent-fg);
+  --color-good: var(--cl-good);
+  --color-bad: var(--cl-bad);
+  --color-warn: var(--cl-warn);
+
+  --radius-card: 0.875rem;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root {
+  --cl-canvas: #f6f7fb;
+  --cl-surface: #ffffff;
+  --cl-surface-2: #f1f3f9;
+  --cl-border: #e3e6ef;
+  --cl-fg: #0f172a;
+  --cl-muted: #56627a;
+  --cl-accent: #4f46e5;
+  --cl-accent-fg: #ffffff;
+  --cl-good: #047857;
+  --cl-bad: #b91c1c;
+  --cl-warn: #d97706;
+  --cl-row: 2.5rem;
+  --cl-pad: 1.25rem;
+}
+
+.dark {
+  color-scheme: dark;
+  --cl-canvas: #0b0d14;
+  --cl-surface: #121521;
+  --cl-surface-2: #191d2c;
+  --cl-border: #262b3d;
+  --cl-fg: #e6e8f0;
+  --cl-muted: #8b93a7;
+  --cl-accent: #818cf8;
+  --cl-accent-fg: #0b0d14;
+  --cl-good: #34d399;
+  --cl-bad: #f87171;
+  --cl-warn: #fbbf24;
+}
+
+[data-density="compact"] {
+  --cl-row: 2rem;
+  --cl-pad: 0.875rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-fg font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Money and counts line up in columns everywhere. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

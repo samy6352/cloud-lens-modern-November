@@ -27,6 +27,8 @@ node_modules/
 *.egg-info/
 build/
 dist/
+# The v3 interface is built from ui/ by `npm run build` (and by tools/package.ps1).
+web/v2/
 
 # Runtime output. These were being committed by accident, and a 70 KB server.err
 # in a code review is noise that hides the change underneath it.

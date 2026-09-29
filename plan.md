@@ -1,6 +1,6 @@
 # CloudLens v3 — Master Plan and 24-Hour Sprint
 
-> **Created:** 30 Sep 2026 00:45 IST · **Owner:** Ravi Verma · **Status:** approved plan, sprint not started
+> **Created:** 30 Sep 2026 00:45 IST · **Owner:** Ravi Verma · **Status:** sprint in progress (S0 done, S4 foundation done)
 > **How to use this file in a new chat:** read sections 1–4 for context, then execute **section 7 (24-hour sprint)** task by task,
 > updating the **status tracker (section 12)** as you go. Sections 8–11 are the longer v3 roadmap after the sprint.
 > This file deliberately contains **no secrets** — credentials come from the local environment / `.env` (never commit them).
@@ -14,8 +14,10 @@ Azure subscription with two lines in Cloud Shell**, which on first start **creat
 backfills history, loads it, and serves a superfast, premium, interactive dashboard** — with all heavy processing done in PostgreSQL.
 
 Two horizons:
-- **24-hour sprint (section 7):** a *v3 preview* built on top of v2 (reuse ~70% of v2; change only what v3 requires).
-- **12-week roadmap (sections 8–11):** the full from-scratch-quality v3 (React UI, split identities, in-DB pipeline, RLS, reconciliation).
+- **24-hour sprint (section 7):** a *v3 preview* built on top of v2 (reuse ~70% of the v2 backend; change only what v3 requires),
+  with the **React UI foundation from day 1** (S4) served at `/v2` beside the classic UI.
+- **12-week roadmap (sections 8–11):** the full from-scratch-quality v3 (all screens in React, split identities, in-DB pipeline, RLS,
+  reconciliation).
 
 ---
 
@@ -42,6 +44,7 @@ Two horizons:
 | 30 Sep | **No EA / billing roles**; subscription or management-group RBAC only | Keep customer install to a few lines |
 | 30 Sep | **One FOCUS export per subscription** | Management-group FOCUS exports are not supported |
 | 30 Sep | Build a **v3 preview in 24 h on top of v2**, then continue the 12-week roadmap | v2 already has most infra and export plumbing |
+| 30 Sep | **React stack from day 1** (React 19 + TS + Vite, TanStack Router/Query/Table/Virtual, ECharts, Tailwind v4 + Radix/shadcn, Framer Motion, cmdk ⌘K) — replaces the vanilla-JS refresh in S4 | No throw-away UI work; every screen built from now on is the v3 screen. Strangler: new UI at `/v2`, classic UI stays at `/` until parity |
 
 ## 4. Verified platform facts (with sources)
 
@@ -234,22 +237,30 @@ runs accepted (HTTP 200/202).
 5. Test: fresh deploy to `rg-cloudlens-v3-test`; record wall-clock time; verify URL, sign-in, export creation (S2). Keep for S5, delete in S6.
 **Done when:** two commands → working URL; rerun is idempotent; time recorded.
 
-### S4 · Premium UI refresh on the existing JS (H13–H18)
-No React rewrite in the sprint.
-1. **Navigation:** regroup the 21 tabs (`web/assets/dashboard.js` ≈ 348–381) into 5 workspaces + Admin:
+### S4 · Premium React UI foundation, day 1 (H13–H18)
+Strangler: the new UI lives at **`/v2`** beside the classic UI at `/`, shares the same session cookie and `/api/*`, and takes over `/`
+only when it reaches parity (switch-over rule, 8.4). Screens not yet migrated deep-link to the classic tab.
+1. **Stack** (`ui/`, built into `web/v2/`, git-ignored, built by `tools/package.ps1`): React 19 + TypeScript (strict) + Vite;
+   TanStack Router (typed URL search state: month, subscriptions, filters) · Query (cache, retries, 401 → `/login?next=/v2…`) ·
+   Table + Virtual; ECharts via `echarts/core` (tree-shaken, lazy chunk); Tailwind v4 + Radix primitives in shadcn style; Framer Motion
+   (route/panel transitions, `prefers-reduced-motion` respected); cmdk; self-hosted Inter/Geist with tabular numerals (CSP `font-src 'self'`).
+2. **Server integration** (`app/main.py`): `/v2/assets/*` static (public, immutable hashed files), `/v2` and `/v2/{path}` SPA fallback
+   behind `RequireAuth`; no inline scripts, so the existing CSP stays strict (`script-src 'self'`).
+3. **App shell:** sidebar with 5 workspaces + Admin —
    - **Overview:** overview
    - **Explore:** billing, uptime ("Hourly Billing"), tags, resources, anomalies, history, ai-billing
    - **Optimize:** savings, commitments, performance
    - **Govern:** budgets, governance, esu, health (Retirements), changes, azure-updates
    - **Reports:** report (Export data)
    - **Admin:** settings (Cost data + new Setup progress), audit (admin only)
-2. **Design tokens** in `web/assets/app.css` `:root` (colour scale, type scale with tabular numerals, spacing, radii, elevation, motion
-   durations); **dark theme** via `[data-theme="dark"]` + toggle persisted in `localStorage`; respect `prefers-reduced-motion`.
-3. **Skeleton loaders** instead of spinners for KPI tiles, charts and tables; smooth tab transitions.
-4. **⌘K / Ctrl+K command palette** (vanilla JS, fuzzy match over workspaces/tabs/subscriptions/actions such as Refresh, Theme).
-5. Number formatting option: Indian lakh/crore toggle.
-6. Run `npm run test:browser` and `npm run audit:a11y`; capture before/after screenshots into the session folder (not the repo).
-**Done when:** browser suites pass, a11y audit no new violations, screenshots reviewed by Ravi.
+   Top bar: month picker, subscription scope, Refresh; theme dark/light/system; density; **Indian lakh/crore** number toggle; skeletons.
+4. **⌘K / Ctrl+K palette (cmdk):** fuzzy over workspaces, screens, subscriptions and actions (Refresh, Theme, Density, Classic UI).
+5. **Day-1 screens in React:** **Overview** (KPI tiles, daily trend, top services/subscriptions) and **Explore → Billing** (virtualised
+   TanStack Table + chart). Remaining screens migrate slice by slice in the roadmap.
+6. **Budgets:** initial JS < 200 KB gz (ECharts in its own chunk), LCP < 1.5 s locally.
+7. **Tests:** Vitest (formatters, API client); pytest for `/v2` routing, auth gate and CSP; Playwright smoke (sign in → /v2 renders,
+   ⌘K opens and navigates, theme persists); `npm run audit:a11y` extended to `/v2`. Screenshots into the session folder, not the repo.
+**Done when:** `npm run build` clean, bundle budget met, tests pass, screenshots reviewed by Ravi.
 
 ### S5 · Spike: load inside the database with azure_storage (H18–H20)
 On the **test deployment's** PostgreSQL only (never the Scale server):
@@ -278,11 +289,11 @@ On the **test deployment's** PostgreSQL only (never the Scale server):
 | Exports + backfill | separate script, CSV | **automatic on first start, Parquet, 13 months** |
 | Slowest screen | 226 s | **< 1 s cold / < 300 ms warm** |
 | Endpoints returning 400 | 3 | **0** |
-| UI | 21 flat tabs | **5 workspaces, dark mode, skeletons, ⌘K** |
+| UI | 21 flat tabs, vanilla JS | **React app at `/v2`: 5 workspaces, dark mode, skeletons, ⌘K; Overview + Billing migrated** |
 | In-DB loading | none | **spike result recorded (go/no-go)** |
 
 ### Explicitly NOT in the sprint (roadmap)
-React rewrite · separate web/worker identities · pg_cron pipeline as default · row-level security · "Reconciled with Azure" badge ·
+Migrating the remaining screens to React · `/v2` replacing `/` · separate web/worker identities · pg_cron pipeline as default · row-level security · "Reconciled with Azure" badge ·
 partition per (month, subscription) with safe publish · collectors redesign · AI "Ask" redesign.
 
 ---
@@ -336,7 +347,7 @@ partition per (month, subscription) with safe publish · collectors redesign · 
 | 3–4 | Installer + infra (Bicep, install/uninstall, entra-setup) | 2 lines → URL < 20 min on a clean sub; idempotent |
 | 4–6 | DB core + pipeline + RLS + api schema + DB tests | idempotent reload; out-of-order runs never regress; reconciliation exact |
 | 6–7 | Worker: orchestrator, reconciliation, setup/health UI | clean deploy → first dashboard, zero manual steps |
-| 7–10 | API + React UI foundation + Overview + Explore + Excel export | Lighthouse ≥ 90, p95 < 300 ms, Playwright |
+| 7–10 | API + remaining React screens (foundation shipped in sprint S4) + Explore + Excel export; `/v2` becomes `/` | Lighthouse ≥ 90, p95 < 300 ms, Playwright |
 | 11–12 | Hardening + pilot: 20M rows/mo × 13 scale test, security pack, docs | pilot customer live |
 | +8 | v1.1: collectors (ARG, Advisor, policy, retirements, changes, metrics), Optimize, Govern, PowerPoint/scheduled reports, saved views, SSE, group access, private-UI, Ask CloudLens | per-workspace parity + perf |
 
@@ -377,15 +388,24 @@ larger SKU and downsize after backfill.
 
 | Task | Status | Started | Finished | Result / notes |
 |---|---|---|---|---|
-| S0 Freeze & branch | ☐ not started | | | |
-| S1 Speed fixes | ☐ not started | | | |
+| S0 Freeze & branch | ☑ done | 30 Sep 00:50 | 30 Sep 01:30 | Clone at `D:\cloud lens v3`, branch `v3`. Baseline pytest **2169 passed / 13 failed / 10 skipped** (26 min); the 13 re-fail identically with no v3 changes (pre-existing, listed below). Tab bench baseline still to capture. |
+| S1 Speed fixes | ☐ not started | | | Measured while building S4: `/api/dashboard/executive` **139–290 s cold**, 0.0 s warm, on a fresh process — the classic browser harness (`npm run test:browser`) times out at its 120 s readiness wait on both the untouched app (8100) and v3 (8101) for this reason. Top S1 target. |
 | S2 First-run exports in app | ☐ not started | | | |
 | S3 Two-line installer | ☐ not started | | | |
-| S4 UI refresh | ☐ not started | | | |
+| S4 React UI foundation | ◐ foundation done | 30 Sep 01:00 | 30 Sep 02:05 | `ui/` → `web/v2`, served at `/v2` (`app/web_v2.py`). Shell (5 workspaces + Admin), ⌘K (cmdk), month/scope in URL, theme/density/lakh-crore, skeletons, Motion. **Overview** + **Billing** (virtualised TanStack Table) on live API; other 18 screens hand off to classic via `/?tab=`. Initial JS **177 KB gz** (budget 200). Tests: `tests/test_web_v2.py` 8 ✓, Vitest 9 ✓, `npm run test:v2` **14/14** (incl. axe WCAG 2.2 AA light+dark, no CSP errors). Packaging builds UI when npm exists. Full suite after S4: **2178 passed / 12 failed / 10 skipped** — every failure is in the baseline list, none new. Remaining: Ravi review of screenshots; migrate further screens. |
 | S5 In-DB load spike | ☐ not started | | | |
 | S6 Verify & hand over | ☐ not started | | | |
 
-**Baseline tests:** _ · **Final tests:** _ · **Install wall-clock:** _ · **Test RG deleted:** _
+**Baseline tests:** 2169 passed / 13 failed / 10 skipped (pre-existing failures: test_datastore_safety::…unknown_plus_usd…,
+test_environment_rollup, test_focus_day_repair ×3, test_focus_incremental::…changed_nothing…, test_overview,
+test_postgres ×2, test_read_only_mode::…caches_but_no_ingest_workers, test_savings_frontend::…theme_contrast,
+test_summary_pending, test_visuals) · **Final tests:** _ · **Install wall-clock:** _ · **Test RG deleted:** _
 
 ### ADR notes
+- **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
+  TypeScript 7.0, TanStack Router 1.170 / Query 5.103 / Table **9.2** (v9 API: `useTable` + `tableFeatures`, not
+  `useReactTable`) / Virtual 3.14, ECharts 6.1 (`echarts/core`, lazy chunk ≈ 188 KB gz), Tailwind 4.3, `radix-ui` 1.6,
+  Motion 13 (`LazyMotion` + `domMax` loaded after first paint), cmdk 1.1, Inter Variable self-hosted. Theme is set
+  pre-paint by an external `/v2/theme.js`, so CSP stays `script-src 'self'`. Build output is git-ignored and produced by
+  `tools/package.ps1` when npm exists (a missing npm warns, not fails — classic UI remains the product until parity).
 _(record spike outcomes and decisions here)_

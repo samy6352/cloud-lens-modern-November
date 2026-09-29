@@ -57,6 +57,7 @@ from .snapshot_cache import (
     install_snapshot_routes,
 )
 from .store import PoolBusy
+from . import web_v2
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("cloudlens")
@@ -89,7 +90,7 @@ def _content_security_policy() -> str:
     """
     inline = re.compile(r"<script(?![^>]*\ssrc=)[^>]*>(.*?)</script>", re.S | re.I)
     hashes: set[str] = set()
-    for page in ("index.html", "login.html"):
+    for page in ("index.html", "login.html", "v2/index.html"):
         try:
             body = (WEB / page).read_text(encoding="utf-8")
         except OSError:  # a partial checkout must not stop the app from starting
@@ -847,7 +848,9 @@ PUBLIC_PATHS = {"/login", "/healthz", "/readyz", "/api/auth/login", "/api/auth/l
                 # Admin consent has to be reachable by someone who cannot sign in yet — that is
                 # the entire situation it exists to resolve.
                 "/auth/login", "/auth/callback", "/auth/admin-consent"}
-PUBLIC_PREFIXES = ("/assets/",)
+# The second is the v3 interface's hashed build output (app/web_v2.py ASSETS_PREFIX; a literal
+# here because the middleware tests execute this assignment on its own).
+PUBLIC_PREFIXES = ("/assets/", "/v2/assets/")
 
 
 def _wants_html(request: Request) -> bool:
@@ -5334,6 +5337,7 @@ async def access_capabilities(request: Request, scope: str = "",
 
 
 app.mount("/assets", _static_assets, name="assets")
+web_v2.install(app, WEB)
 
 
 @app.get("/")
