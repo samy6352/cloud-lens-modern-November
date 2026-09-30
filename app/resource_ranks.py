@@ -17,6 +17,7 @@ Five tables, rebuilt together from the *published* `resource_presence`:
 
     resource_ids          one integer `rkey` per identity the tab groups by:
                           (lower(trim(ResourceId)), lower(SubAccountId), currency)
+                          -- also how Waste prices resources by id (`waste._costs_for`)
     resource_raw          every raw (ResourceId, SubAccountId, BillingCurrency) spelling
                           and the rkey it folds to -- so a page can go back to presence
                           through its ResourceId index, and a narrowed reader can join
@@ -212,10 +213,16 @@ def build_sql(schema: str, source: str, periods: list[tuple[str, dt.date, dt.dat
             FROM {n[TABLE]} GROUP BY 1, 2, 3, 4""",
         f"ALTER TABLE {n[SUBS]} ADD PRIMARY KEY (skey)",
         f"ALTER TABLE {n[IDS]} ADD PRIMARY KEY (rkey)",
+        # Looking resources up by id (`waste._costs_for`). Hash, not btree: ids run to
+        # hundreds of bytes, and a btree over two million of them measured 520 MB to the
+        # hash index's 64 MB for the same 2 ms lookup; only equality is ever asked.
+        f"CREATE INDEX ON {n[IDS]} USING hash (id)",
         f"CREATE INDEX ON {n[RAW]} (rkey)",
         f'CREATE INDEX ON {n[DAILY]} ("{PERIOD}")',
         # A scope whose window is not a stored one ranks only its own subscriptions' days.
         f'CREATE INDEX ON {n[DAILY]} (skey, "{PERIOD}")',
+        # A handful of resources' money over a window, without scanning every day's rows.
+        f'CREATE INDEX ON {n[DAILY]} (rkey, "{PERIOD}")',
         f"ALTER TABLE {n[TABLE]} ADD PRIMARY KEY (period, rnk)",
         # A narrow scope reads its own resources in rank order rather than filtering the
         # whole period's ranking down to them.

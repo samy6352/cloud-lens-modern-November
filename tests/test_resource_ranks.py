@@ -266,3 +266,69 @@ def test_a_month_twinned_with_a_rolling_window_is_ranked_once(monkeypatch):
     bounds = [tuple(p[1:]) for p in periods]
     assert len(bounds) == len(set(bounds))
     assert "m2026-09" not in {p[0] for p in periods} and "m2026-08" in {p[0] for p in periods}
+
+
+# ------------------------------------------------------------------ waste pricing
+def _waste_costs(wh, monkeypatch, ids, days, *, ranked):
+    """`waste._costs_for` on the fixture, from the integer tables or forced onto presence."""
+    from app import warehouse, waste
+
+    used = []
+    original_ranked = waste._ranked_costs
+
+    def spy(*args, **kwargs):
+        rows = original_ranked(*args, **kwargs)
+        used.append(rows is not None)
+        return rows
+
+    with monkeypatch.context() as m:
+        m.setattr(warehouse, "warehouse", wh)
+        m.setattr(waste, "_ranked_costs", spy)
+        if not ranked:
+            original = warehouse.Reader.__init__
+            m.setattr(warehouse.Reader, "__init__",
+                      lambda self, *a, **kw: original(self, *a, **{**kw, "ranks": None}))
+        out = waste._costs_for(ids, days, allow_mixed=True)
+    assert used == [ranked]
+    return out
+
+
+@pytest.mark.parametrize("month", [None, "2026-08"])
+@pytest.mark.parametrize("days", [10, 3650])
+def test_waste_prices_resources_from_the_ranked_ids_exactly(estate, monkeypatch, days, month):
+    with estate.reader() as r:
+        ids = [row["id"] for row in r.rows(
+            'SELECT DISTINCT "ResourceId" AS id FROM costs WHERE "ResourceId" IS NOT NULL', None)]
+    # Other spellings of one resource, and one the warehouse has never seen.
+    ids += ["/SUBSCRIPTIONS/SUB-A/X/MIXED", "  /subscriptions/sub-a/x/mixed", "/not-billed"]
+    with reporting.select(month):
+        ranked = _waste_costs(estate, monkeypatch, ids, days, ranked=True)
+        presence = _waste_costs(estate, monkeypatch, ids, days, ranked=False)
+    # The last ten days and August do not overlap: both paths must agree that is nothing.
+    assert bool(ranked) == (days == 3650 or month is None)
+    assert ranked.keys() == presence.keys()
+    for rid, value in presence.items():
+        assert ranked[rid]["pricing_status"] == value["pricing_status"]
+        assert ranked[rid]["currency"] == value["currency"]
+        assert ranked[rid]["cost_by_currency"].keys() == value["cost_by_currency"].keys()
+        for code, amount in value["cost_by_currency"].items():
+            assert ranked[rid]["cost_by_currency"][code] == pytest.approx(amount, abs=0.005)
+    if days == 3650 and month is None:
+        assert ranked["/subscriptions/sub-a/x/mixed"]["cost_by_currency"] == {"USD": 7.0}
+        assert ranked["/unknown-currency"]["pricing_status"] == "unavailable"
+
+
+def test_waste_pricing_falls_back_when_the_ranked_read_fails(estate, monkeypatch):
+    from app import warehouse, waste
+
+    original = warehouse.Reader.rows
+
+    def rows(self, sql, *args, **kwargs):
+        if "resource_daily" in sql:
+            raise RuntimeError("simulated")
+        return original(self, sql, *args, **kwargs)
+
+    monkeypatch.setattr(warehouse, "warehouse", estate)
+    monkeypatch.setattr(warehouse.Reader, "rows", rows)
+    got = waste._costs_for(["/prior-only"], 3650, allow_mixed=True)
+    assert got["/prior-only"]["cost_by_currency"] == {"USD": 7.0}

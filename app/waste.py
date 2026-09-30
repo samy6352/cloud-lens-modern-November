@@ -393,6 +393,35 @@ async def _arg_group(
     )
 
 
+def _ranked_costs(reader: Any, wanted: list[str], since: str) -> list[dict[str, Any]] | None:
+    """`_costs_for`'s rows from `resource_ranks`' integer tables, or None to read presence.
+
+    The presence query normalises every row's `ResourceId` in the window to find a few
+    dozen resources -- 25 s on the 16.9M-row estate, `lower()` costing microseconds a
+    call under the database's libc collation. `resource_ids` holds that normalised id
+    once per identity, hash-indexed, and `resource_daily` its billed money per day, both
+    built from the same published presence table. They answer only a connection that
+    sees everything unconverted -- this reader has no scope, filter or currency of its
+    own -- and a selected reporting month is applied to the day as the view would.
+    """
+    from . import reporting, resource_ranks
+
+    if (not getattr(reader, "ranks", None) or getattr(reader, "scoped", False)
+            or getattr(reader, "narrowed", False)):
+        return None
+    period = reporting.view_predicate()
+    try:
+        return reader.rows(
+            f"SELECT i.id AS rid, i.currency, sum(d.cost) AS cost "
+            f"FROM {resource_ranks.IDS} i JOIN {resource_ranks.DAILY} d ON d.rkey = i.rkey "
+            f'WHERE i.id = ANY(?) AND d."{resource_ranks.PERIOD}" >= ?::date'
+            f"{' AND ' + period if period else ''} GROUP BY 1, 2",
+            None, params=[wanted, since])
+    except Exception as exc:  # noqa: BLE001 - the presence query is slower, never wrong
+        log.warning("ranked cost join failed (%s); reading presence", str(exc)[:200])
+        return None
+
+
 def _costs_for(resource_ids: list[str], days: int, *,
                allow_mixed: bool = False) -> dict[str, dict[str, Any]]:
     """Actual billed cost per resource over the last N days, from the warehouse.
@@ -414,21 +443,23 @@ def _costs_for(resource_ids: list[str], days: int, *,
     identifiers = ", ".join("'" + rid.replace("'", "''") + "'" for rid in sorted(wanted))
     try:
         with warehouse.reader() as reader:
-            # Per-resource billed money is exactly what the presence table carries, so
-            # `Reader.named` answers this from 2.8M narrow rows rather than 5.8M wide
-            # ones. `named` rather than the table by name because under a converted
-            # currency that money cannot be converted, and `named` is `costs` there.
-            #
-            # `lower(trim(...))` still has to be applied here rather than relied upon:
-            # the presence grain keeps `ResourceId` as the export spelled it, and the
-            # export spells it inconsistently, so two casings are two presence rows
-            # whose costs must still be added together.
-            rows = reader.rows(
-                'SELECT lower(trim("ResourceId")) AS rid, '
-                'coalesce(nullif(upper(trim("BillingCurrency")), \'\'), \'unknown\') AS currency, '
-                'sum("BilledCost") AS cost '
-                f"FROM {reader.named} WHERE \"ChargePeriodStart\" >= DATE '{since}' "
-                f'AND lower(trim("ResourceId")) IN ({identifiers}) GROUP BY 1,2', None)
+            rows = _ranked_costs(reader, sorted(wanted), since)
+            if rows is None:
+                # Per-resource billed money is exactly what the presence table carries, so
+                # `Reader.named` answers this from 2.8M narrow rows rather than 5.8M wide
+                # ones. `named` rather than the table by name because under a converted
+                # currency that money cannot be converted, and `named` is `costs` there.
+                #
+                # `lower(trim(...))` still has to be applied here rather than relied upon:
+                # the presence grain keeps `ResourceId` as the export spelled it, and the
+                # export spells it inconsistently, so two casings are two presence rows
+                # whose costs must still be added together.
+                rows = reader.rows(
+                    'SELECT lower(trim("ResourceId")) AS rid, '
+                    'coalesce(nullif(upper(trim("BillingCurrency")), \'\'), \'unknown\') AS currency, '
+                    'sum("BilledCost") AS cost '
+                    f"FROM {reader.named} WHERE \"ChargePeriodStart\" >= DATE '{since}' "
+                    f'AND lower(trim("ResourceId")) IN ({identifiers}) GROUP BY 1,2', None)
     except Exception as exc:  # noqa: BLE001 - waste findings are still useful without cost
         log.warning("cost join failed: %s", exc)
         return {}
