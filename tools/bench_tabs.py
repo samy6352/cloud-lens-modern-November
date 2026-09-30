@@ -60,6 +60,10 @@ GROUPS: dict[str, list[str]] = {
         f"/api/dashboard/tags?days={DAYS}",
         f"/api/budgets?days={DAYS}",
         f"/api/dashboard/resources?days={DAYS}",
+        # What the v3 screen asks for: one server-sorted page (the classic call above
+        # still returns the top 8,000 in one body).
+        f"/api/dashboard/resources?days={DAYS}&page=1&page_size=100",
+        f"/api/dashboard/resources?days={DAYS}&page=200&page_size=100&sort=delta",
         f"/api/dashboard/aks?days={DAYS}",
         f"/api/dashboard/ai-billing?days={DAYS}",
     ],

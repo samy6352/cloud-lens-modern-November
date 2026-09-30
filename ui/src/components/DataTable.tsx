@@ -40,26 +40,47 @@ export function DataTable<T extends RowData>({
   columns,
   height = 520,
   initialSort,
+  sort,
+  onSortChange,
   rowKey,
   empty = "No rows.",
   footer,
+  busy = false,
 }: {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   columns: any[];
   height?: number;
   initialSort?: { id: string; desc: boolean };
+  /**
+   * Server-sorted mode: the rows arrive already in `sort` order and a header click asks
+   * the caller (`onSortChange`) for a new order instead of re-sorting what is loaded.
+   */
+  sort?: { id: string; desc: boolean };
+  onSortChange?: (sort: { id: string; desc: boolean }) => void;
   rowKey: (row: T) => string;
   empty?: ReactNode;
   footer?: ReactNode;
+  busy?: boolean;
 }) {
+  const controlled = sort !== undefined && onSortChange !== undefined;
   const table = useTable({
     features: tableFeatureSet,
     columns,
     data,
     getRowId: (row: T) => rowKey(row),
     enableSortingRemoval: false,
-    initialState: { sorting: initialSort ? [initialSort] : [] },
+    ...(controlled
+      ? {
+          manualSorting: true,
+          state: { sorting: [sort] },
+          onSortingChange: (updater: unknown) => {
+            const next = typeof updater === "function" ? (updater as (s: Array<{ id: string; desc: boolean }>) => Array<{ id: string; desc: boolean }>)([sort]) : updater;
+            const first = (next as Array<{ id: string; desc: boolean }>)[0];
+            if (first) onSortChange({ id: first.id, desc: first.desc });
+          },
+        }
+      : { initialState: { sorting: initialSort ? [initialSort] : [] } }),
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -79,9 +100,14 @@ export function DataTable<T extends RowData>({
     .join(" ");
 
   return (
-    <div role="table" aria-rowcount={rows.length} className="overflow-hidden rounded-xl border border-border">
+    // The footer sits beside the table, not in it: a table may own only rows, and the
+    // footer can hold controls (a pager).
+    <div className={cn("overflow-hidden rounded-xl border border-border transition-opacity", busy && "opacity-60")}>
       <div
         ref={scrollRef}
+        role="table"
+        aria-rowcount={rows.length}
+        aria-busy={busy}
         className="overflow-auto"
         style={{ maxHeight: height }}
       >
@@ -98,18 +124,22 @@ export function DataTable<T extends RowData>({
                   aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"}
                   className={cn("px-3 py-2 text-xs font-semibold text-muted", meta?.align === "right" && "text-right")}
                 >
-                  <button
-                    type="button"
-                    onClick={header.column.getToggleSortingHandler()}
-                    className={cn(
-                      "inline-flex items-center gap-1 hover:text-fg",
-                      meta?.align === "right" && "flex-row-reverse",
-                      sorted && "text-fg",
-                    )}
-                  >
+                  {header.column.getCanSort() ? (
+                    <button
+                      type="button"
+                      onClick={header.column.getToggleSortingHandler()}
+                      className={cn(
+                        "inline-flex items-center gap-1 hover:text-fg",
+                        meta?.align === "right" && "flex-row-reverse",
+                        sorted && "text-fg",
+                      )}
+                    >
+                      <table.FlexRender header={header} />
+                      <Icon className={cn("size-3", !sorted && "opacity-40")} />
+                    </button>
+                  ) : (
                     <table.FlexRender header={header} />
-                    <Icon className={cn("size-3", !sorted && "opacity-40")} />
-                  </button>
+                  )}
                 </div>
               );
             })}

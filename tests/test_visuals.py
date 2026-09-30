@@ -887,7 +887,7 @@ check("it is a singleton getter, matching commitments.py's own pattern",
 
 check("the route exists and is offloaded off the event loop like every other warehouse read",
       '@app.get("/api/dashboard/resources")' in main_py
-      and "await offload(\n        get_resources().inventory" in main_py)
+      and re.search(r"await offload\(\s+get_resources\(\)\.inventory", main_py))
 # tags.py's own route does not do this — noted as a gap when this tab was designed, and one
 # this tab was built not to repeat.
 check("unlike Cost by Tag, this tab actually respects the global filter bar",

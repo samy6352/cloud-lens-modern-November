@@ -4472,17 +4472,32 @@ def _tags_missing_from_load() -> bool:
 
 @app.get("/api/dashboard/resources")
 async def dashboard_resources(request: Request, days: int = 30, scope: str = "",
-                              currency: str = "") -> JSONResponse:
-    """Every billed resource in the window, with its cost and context, for the Resources tab."""
+                              currency: str = "", page: int | None = None,
+                              page_size: int | None = None, sort: str = "cost",
+                              order: str = "desc", q: str = "",
+                              billing_currency: str = "", change: str = "") -> JSONResponse:
+    """Every billed resource in the window, with its cost and context, for the Resources tab.
+
+    With `page`, one page of every matching resource (`page_size` up to 500, `sort` by
+    cost / prior / delta, `q` over the resource id, `billing_currency`, `change`) and a
+    `total`. Without it, the top resources by cost in the original shape.
+    """
     from .resources import get_resources
 
     user = current_user(request)
     allowed = await permitted(user)
     picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
+    if order not in {"asc", "desc"}:
+        raise HTTPException(400, "order must be asc or desc.")
 
-    return JSONResponse(await offload(
-        get_resources().inventory, picked or None, days=max(1, min(days, 365)),
-        currency=currency or None, filters=request_filters(request)))
+    try:
+        return JSONResponse(await offload(
+            get_resources().inventory, picked or None, days=max(1, min(days, 365)),
+            currency=currency or None, filters=request_filters(request),
+            page=page, page_size=page_size, sort=sort, descending=order == "desc",
+            q=q, billing_currency=billing_currency, change=change))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 class TagFilter(BaseModel):

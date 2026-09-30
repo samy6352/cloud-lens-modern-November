@@ -3,8 +3,8 @@
 //   CLOUDLENS_URL=http://127.0.0.1:8100 CLOUDLENS_USER=admin CLOUDLENS_PASSWORD=... npm run test:v2
 //
 // Sign-in round trip, Overview renders with real numbers, ⌘K navigates, Billing's virtualised
-// table renders and sorts, the theme survives a reload, and the page raises no console errors
-// (a CSP violation shows up there).
+// table renders and sorts, Resources pages and sorts on the server, the theme survives a
+// reload, and the page raises no console errors (a CSP violation shows up there).
 import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -103,6 +103,23 @@ try {
   check(dark, "dark theme applies before the app boots (theme.js)");
   await rows.first().waitFor({ timeout: DATA_TIMEOUT });
   await axe(page, "Billing (dark)");
+
+  // Resources: one server-sorted page of a list far too long to load whole.
+  await page.goto(`${BASE}/v2/explore/resources`, { waitUntil: "domcontentloaded" });
+  await rows.first().waitFor({ timeout: DATA_TIMEOUT });
+  const range = (await page.getByText(/^\d[\d,]*–\d[\d,]* of \d/).first().textContent())?.trim() ?? "";
+  check(/of \d/.test(range), "Resources shows a page of the full, counted list", range);
+  const firstName = async () => (await rows.first().locator('[role="cell"]').first().textContent())?.trim();
+  const before = await firstName();
+  await page.getByRole("button", { name: "Next page" }).click();
+  await page.waitForFunction((t) => !/^1–/.test(t), range, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[role="table"][aria-busy="true"]'), null, { timeout: DATA_TIMEOUT });
+  check((await firstName()) !== before, "Next page loads different resources");
+  const costHeader = page.locator('[role="columnheader"]', { hasText: "Period cost" });
+  await costHeader.locator("button").click();
+  await page.waitForFunction(() => !document.querySelector('[role="table"][aria-busy="true"]'), null, { timeout: DATA_TIMEOUT });
+  check((await costHeader.getAttribute("aria-sort")) === "ascending", "sorting asks the server for a new order", await costHeader.getAttribute("aria-sort"));
+  await axe(page, "Resources (dark)");
 
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");

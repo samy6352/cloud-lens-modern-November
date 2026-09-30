@@ -40,8 +40,13 @@ const billingRoute = createRoute({
   component: lazyRouteComponent(() => import("./routes/Billing"), "BillingPage"),
 });
 const classicRoute = createRoute({ getParentRoute: () => rootRoute, path: "/classic/$screen", component: ClassicPage });
+const resourcesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/explore/resources",
+  component: lazyRouteComponent(() => import("./routes/Resources"), "ResourcesPage"),
+});
 
-const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, classicRoute]);
+const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, classicRoute]);
 
 export function makeRouter(queryClient: QueryClient) {
   return createRouter({

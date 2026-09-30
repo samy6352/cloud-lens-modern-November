@@ -23,7 +23,7 @@ ROLLUP_TABLES_KEY = "data_rollup_tables"
 ROLLUP_DIRTY_KEY = "data_rollup_dirty"
 ROLLUP_LAYOUT_KEY = "data_rollup_layout"
 # Stamps of serving tables built from published derived data (see `resource_counts`).
-SERVING_STAMP_KEYS = ["resource_counts_generation"]
+SERVING_STAMP_KEYS = ["resource_counts_generation", "resource_ranks_generation"]
 ROLLUP_LAYOUT_VERSION = "1"
 # What a generation stamp written before `ROLLUP_TABLES_KEY` existed covered. A
 # stamp carries no roster of its own, and the two tables below are the only ones

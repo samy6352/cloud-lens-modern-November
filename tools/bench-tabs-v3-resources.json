@@ -1,0 +1,37 @@
+[
+  {
+    "path": "/api/dashboard/resources?days=30",
+    "cold": 7.706,
+    "warm": 7.431,
+    "status": 200,
+    "bytes": 15336752
+  },
+  {
+    "path": "/api/dashboard/resources?days=30&page=1&page_size=100",
+    "cold": 0.027,
+    "warm": 0.033,
+    "status": 200,
+    "bytes": 144604
+  },
+  {
+    "path": "/api/dashboard/resources?days=30&page=200&page_size=100&sort=delta",
+    "cold": 0.818,
+    "warm": 0.026,
+    "status": 200,
+    "bytes": 235533
+  },
+  {
+    "path": "/api/dashboard/resources?days=7&page=1&page_size=100",
+    "cold": 0.019,
+    "warm": 0.018,
+    "status": 200,
+    "bytes": 156048
+  },
+  {
+    "path": "/api/dashboard/resources?days=30&page=1&page_size=100&q=databricks",
+    "cold": 5.938,
+    "warm": 0.031,
+    "status": 200,
+    "bytes": 194545
+  }
+]

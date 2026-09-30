@@ -113,6 +113,60 @@ export interface Scope {
   scope?: string;
 }
 
+export interface ResourceRow {
+  id: string;
+  name: string;
+  resource_group: string | null;
+  subscription: string | null;
+  subscription_id: string | null;
+  service: string | null;
+  service_names: string[];
+  area: string;
+  area_id: string;
+  region: string | null;
+  currency: string;
+  cost: number;
+  prior_cost: number;
+  delta: number;
+  change_pct: number | null;
+  tags: Array<{ key: string; value: string }>;
+  tag_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export type ResourceSort = "cost" | "prior" | "delta";
+export type ResourceChange = "" | "increased" | "decreased" | "unchanged" | "no-baseline";
+
+export interface ResourcePage {
+  empty?: boolean;
+  days: number;
+  as_of?: string;
+  currency: string | null;
+  mixed_currency: boolean;
+  currencies: string[];
+  resources: ResourceRow[];
+  page: number;
+  page_size: number;
+  pages: number;
+  total: number;
+  resources_by_currency: Record<string, number>;
+  total_cost_by_currency: Record<string, number | null>;
+  prior_cost_by_currency: Record<string, number | null>;
+  truncated: boolean;
+  source: "ranked" | "window" | "filtered" | "legacy";
+}
+
+export interface ResourceQuery {
+  page: number;
+  pageSize: number;
+  sort: ResourceSort;
+  desc: boolean;
+  q: string;
+  currency: string;
+  change: ResourceChange;
+}
+
 const scopeParams = ({ month, scope }: Scope) => ({ period_month: month, scope });
 
 export const meQuery = queryOptions({
@@ -145,4 +199,22 @@ export const billingQuery = (s: Scope) =>
     queryKey: ["billing", s.month ?? "", s.scope ?? ""],
     // Billing is a calendar statement; without a month the server picks the latest complete one.
     queryFn: () => api<Billing>("dashboard/billing", { month: s.month, scope: s.scope }),
+  });
+
+/** One server-sorted, server-filtered page of every billed resource. */
+export const resourcesQuery = (s: Scope, r: ResourceQuery) =>
+  queryOptions({
+    queryKey: ["resources", s.month ?? "", s.scope ?? "", r.page, r.pageSize, r.sort, r.desc, r.q, r.currency, r.change],
+    queryFn: () =>
+      api<ResourcePage>("dashboard/resources", {
+        days: 30,
+        ...scopeParams(s),
+        page: r.page,
+        page_size: r.pageSize,
+        sort: r.sort,
+        order: r.desc ? "desc" : "asc",
+        q: r.q,
+        billing_currency: r.currency,
+        change: r.change,
+      }),
   });

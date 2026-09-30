@@ -43,6 +43,7 @@ from . import (
     hourly_usage,
     presence,
     resource_counts,
+    resource_ranks,
     resource_tags,
     rollup,
     schema_v2,
@@ -483,7 +484,8 @@ class Reader:
                  bill_stored: bool = False, bill_serving: str | None = None,
                  bill_indexed: bool = False, res_ordered: bool = False,
                  usage: dict[str, str] | None = None,
-                 counts: str | None = None) -> None:
+                 counts: str | None = None, ranks: str | None = None,
+                 scoped: bool = False, narrowed: bool = False) -> None:
         self._con = con
         self.agg = aggregate
         self.res = counted
@@ -502,6 +504,13 @@ class Reader:
         # `resource_counts` when it answers this connection exactly (unscoped, unfiltered,
         # unconverted, and current), else None -- callers then count from `res` as before.
         self.counts = counts
+        # `resource_ranks` when its tables describe the published generation, else None.
+        # Unlike `counts` this does not decide on its own whether they may answer: a scope
+        # can be applied to a ranking (`scoped`, via the connection's `_scope`), a filter
+        # bar or a converted currency cannot (`narrowed`) -- see `resources.inventory`.
+        self.ranks = ranks
+        self.scoped = scoped
+        self.narrowed = narrowed
         # Opt-in summaries (see `USAGE_MODULES`). Each names a relation that answers
         # this connection exactly -- the stored table when it can, the same grain over
         # the scoped `costs` view when it cannot -- or is absent when not requested.
@@ -519,11 +528,19 @@ class Reader:
         """
         return self.agg != "costs"
 
-    def rows(self, sql: str, limit: int | None = 200) -> list[dict[str, Any]]:
-        cur = self._con.execute(sql)
+    def rows(self, sql: str, limit: int | None = 200,
+             params: list[Any] | None = None) -> list[dict[str, Any]]:
+        cur = self._con.execute(sql, params) if params is not None else self._con.execute(sql)
         columns = [d[0] for d in cur.description]
         rows = cur.fetchall() if limit is None else cur.fetchmany(limit)
         return [dict(zip(columns, row)) for row in rows]
+
+    def execute(self, sql: str, params: list[Any] | None = None) -> None:
+        """A statement with no result -- a session temp table, say."""
+        if params is not None:
+            self._con.execute(sql, params)
+        else:
+            self._con.execute(sql)
 
 
 # Whether a *new* `costs` is created partitioned by month. Off by default, and
@@ -746,6 +763,11 @@ class Warehouse:
         except Exception as exc:  # noqa: BLE001
             log.warning("warehouse: could not refresh %s (%s); readers count directly",
                         resource_counts.TABLE, str(exc)[:300])
+        try:
+            resource_ranks.refresh(self)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("warehouse: could not refresh %s (%s); Resources ranks on the fly",
+                        resource_ranks.TABLE, str(exc)[:300])
 
     async def refresh_rollup_async(self, window: tuple[Any, Any] | None = None) -> None:
         """`refresh_rollup` off the event loop — it aggregates the whole detail table."""
@@ -1301,6 +1323,9 @@ class Warehouse:
                       if (not scope and not filters and self._display_rate(currency) is None
                           and resource_counts.current(con, getattr(con, "fresh_tables", ())))
                       else None)
+            ranks = (resource_ranks.TABLE
+                     if resource_ranks.current(con, getattr(con, "fresh_tables", ()))
+                     else None)
             from . import read_indexes
 
             indexable = {billing_rollup.TABLE} if con.bill_stored else set()
@@ -1319,7 +1344,8 @@ class Warehouse:
                     bill_indexed=billing_rollup.TABLE in indexed,
                     res_ordered=presence.TABLE in indexed,
                     usage={name: USAGE_MODULES[name].TABLE for name in usage},
-                    counts=counts)
+                    counts=counts, ranks=ranks, scoped=bool(scope),
+                    narrowed=bool(filters) or self._display_rate(currency) is not None)
         finally:
             con.close()
 
