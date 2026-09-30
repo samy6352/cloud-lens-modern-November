@@ -768,6 +768,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 asyncio.create_task(_focus_refresh_loop(), name="focus-sync"),
                 asyncio.create_task(_recover_ingest_jobs(), name="ingest-recovery"),
             ])
+            from . import bootstrap
+            if bootstrap.enabled():
+                # First run creates this deployment's exports and backfills 13 months (S2).
+                background.append(asyncio.create_task(bootstrap.run_forever(), name="managed-exports"))
         # `AUTO_INGEST` before `summary()`, because `summary()` reads PostgreSQL and this
         # is the last database call left on the startup critical path. Asking whether
         # automatic ingest is wanted costs nothing and is false wherever ingest is driven
@@ -2927,6 +2931,30 @@ async def cost_data_status(request: Request, scope: str | None = None) -> JSONRe
     result["can_review"] = bool(user.admin) and not read_only_mode()
     result["read_only"] = read_only_mode()
     return JSONResponse(result)
+
+
+@app.get("/api/cost-data/progress")
+async def cost_data_progress(request: Request, scope: str | None = None) -> JSONResponse:
+    """First-run setup progress: months x the caller's subscriptions, from the database only.
+
+    Blockers and their fix commands name the deployment's identity and storage, so they are
+    for administrators; everyone else sees the same grid without them.
+    """
+    from . import bootstrap
+    user = current_user(request)
+    subs = await _cost_data_subscriptions(scope.split(",") if scope is not None else None, user)
+    return JSONResponse(await offload(bootstrap.progress, subs, admin=bool(user.admin)))
+
+
+@app.post("/api/cost-data/bootstrap")
+async def run_cost_data_bootstrap(request: Request) -> JSONResponse:
+    """Run the managed-exports pass now rather than at the next hourly check."""
+    from . import bootstrap
+    require_admin(request)
+    if not bootstrap.enabled():
+        raise HTTPException(409, f"Managed exports are off on this deployment. The installer sets "
+                                 f"{bootstrap.FLAG}=true; set it and restart to enable them.")
+    return JSONResponse(await bootstrap.run_once())
 
 
 @app.get("/api/cost-data/subscriptions")

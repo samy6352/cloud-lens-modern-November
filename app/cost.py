@@ -533,6 +533,35 @@ async def _query(sub: str, body: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- tools
+# GET /subscriptions pages with `nextLink` once an estate is large enough. Reading only the
+# first page silently drops every subscription after it -- from the picker, from export
+# discovery, and from `_resolve`, which then reports a real subscription as not visible.
+_MAX_ARM_PAGES = 100
+
+
+async def arm_pages(url: str, *, params: dict | None = None, cache: bool = True) -> list[dict]:
+    """Every `value` item across ARM's `nextLink` pages, staying on the ARM host."""
+    from urllib.parse import urlsplit
+
+    items: list[dict] = []
+    seen: set[str] = set()
+    host = urlsplit(ARM).netloc.lower()
+    for _ in range(_MAX_ARM_PAGES):
+        payload = await azure.request("GET", url, params=params, cache=cache)
+        items.extend(payload.get("value", []))
+        link = payload.get("nextLink")
+        if not link:
+            return items
+        parts = urlsplit(link)
+        if parts.scheme != "https" or parts.netloc.lower() != host or link in seen:
+            raise CostError("Azure returned a continuation link outside Azure Resource Manager; "
+                            "the listing was not trusted.")
+        seen.add(link)
+        # The continuation already carries api-version and its skip token.
+        url, params = link, None
+    raise CostError(f"Azure listed more than {_MAX_ARM_PAGES} pages; the listing is incomplete.")
+
+
 async def list_subscriptions() -> dict[str, Any]:
     """Every subscription the signed-in user can see.
 
@@ -545,10 +574,10 @@ async def list_subscriptions() -> dict[str, Any]:
         subs = [s for s in caller.subscriptions if s.get("state", "Enabled") == "Enabled"]
         return {"subscriptions": subs, "count": len(subs)}
 
-    payload = await azure.request("GET", f"{ARM}/subscriptions", params={"api-version": SUBS_API})
+    values = await arm_pages(f"{ARM}/subscriptions", params={"api-version": SUBS_API})
     subs = [
         {"id": s["subscriptionId"], "name": s.get("displayName"), "state": s.get("state")}
-        for s in payload.get("value", [])
+        for s in values
         if s.get("state") == "Enabled"
     ]
     return {"subscriptions": subs, "count": len(subs)}
@@ -646,10 +675,10 @@ async def subscriptions_with(token: str) -> list[dict[str, Any]]:
     """Subscriptions with verified subscription-wide cost access under this token."""
     reset = act_as(token, acting_as())
     try:
-        payload = await azure.request(
-            "GET", f"{ARM}/subscriptions", params={"api-version": SUBS_API}, cache=False)
+        values = await arm_pages(f"{ARM}/subscriptions", params={"api-version": SUBS_API},
+                                 cache=False)
         allowed = []
-        for subscription in payload.get("value", []):
+        for subscription in values:
             if subscription.get("state") != "Enabled":
                 continue
             try:

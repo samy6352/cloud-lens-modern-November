@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from datetime import UTC, date, datetime, timedelta
 
 from . import jobs, schedules
@@ -13,15 +14,48 @@ DEFAULT_LOOKBACK = 7
 _running: set[str] = set()
 
 
+def export_concurrency() -> int:
+    """How many Azure export runs may be outstanding at once, across every subscription.
+
+    Cost Management throttles per tenant and client type; a 70-subscription backfill submitting
+    everything at once earns 429s for all of it. Eight keeps a large estate moving while leaving
+    headroom for the dashboard's own Cost Management reads.
+    """
+    try:
+        return max(1, int(os.getenv("CLOUDLENS_EXPORT_CONCURRENCY", "8")))
+    except ValueError:
+        return 8
+
+
+def throttle_backoff(throttles: int) -> int:
+    """Exponential floor under Azure's Retry-After for repeated throttling: 1, 2, 4 ... 60 min."""
+    return min(60 * 2 ** max(0, throttles - 1), 3600)
+
+
+def _work_order(tasks: list[dict]) -> list[dict]:
+    """Which task gets the next free Azure slot: newest month first, round-robin across subs.
+
+    A task already holding its subscription's Azure run goes first, so the subscription's busy
+    marker is always set by the task that owns the run -- never by a sibling ordered ahead of
+    it, which would stop the owner being polled and deadlock that subscription.
+    Configuration precedes any window of the same setup.
+    """
+    ordered = sorted(tasks, key=lambda t: t.get("subscription") or "")
+    ordered.sort(key=lambda t: t.get("from") or "", reverse=True)
+    ordered.sort(key=lambda t: (t.get("operation") != "configure",
+                                not (t.get("requested_at") and t["status"] not in {"ready", "failed"})))
+    return ordered
+
+
 def window(days: int = 90, today: date | None = None) -> tuple[str, str]:
     hi = today or datetime.now(UTC).date()
     return (hi - timedelta(days=days - 1)).isoformat(), hi.isoformat()
 
 
-def chunks(start: str, end: str) -> list[dict]:
+def chunks(start: str, end: str, max_days: int = 366) -> list[dict]:
     lo, hi = date.fromisoformat(start), date.fromisoformat(end)
-    if lo > hi or (hi - lo).days >= 366 or hi > datetime.now(UTC).date():
-        raise ValueError("Choose an ordered historical window of at most 366 days.")
+    if lo > hi or (hi - lo).days >= max_days or hi > datetime.now(UTC).date():
+        raise ValueError(f"Choose an ordered historical window of at most {max_days} days.")
     result = []
     while lo <= hi:
         next_month = (lo.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -212,13 +246,46 @@ def retry_delay(exc: Exception) -> int | None:
     return None
 
 
-def reserve_run(sub: str, job_id: str, task_id: str) -> bool:
+def _stale_reservation(con, holder: dict) -> bool:
+    """A reservation whose task no longer has an Azure run outstanding."""
+    owner = jobs._read(con, "job:" + holder["job_id"])
+    task = next((t for t in (owner or {}).get("tasks", []) if t["task_id"] == holder.get("task_id")), None)
+    return (owner is None or owner["status"] == "cancelled" or task is None
+            or task["status"] in {"ready", "failed"} or not task.get("requested_at"))
+
+
+def claim_run(sub: str, job_id: str, task_id: str) -> str:
+    """Reserve this subscription's one Azure execution, within the deployment-wide cap.
+
+    Returns "reserved", "owned-elsewhere" (another task holds this subscription) or
+    "at-capacity". A reservation whose task no longer has a run outstanding -- a crash between
+    reserving and submitting, a deleted or cancelled job -- is released here, so a leak cannot
+    hold a subscription, or the cap, forever. Jobs never step concurrently (one deployment-wide
+    lease), so a live reservation always has its `requested_at` persisted before this can run.
+    """
     with jobs.transaction() as con:
         previous = jobs._read(con, "focus-pending:" + sub)
-        if previous and (previous["job_id"], previous["task_id"]) != (job_id, task_id):
-            return False
+        if previous and (previous["job_id"], previous["task_id"]) == (job_id, task_id):
+            return "reserved"
+        if previous and not _stale_reservation(con, previous):
+            return "owned-elsewhere"
+        held = 0
+        for key, raw in con.execute(
+                "SELECT key, value FROM meta WHERE key LIKE 'focus-pending:%'").fetchall():
+            if key == "focus-pending:" + sub:
+                continue
+            if _stale_reservation(con, json.loads(raw)):
+                con.execute("DELETE FROM meta WHERE key = ?", [key])
+                continue
+            held += 1
+        if held >= export_concurrency():
+            return "at-capacity"
         jobs._put(con, "focus-pending:" + sub, {"job_id": job_id, "task_id": task_id})
-        return True
+        return "reserved"
+
+
+def reserve_run(sub: str, job_id: str, task_id: str) -> bool:
+    return claim_run(sub, job_id, task_id) == "reserved"
 
 
 def release_run(sub: str, job_id: str, task_id: str) -> None:
@@ -235,7 +302,12 @@ async def step(job_id: str) -> dict:
 
     record = await asyncio.to_thread(jobs.get, job_id)
     busy_subs = set()
-    for task in record["tasks"]:
+    # Cost Management throttles per tenant and client type, not per subscription: once a
+    # submission is throttled, no new run starts anywhere until its backoff has passed.
+    # Runs already accepted keep being polled and imported meanwhile.
+    clock = jobs.now()
+    hold = any(t.get("throttles") and (t.get("retry_at") or "") > clock for t in record["tasks"])
+    for task in _work_order(record["tasks"]):
         if task["status"] in {"ready", "failed"}:
             continue
         if task["subscription"] in busy_subs:
@@ -247,6 +319,10 @@ async def step(job_id: str) -> dict:
         task_token = jobs.current_task.set(tid)
 
         async def save(task=task, tid=tid, **values):
+            # A large backfill is one job of ~1,000 tasks, and every save rewrites the whole
+            # record; "still queued" or "still generating" every minute is not a change.
+            if all(task.get(key) == value for key, value in values.items()):
+                return
             task.update(values)
             await asyncio.to_thread(jobs.update, job_id, task_id=tid, **values)
 
@@ -259,8 +335,9 @@ async def step(job_id: str) -> dict:
                 await save(status="ready", finished=jobs.now(), detail="Automatic updates configured.")
                 continue
             if record["kind"] == "focus-setup":
-                current_job = await asyncio.to_thread(jobs.get, job_id)
-                prerequisite = next((t for t in current_job["tasks"] if
+                # Configure tasks run first in this same pass (`_work_order`) and `save` updates
+                # them in place, so the local record is current -- one writer holds the lease.
+                prerequisite = next((t for t in record["tasks"] if
                                      t["subscription"] == task["subscription"] and
                                      t.get("operation") == "configure"), None)
                 if prerequisite and prerequisite["status"] != "ready":
@@ -315,8 +392,18 @@ async def step(job_id: str) -> dict:
             if chosen is None:
                 busy_subs.add(task["subscription"])
                 if not task.get("requested_at"):
-                    if not await asyncio.to_thread(reserve_run, task["subscription"], job_id, tid):
+                    if hold:
+                        await save(status="queued", detail=(
+                            "Azure is throttling export runs; new runs resume after the backoff."))
+                        continue
+                    claimed = await asyncio.to_thread(claim_run, task["subscription"], job_id, tid)
+                    if claimed == "owned-elsewhere":
                         await save(status="queued", detail="Another job owns this subscription's Azure execution.")
+                        continue
+                    if claimed == "at-capacity":
+                        await save(status="queued", detail=(
+                            f"Queued behind {export_concurrency()} export runs already in progress "
+                            "(CLOUDLENS_EXPORT_CONCURRENCY); starts as one finishes."))
                         continue
                     # Persist the submission intent first. A crash after acceptance must poll,
                     # not blindly submit again and create competing Azure runs.
@@ -349,7 +436,7 @@ async def step(job_id: str) -> dict:
                             await save(requested_at=None)
                             await asyncio.to_thread(release_run, task["subscription"], job_id, tid)
                         raise
-                await save(status="waiting-for-Azure",
+                await save(status="waiting-for-Azure", throttles=0,
                            detail="Azure is still generating a complete report; this can take hours.")
                 continue
             await save(status="downloading", run_id=chosen.run_id, submitted=chosen.submitted,
@@ -392,8 +479,16 @@ async def step(job_id: str) -> dict:
             raise
         except Exception as exc:
             delay = retry_delay(exc)
+            extra = {}
+            if delay and _http_failure(exc)[0] in (429, 503):
+                # Retry-After says when this one request may retry; repeated throttling means the
+                # whole queue is too eager, so back off exponentially under it as well.
+                extra["throttles"] = task.get("throttles", 0) + 1
+                delay = max(delay, throttle_backoff(extra["throttles"]))
+                hold = True
             await save(status="waiting-for-Azure" if delay else "failed", detail=str(exc)[:500],
-                       retry_at=(datetime.now(UTC) + timedelta(seconds=delay)).isoformat() if delay else None)
+                       retry_at=(datetime.now(UTC) + timedelta(seconds=delay)).isoformat() if delay else None,
+                       **extra)
             if not delay:
                 await asyncio.to_thread(release_run, task["subscription"], job_id, tid)
         finally:

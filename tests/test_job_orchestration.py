@@ -138,9 +138,11 @@ def test_pending_run_resumes_without_reissuing_and_only_one_per_subscription(dur
     asyncio.run(flow.step(record["job_id"]))
     assert run.await_count == 1
     saved = jobs.get(record["job_id"])
-    assert saved["tasks"][0]["status"] == "waiting-for-Azure"
-    assert saved["tasks"][1]["status"] == "queued"
-    assert saved["tasks"][0]["requested_at"]
+    # Newest month first (S2): recent data is what a customer looks at on day one.
+    assert run.await_args.kwargs == {"start": "2026-07-01", "end": "2026-07-31"}
+    assert saved["tasks"][1]["status"] == "waiting-for-Azure"
+    assert saved["tasks"][0]["status"] == "queued"
+    assert saved["tasks"][1]["requested_at"]
 
 
 def test_resume_preserves_completed_chunks_and_identity(durable):

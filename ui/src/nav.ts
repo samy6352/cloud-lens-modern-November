@@ -8,6 +8,7 @@ import {
   CalendarClock,
   ClipboardList,
   Clock,
+  CloudDownload,
   Compass,
   Database,
   FileDown,
@@ -106,6 +107,7 @@ export const WORKSPACES: Workspace[] = [
     label: "Admin",
     icon: Database,
     screens: [
+      { id: "setup", label: "Setup progress", icon: CloudDownload, to: "/admin/setup", migrated: true, keywords: ["exports", "backfill", "onboarding", "history"] },
       classic("settings", "Cost data", Database, ["exports", "ingest", "setup"]),
       classic("audit", "Audit log", ScrollText, ["access", "who"], true),
     ],

@@ -440,8 +440,9 @@ class BlobReader:
                 error.response = response
                 raise error
             content = bytearray()
+            limit = _file_limit(name)
             async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                if len(content) + len(chunk) > EXPORT_MAX_BYTES:
+                if len(content) + len(chunk) > limit:
                     raise ExportError("Export file exceeds the memory safety limit; no data was changed.")
                 content.extend(chunk)
             return bytes(content)
@@ -501,6 +502,11 @@ def _map_header(header: list[str]) -> dict[str, int]:
 
 
 EXPORT_MAX_BYTES = 64 * 1024 * 1024
+# A Parquet partition's own bound. Cost Management splits every export into partitions "each kept
+# under 1 GB uncompressed" (tutorial-improved-exports), so a Snappy file is at most that and
+# usually several times smaller. It is decoded one small batch at a time, so what it may hold
+# in memory is bounded per batch by EXPORT_MAX_BYTES below, not by this.
+EXPORT_MAX_PARQUET_BYTES = int(os.getenv("EXPORT_MAX_PARQUET_BYTES", str(1024 * 1024 * 1024)))
 # How many parsed rows are held before being copied into the staging table. This is
 # the whole of the importer's row-shaped memory now: a batch, not an export.
 #
@@ -511,11 +517,17 @@ EXPORT_MAX_BYTES = 64 * 1024 * 1024
 PARSE_BATCH = int(os.getenv("EXPORT_PARSE_BATCH", "50000"))
 
 
-def _export_payload(raw: bytes) -> bytes:
+def _file_limit(name: str) -> int:
+    """CSV is decoded whole, so it keeps the in-memory bound; Parquet streams in batches."""
+    return EXPORT_MAX_PARQUET_BYTES if ".parquet" in name.lower() else EXPORT_MAX_BYTES
+
+
+def _export_payload(raw: bytes, limit: int | None = None) -> bytes:
+    limit = EXPORT_MAX_BYTES if limit is None else limit
     if raw[:2] == b"\x1f\x8b":
         with gzip.GzipFile(fileobj=io.BytesIO(raw)) as compressed:
-            raw = compressed.read(EXPORT_MAX_BYTES + 1)
-    if len(raw) > EXPORT_MAX_BYTES:
+            raw = compressed.read(limit + 1)
+    if len(raw) > limit:
         raise ExportError("Decoded export exceeds the memory safety limit; no data was changed.")
     return raw
 
@@ -538,28 +550,38 @@ def _rows_from_parquet(raw: bytes) -> tuple[list[str], Iterable[list[str]]]:
     and a FOCUS export is large enough that writing it to disk only to read it straight
     back was doubling the I/O of the fastest ingestion path for no gain.
 
-    Batches are consumed lazily, with decoded size and row limits enforced before replacement.
+    Batches are consumed lazily. The file itself is bounded by EXPORT_MAX_PARQUET_BYTES (an
+    Azure partition is < 1 GB uncompressed); each decoded batch, which is what is actually held,
+    by EXPORT_MAX_BYTES. A cumulative decoded bound refused real partitions: a month of a large
+    estate decodes to far more than 64 MB even though no more than one batch is ever resident.
     """
     import pyarrow.parquet as pq
 
-    raw = _export_payload(raw)
+    raw = _export_payload(raw, EXPORT_MAX_PARQUET_BYTES)
     reader = pq.ParquetFile(io.BytesIO(raw))
     header = list(reader.schema_arrow.names)
-    # No row-count ceiling: rows are yielded in batches and staged as they are parsed,
-    # so a large partition costs a batch rather than all of it. `EXPORT_MAX_BYTES`
-    # below still bounds what a single file may decode to, which is the memory this
-    # function actually holds.
 
     def rows():
-        decoded_bytes = 0
         for batch in reader.iter_batches(batch_size=min(_PARQUET_BATCH, 1024)):
-            decoded_bytes += batch.nbytes
-            if decoded_bytes > EXPORT_MAX_BYTES:
+            if batch.nbytes > EXPORT_MAX_BYTES:
                 raise ExportError("Decoded export exceeds the memory safety limit; no data was changed.")
             columns = [col.to_pylist() for col in batch.columns]
-            yield from (["" if value is None else str(value) for value in values]
+            yield from (["" if value is None else _parquet_text(value) for value in values]
                         for values in zip(*columns, strict=True))
     return header, rows()
+
+
+def _parquet_text(value: Any) -> str:
+    """Stringify one Parquet cell the way the CSV path would have spelled it.
+
+    Timestamps are the case that matters: FOCUS 1.0r2 carries seconds, and a timestamp column
+    renders through str() as '2026-08-01 00:00:00+00:00'. Emitting ISO 8601 keeps every date
+    comparison and `_to_date` identical to the CSV spelling of the same file.
+    """
+    if isinstance(value, datetime):
+        text = value.isoformat()
+        return text[:-6] + "Z" if text.endswith("+00:00") else text
+    return str(value)
 
 
 def _read_any(name: str, raw: bytes) -> tuple[list[str], Iterable[list[str]]]:

@@ -169,6 +169,47 @@ export interface ResourceQuery {
 
 const scopeParams = ({ month, scope }: Scope) => ({ period_month: month, scope });
 
+export type SetupState = "queued" | "running" | "landed" | "loaded" | "failed" | "none";
+
+export interface SetupBlocker {
+  capability: string;
+  detail: string;
+  fix?: string;
+}
+
+export interface SetupProgress {
+  enabled: boolean;
+  months: string[];
+  subscriptions: Array<{
+    id: string;
+    name: string;
+    configured: boolean;
+    job_id: string | null;
+    cells: Record<string, { state: SetupState; detail: string; retry_at: string | null }>;
+    blockers: SetupBlocker[];
+  }>;
+  totals: Record<SetupState, number>;
+  history: { from: string; to: string };
+  expectation: string;
+  checked_at: string | null;
+  error: string | null;
+  deployment_blockers: SetupBlocker[];
+  concurrency: number;
+  states: Record<SetupState, string>;
+}
+
+/** First-run export setup. Polls while Azure is still generating or importing months. */
+export const setupProgressQuery = (s: Scope) =>
+  queryOptions({
+    queryKey: ["setup-progress", s.scope ?? ""],
+    queryFn: () => api<SetupProgress>("cost-data/progress", { scope: s.scope }),
+    staleTime: 15_000,
+    refetchInterval: (query) => {
+      const t = query.state.data?.totals;
+      return t && t.queued + t.running + t.landed > 0 ? 30_000 : false;
+    },
+  });
+
 export const meQuery = queryOptions({
   queryKey: ["me"],
   queryFn: () => api<Me>("auth/me"),

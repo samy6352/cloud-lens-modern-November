@@ -240,7 +240,9 @@ foreach ($sub in $Subscriptions) {
                 recurrence = $Recurrence
                 recurrencePeriod = [ordered]@{ from = $from; to = $to }
             }
-            format = 'Csv'
+            # Parquet+Snappy FOCUS 1.0r2, identical to what the app creates (app/schedules.py).
+            format = 'Parquet'
+            compressionMode = 'snappy'
             partitionData = $true
             dataOverwriteBehavior = 'CreateNewReport'
             deliveryInfo = [ordered]@{
@@ -254,7 +256,7 @@ foreach ($sub in $Subscriptions) {
             definition = [ordered]@{
                 type = 'FocusCost'
                 timeframe = $(if ($Recurrence -eq 'Monthly') { 'TheLastMonth' } else { 'MonthToDate' })
-                dataSet = [ordered]@{ granularity = 'Daily' }
+                dataSet = [ordered]@{ granularity = 'Daily'; configuration = [ordered]@{ dataVersion = '1.0r2' } }
             }
         }
     }

@@ -33,7 +33,8 @@ def site(tmp_path):
 
 
 def test_client_side_routes_all_get_the_shell(site):
-    for path in ("/v2", "/v2/", "/v2/explore/billing", "/v2/explore/resources", "/v2/classic/budgets"):
+    for path in ("/v2", "/v2/", "/v2/explore/billing", "/v2/explore/resources", "/v2/admin/setup",
+                 "/v2/classic/budgets"):
         response = site.client.get(path)
         assert response.status_code == 200, path
         assert 'id="root"' in response.text

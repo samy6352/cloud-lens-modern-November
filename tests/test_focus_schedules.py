@@ -79,7 +79,10 @@ def test_documented_payload_and_retention(destination, cadence, period):
     p = body["properties"]
     assert body["identity"] == {"type": "SystemAssigned"}
     assert p["definition"] == {"type": "FocusCost", "timeframe": period,
-                               "dataSet": {"granularity": "Daily"}}
+                               "dataSet": {"granularity": "Daily",
+                                           "configuration": {"dataVersion": "1.0r2"}}}
+    # Parquet+Snappy (verified enum spellings, Exports API 2025-03-01): the loader streams it.
+    assert p["format"] == "Parquet" and p["compressionMode"] == "snappy"
     assert p["dataOverwriteBehavior"] == "CreateNewReport"
     assert p["partitionData"] is True
     assert p["schedule"]["recurrence"] == cadence
@@ -88,6 +91,15 @@ def test_documented_payload_and_retention(destination, cadence, period):
         "rootFolderPath": "focus/sub-a"}
     if cadence == "Monthly":
         assert p["schedule"]["recurrencePeriod"]["from"][8:10] == "01"
+
+
+def test_script_created_exports_match_app_created_ones():
+    """infra/focus-exports.ps1 creates the same exports by hand; the two must not drift."""
+    script = (Path(__file__).resolve().parents[1] / "infra" / "focus-exports.ps1").read_text(encoding="utf-8")
+    assert f"format = '{schedules.EXPORT_FORMAT}'" in script
+    assert f"compressionMode = '{schedules.EXPORT_COMPRESSION}'" in script
+    assert f"dataVersion = '{schedules.FOCUS_DATA_VERSION}'" in script
+    assert "dataOverwriteBehavior = 'CreateNewReport'" in script
 
 
 def test_monthly_last_day_and_leap_year_start(monkeypatch, destination):

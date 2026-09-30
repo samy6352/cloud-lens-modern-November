@@ -121,6 +121,16 @@ try {
   check((await costHeader.getAttribute("aria-sort")) === "ascending", "sorting asks the server for a new order", await costHeader.getAttribute("aria-sort"));
   await axe(page, "Resources (dark)");
 
+  // Setup progress: months × subscriptions for the unattended first run (S2).
+  await page.goto(`${BASE}/v2/admin/setup`, { waitUntil: "domcontentloaded" });
+  const grid = page.getByRole("table", { name: /import progress/i });
+  await grid.waitFor({ timeout: DATA_TIMEOUT });
+  const months = await grid.locator('thead th[scope="col"]').count();
+  const subs = await grid.locator('tbody th[scope="row"]').count();
+  check(months === 14 && subs > 0, "Setup shows 13 months × every subscription", `${subs} subscriptions, ${months - 1} months`);
+  check(await page.getByText(/up to 24 hours/).first().isVisible(), "Setup states the 24-hour expectation");
+  await axe(page, "Setup progress (dark)");
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");
   const other = errors.filter((e) => !/Content Security Policy|Refused to/i.test(e));

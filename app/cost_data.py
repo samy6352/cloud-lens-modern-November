@@ -190,15 +190,47 @@ def history_window(start: str | None = None, end: str | None = None,
     return lo.isoformat(), hi.isoformat(), count
 
 
+# Unattended first run (bootstrap.py): the current month plus the twelve before it -- the
+# history Cost Management will generate for a newly created export, one calendar month per run.
+MANAGED_HISTORY_MONTHS = 13
+# Twelve whole months plus a current month of at most 31 days.
+MANAGED_MAX_DAYS = 397
+
+
+def managed_history(today: date | None = None) -> tuple[str, str, int]:
+    hi = today or datetime.now(UTC).date()
+    lo = hi.replace(day=1)
+    for _ in range(MANAGED_HISTORY_MONTHS - 1):
+        lo = (lo - timedelta(days=1)).replace(day=1)
+    return lo.isoformat(), hi.isoformat(), (hi - lo).days + 1
+
+
+def managed_window(start: str, end: str) -> tuple[str, str, int]:
+    """Validate an unattended horizon: month-aligned, at most 13 calendar months, not future."""
+    try:
+        lo, hi = date.fromisoformat(start), date.fromisoformat(end)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Managed history dates must be valid YYYY-MM-DD UTC dates.") from exc
+    if (lo.day != 1 or lo > hi or hi > datetime.now(UTC).date()
+            or managed_history(hi)[0] > lo.isoformat()):
+        raise ValueError(f"Managed history is whole calendar months, at most {MANAGED_HISTORY_MONTHS}, "
+                         "ending no later than today.")
+    return lo.isoformat(), hi.isoformat(), (hi - lo).days + 1
+
+
 async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
                   start: str | None = None, end: str | None = None, action: str = "setup",
-                  history_days: int | None = None) -> dict:
+                  history_days: int | None = None, managed: bool = False) -> dict:
     from . import archive, focus_sync
     if cadence not in CADENCES or action not in {"setup", "schedule", "frequency", "refresh", "reconcile"}:
         raise ValueError("Invalid cost-data setup action or frequency.")
     if not subscriptions:
         raise ValueError("Choose at least one subscription.")
-    if action == "setup":
+    if managed and (action != "setup" or history_days is not None):
+        raise ValueError("Managed setup imports its own fixed history; it takes no other action or length.")
+    if managed:
+        start, end, history_days = (managed_window(start, end) if start or end else managed_history())
+    elif action == "setup":
         start, end, history_days = history_window(start, end, history_days)
     elif history_days is not None:
         raise ValueError("History length is only used for first-time import, not frequency changes.")
@@ -208,7 +240,7 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
         raise ValueError("Supply both history dates.")
     lo, hi = (None, None) if action == "schedule" else (start, end) if start and end else focus_workflow.window()
     if action != "schedule":
-        focus_workflow.chunks(lo, hi)
+        focus_workflow.chunks(lo, hi, MANAGED_MAX_DAYS if managed else 366)
     scope = [s["id"].lower() for s in subscriptions]
     discovered = await focus_sync.discover(scope)
     found = {r["subscription_id"].lower(): r for r in discovered["schedules"]}
@@ -267,7 +299,7 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
                        "Create the deployment-owned FOCUS export and its managed-identity container access"),
         })
     result = {"action": action, "cadence": cadence, "from": lo, "to": hi, "history_days": history_days,
-              "subscriptions": rows,
+              "managed": managed, "subscriptions": rows,
               "identity": "Persistent application workload identity (not your interactive sign-in)",
               "explanation": ("Refresh now uses each subscription's saved update cadence without changing it."
                               if action == "refresh" else CADENCES[cadence]),
@@ -283,6 +315,8 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
     # Coverage, report arrivals and descriptive errors must not make an otherwise unchanged
     # approval expire. Export ETags, destination, identity, scope and saved config must.
     contract = {k: result[k] for k in ("action", "cadence", "from", "to", "history_days", "identity")}
+    if managed:
+        contract["managed"] = True
     contract["subscriptions"] = [{"id": r["subscription"], "destination": r["destination"],
         "export": {k: (r["export"] or {}).get(k) for k in ("name", "etag")},
         "config": r["config"], "window": r["window"]} for r in rows]
@@ -294,11 +328,15 @@ async def create(plan: dict, idempotency_key: str) -> dict:
     require_writable()
     if not plan["subscriptions"]:
         raise ValueError("Choose at least one subscription.")
+    managed = bool(plan.get("managed"))
     if plan["action"] == "setup":
-        lo, hi, count = history_window(plan["from"], plan["to"], plan.get("history_days"))
+        lo, hi, count = (managed_window(plan["from"], plan["to"]) if managed else
+                         history_window(plan["from"], plan["to"], plan.get("history_days")))
         if any(row["window"] != {"from": lo, "to": hi} for row in plan["subscriptions"]):
             raise ValueError("The import windows do not match the reviewed history.")
         plan = {**plan, "history_days": count}
+    elif managed:
+        raise ValueError("Managed setup is a first-time import only.")
     if any(row["blockers"] for row in plan["subscriptions"]):
         raise ValueError("Resolve the subscription blockers, then review setup again.")
     tasks = []
@@ -310,11 +348,12 @@ async def create(plan: dict, idempotency_key: str) -> dict:
             lo, hi = row["window"]["from"], row["window"]["to"]
             tasks.extend({"subscription": sid, **part, "schedule": row["export"],
                           "force_new": plan["action"] != "setup"}
-                         for part in focus_workflow.chunks(lo, hi))
+                         for part in focus_workflow.chunks(lo, hi, MANAGED_MAX_DAYS if managed else 366))
+    payload_keys = ("action", "cadence", "from", "to", "history_days", "preview_token")
     return await asyncio.to_thread(
         jobs.create, "focus-setup", [r["subscription"] for r in plan["subscriptions"]], tasks,
         idempotency_key=idempotency_key, identity="workload",
-        payload={k: plan.get(k) for k in ("action", "cadence", "from", "to", "history_days", "preview_token")})
+        payload={**{k: plan.get(k) for k in payload_keys}, **({"managed": True} if managed else {})})
 
 
 async def configure(record: dict, task: dict) -> None:

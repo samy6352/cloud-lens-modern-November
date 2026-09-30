@@ -63,6 +63,14 @@ FOCUS_PREFIX = os.getenv("FOCUS_EXPORT_PREFIX", "focus").strip("/")
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
+# What every export this app creates writes. Parquet+Snappy is several times smaller than CSV and
+# the loader streams it in batches instead of decoding a whole file. FOCUS 1.0r2 differs from 1.0
+# only in carrying seconds in date columns; pinning it keeps a new dataset default from silently
+# changing the schema under an existing deployment.
+EXPORT_FORMAT = "Parquet"
+EXPORT_COMPRESSION = "snappy"
+FOCUS_DATA_VERSION = "1.0r2"
+
 
 class ScheduleError(RuntimeError):
     """Something the caller can act on, phrased for them."""
@@ -168,14 +176,16 @@ def _body(metric: str, account_id: str, container: str, folder: str,
                     "to": (start + timedelta(days=365 * years)).isoformat().replace("+00:00", "Z"),
                 },
             },
-            "format": "Csv",
+            "format": EXPORT_FORMAT,
+            "compressionMode": EXPORT_COMPRESSION,
             "partitionData": True,
             "dataOverwriteBehavior": "CreateNewReport",
             "deliveryInfo": _destination(account_id, container, folder),
             "definition": {
                 "type": metric,
                 "timeframe": "TheLastMonth" if recurrence == "Monthly" else "MonthToDate",
-                "dataSet": {"granularity": "Daily"},
+                "dataSet": {"granularity": "Daily",
+                            "configuration": {"dataVersion": FOCUS_DATA_VERSION}},
             },
         },
     }
