@@ -528,9 +528,11 @@ async def resume(job_id: str) -> dict:
     record = await asyncio.to_thread(jobs.get, job_id)
     for task in record["tasks"]:
         if task["status"] == "failed":
-            # Successful chunks and original submission baselines are immutable on retry.
+            # Successful chunks and original submission baselines are immutable on retry. The old
+            # failure text goes: a queued month reading "waiting for configuration" misleads.
             await asyncio.to_thread(jobs.update, job_id, task_id=task["task_id"],
-                                    status="queued", retry_at=None, missing_capabilities=[])
+                                    status="queued", retry_at=None, missing_capabilities=[],
+                                    detail="Queued to retry.")
     return await asyncio.to_thread(jobs.update, job_id, status="queued", finished=None)
 
 
