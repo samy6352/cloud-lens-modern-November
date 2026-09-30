@@ -42,6 +42,7 @@ from . import (
     fx_rollup,
     hourly_usage,
     presence,
+    resource_counts,
     resource_tags,
     rollup,
     schema_v2,
@@ -481,7 +482,8 @@ class Reader:
                  benefit: str = "costs", spot: str = "costs",
                  bill_stored: bool = False, bill_serving: str | None = None,
                  bill_indexed: bool = False, res_ordered: bool = False,
-                 usage: dict[str, str] | None = None) -> None:
+                 usage: dict[str, str] | None = None,
+                 counts: str | None = None) -> None:
         self._con = con
         self.agg = aggregate
         self.res = counted
@@ -497,6 +499,9 @@ class Reader:
         self.bill_serving = bill_serving
         self.bill_indexed = bill_indexed
         self.res_ordered = res_ordered
+        # `resource_counts` when it answers this connection exactly (unscoped, unfiltered,
+        # unconverted, and current), else None -- callers then count from `res` as before.
+        self.counts = counts
         # Opt-in summaries (see `USAGE_MODULES`). Each names a relation that answers
         # this connection exactly -- the stored table when it can, the same grain over
         # the scoped `costs` view when it cannot -- or is absent when not requested.
@@ -726,7 +731,21 @@ class Warehouse:
             with self.connect() as con:
                 for module in built:
                     derived.retire(con, self._rollup_schema, module)
+        self.refresh_serving()
         return counts[rollup.TABLE]
+
+    def refresh_serving(self) -> None:
+        """Bring the small serving tables built from published derived data up to date.
+
+        After every successful derived rebuild, and once at start-up for a deployment
+        that predates them. Never raises: until a serving table is current its readers
+        use the path it replaces, so a failure here costs speed and nothing else.
+        """
+        try:
+            resource_counts.refresh(self)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("warehouse: could not refresh %s (%s); readers count directly",
+                        resource_counts.TABLE, str(exc)[:300])
 
     async def refresh_rollup_async(self, window: tuple[Any, Any] | None = None) -> None:
         """`refresh_rollup` off the event loop — it aggregates the whole detail table."""
@@ -1278,6 +1297,10 @@ class Warehouse:
                     [budget_ms])
             aggregate, counted, named, billing = self._derived_sources(
                 con, scope, currency, filters)
+            counts = (resource_counts.TABLE
+                      if (not scope and not filters and self._display_rate(currency) is None
+                          and resource_counts.current(con, getattr(con, "fresh_tables", ())))
+                      else None)
             from . import read_indexes
 
             indexable = {billing_rollup.TABLE} if con.bill_stored else set()
@@ -1295,7 +1318,8 @@ class Warehouse:
                     bill_stored=con.bill_stored, bill_serving=con.bill_serving,
                     bill_indexed=billing_rollup.TABLE in indexed,
                     res_ordered=presence.TABLE in indexed,
-                    usage={name: USAGE_MODULES[name].TABLE for name in usage})
+                    usage={name: USAGE_MODULES[name].TABLE for name in usage},
+                    counts=counts)
         finally:
             con.close()
 
@@ -1359,6 +1383,11 @@ class Warehouse:
         except Exception as exc:  # noqa: BLE001
             log.debug("warehouse: could not establish rollup freshness (%s)", str(exc)[:200])
             fresh = frozenset()
+        # Kept for `reader()`, which decides whether `resource_counts` may serve.
+        try:
+            con.fresh_tables = fresh
+        except AttributeError:  # a bare driver connection in tests
+            pass
         # Correct on the shadowed path too: the view there is either the derived table
         # or the same computation over the scoped `costs`, and both answer exactly.
         bill = (billing_rollup.TABLE if shadowed or billing_rollup.TABLE in fresh

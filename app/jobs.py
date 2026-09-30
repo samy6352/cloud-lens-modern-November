@@ -22,6 +22,8 @@ ROLLUP_GENERATION_KEY = "data_rollup_generation"
 ROLLUP_TABLES_KEY = "data_rollup_tables"
 ROLLUP_DIRTY_KEY = "data_rollup_dirty"
 ROLLUP_LAYOUT_KEY = "data_rollup_layout"
+# Stamps of serving tables built from published derived data (see `resource_counts`).
+SERVING_STAMP_KEYS = ["resource_counts_generation"]
 ROLLUP_LAYOUT_VERSION = "1"
 # What a generation stamp written before `ROLLUP_TABLES_KEY` existed covered. A
 # stamp carries no roster of its own, and the two tables below are the only ones
@@ -353,6 +355,11 @@ def coherent_rollup(warehouse: Any, tables: Sequence[str] | None = None):
                     [key, value],
                 )
             _write_dirty(con, int(version), int(version), [])
+            # Serving tables built from the derived data are withdrawn in the same
+            # transaction that republishes it. The generation number alone cannot tell them
+            # they are stale: an explicit maintenance rebuild republishes at the same number.
+            con.execute("DELETE FROM meta WHERE key IN ("
+                        + ", ".join("?" for _ in SERVING_STAMP_KEYS) + ")", SERVING_STAMP_KEYS)
             con.execute("COMMIT")
         except BaseException:
             con.execute("ROLLBACK")

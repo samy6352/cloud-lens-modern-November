@@ -619,6 +619,11 @@ async def _prepare_snapshot_generation(warehouse: Any, state: Any) -> None:
                     raise RuntimeError("The rebuilt rollup has not published a coherent generation.")
             state.snapshot_bootstrap_ready = True
             state.snapshot_bootstrap_error = None
+            # A deployment that predates a serving table builds it now, once, instead of
+            # waiting for its next import. A no-op when it is already current.
+            refresh = getattr(warehouse, "refresh_serving", None)
+            if refresh is not None and not read_only_mode():
+                await offload(refresh)
             return
         except asyncio.CancelledError:
             raise

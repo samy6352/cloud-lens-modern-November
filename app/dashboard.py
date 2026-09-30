@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from . import reporting
+from . import reporting, resource_counts
 
 log = logging.getLogger("cloudlens.dashboard")
 
@@ -384,18 +384,28 @@ class Dashboard:
                 + f" FROM {agg} WHERE {window} GROUP BY 1",
                 None)
 
-            # A certified covering identity index can stream exact distinct keys
-            # instead of spilling a multi-million-entry hash. Keep NULL identities
-            # (SELECT DISTINCT counts them), native currency separation, and the
-            # existing unordered plan for scoped/computed/unindexed sources.
-            identity_order = (' ORDER BY "ResourceId", "BillingCurrency"'
-                              if getattr(r, "res_ordered", False) else "")
-            region_order = (' ORDER BY "ResourceId", "RegionName", "BillingCurrency"'
-                            if getattr(r, "res_ordered", False) else "")
+            # `resource_counts` answers the resource count exactly where it can (see that
+            # module); everywhere else it is counted here. No `ORDER BY` hint on that path:
+            # it was meant to stream DISTINCT from the identity index, but the planner
+            # hashes and then sorts 2M keys to disk instead -- measured 44-75 s against
+            # 4.7-6.6 s without it on the 16.9M-row estate.
+            if getattr(r, "counts", None):
+                month = reporting.month_bounds()
+                seen_sql = resource_counts.window_sql(
+                    r.counts, start, month[0] if month else None, by_region=False)
+                region_seen_sql = resource_counts.window_sql(
+                    r.counts, start, month[0] if month else None, by_region=True)
+            else:
+                seen_sql = ('SELECT "BillingCurrency" AS currency, count(*) AS resources '
+                            'FROM (SELECT DISTINCT "BillingCurrency", "ResourceId" '
+                            f'FROM {res} WHERE {period}) x GROUP BY 1')
+                region_seen_sql = (
+                    'SELECT coalesce("RegionName", \'—\') AS name, '
+                    '"BillingCurrency" AS currency, count(*) AS resources '
+                    'FROM (SELECT DISTINCT "RegionName", "BillingCurrency", "ResourceId" '
+                    f'FROM {res} WHERE {period}) x GROUP BY 1, 2')
             counts = r.rows(
-                'WITH seen AS (SELECT "BillingCurrency" AS currency, count(*) AS resources '
-                'FROM (SELECT DISTINCT "BillingCurrency", "ResourceId" '
-                f'FROM {res} WHERE {period}{identity_order}) x GROUP BY 1), '
+                f'WITH seen AS ({seen_sql}), '
                 'dims AS (SELECT "BillingCurrency" AS currency, '
                 'count(DISTINCT "ServiceName") AS services, '
                 'count(DISTINCT "SubAccountId") AS subscriptions, '
@@ -458,10 +468,7 @@ class Dashboard:
                 'WITH money AS (SELECT coalesce("RegionName", \'—\') AS name, '
                 '"BillingCurrency" AS currency, ' + split
                 + f' FROM {agg} WHERE {window} GROUP BY 1, 2), '
-                'seen AS (SELECT coalesce("RegionName", \'—\') AS name, '
-                '"BillingCurrency" AS currency, count(*) AS resources '
-                'FROM (SELECT DISTINCT "RegionName", "BillingCurrency", "ResourceId" '
-                f'FROM {res} WHERE {period}{region_order}) x GROUP BY 1, 2) '
+                f'seen AS ({region_seen_sql}) '
                 'SELECT money.name, money.currency, money.cost, money.prior, '
                 'coalesce(seen.resources, 0) AS resources FROM money LEFT JOIN seen '
                 'ON seen.name = money.name '
