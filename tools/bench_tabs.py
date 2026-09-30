@@ -106,6 +106,12 @@ elif args:
 else:
     paths = [p for group in GROUPS.values() for p in group]
 
+# These require 1-100 explicit subscriptions and answer 400 without one -- input
+# validation the UI satisfies by asking first, not a failure. Benched with the
+# estate's largest subscription so the number measures the work, not the refusal.
+SCOPE_REQUIRED = ("/api/dashboard/change-analysis", "/api/dashboard/performance",
+                  "/api/dashboard/service-health")
+
 # A tab a person waits more than this for is a defect, not a slow query.
 BUDGET_WARM = float(os.environ.get("BENCH_BUDGET", "2.0"))
 
@@ -115,6 +121,16 @@ with httpx.Client(base_url=BASE, timeout=600.0, follow_redirects=False) as c:
     if r.status_code != 200:
         print(r.text[:400])
         raise SystemExit(1)
+
+    subs = c.get("/api/subscriptions").json().get("subscriptions") or []
+    largest = subs[0]["id"] if subs else ""
+
+    def scoped(path: str) -> str:
+        if largest and path.split("?")[0] in SCOPE_REQUIRED:
+            return f"{path}{'&' if '?' in path else '?'}scope={largest}"
+        return path
+
+    paths = [scoped(p) for p in paths]
 
     rows = []
     print(f"\n{'endpoint':<52}{'cold':>9}{'warm':>9}  status      bytes", flush=True)
