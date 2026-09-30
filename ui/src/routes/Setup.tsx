@@ -3,7 +3,7 @@ import { useSearch } from "@tanstack/react-router";
 import { Check, CircleAlert, Clock, Copy, Download, LoaderCircle, Minus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ErrorState, KpiTile, PageHeader } from "@/components/blocks";
+import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -134,6 +134,78 @@ function Grid({ data }: { data: SetupProgress }) {
   );
 }
 
+const HISTORY_PRESETS = [3, 6, 12, 13];
+
+type PassResult = {
+  onboarding?: string[];
+  extending?: string[];
+  history_waiting?: string[];
+  skipped?: string;
+  error?: string | null;
+};
+
+/** The first run imports the last few months; earlier ones are an administrator's choice. */
+function History({ data, admin, onSaved }: { data: SetupProgress; admin: boolean; onSaved: (message: string) => void }) {
+  const { chosen, max } = data.history_months;
+  const options = [...new Set([chosen, ...HISTORY_PRESETS.filter((n) => n > chosen && n <= max)])].sort((a, b) => a - b);
+  const [selected, setSelected] = useState(chosen);
+  const [saving, setSaving] = useState(false);
+  const plural = (n: number) => `${n} month${n === 1 ? "" : "s"}`;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const result = await api<PassResult>("cost-data/history", undefined, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ months: selected }),
+      });
+      const n = result.extending?.length ?? 0;
+      onSaved(
+        result.error
+          ? `Saved ${plural(selected)}, but the check failed: ${result.error}`
+          : n
+            ? `Importing earlier months for ${n} subscription${n === 1 ? "" : "s"}, newest first.`
+            : result.history_waiting?.length
+              ? "Saved. Earlier months start as soon as each subscription's current imports finish."
+              : result.skipped
+                ? "Saved. Earlier months are queued at the next check, within minutes."
+                : `Saved. Subscriptions set up from now on import ${plural(selected)}.`,
+      );
+    } catch (error) {
+      onSaved(error instanceof ApiError || error instanceof Error ? error.message : "Saving failed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="mb-5 flex flex-wrap items-center justify-between gap-3 p-[var(--cl-pad)]">
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold tracking-tight">History</h2>
+        <p className="mt-0.5 text-xs text-muted">
+          {chosen < max
+            ? `Importing the last ${plural(chosen)}. Earlier months are optional, up to ${max}: each is one Azure export run per subscription, queued after current imports.`
+            : `Importing the last ${max} months, everything Cost Management exports.`}
+        </p>
+      </div>
+      {admin && options.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented
+            label="Months of history"
+            value={String(selected)}
+            onChange={(value) => setSelected(Number(value))}
+            options={options.map((n) => ({ value: String(n), label: plural(n) }))}
+          />
+          <Button variant="primary" size="sm" onClick={save} disabled={saving || selected <= chosen}>
+            Import earlier months
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function SetupPage() {
   const search = useSearch({ strict: false }) as { scope?: string };
   const me = useQuery(meQuery);
@@ -150,7 +222,7 @@ export function SetupPage() {
     setChecking(true);
     setNotice(null);
     try {
-      const result = await api<{ onboarding?: string[]; skipped?: string; error?: string | null }>("cost-data/bootstrap", undefined, {
+      const result = await api<PassResult>("cost-data/bootstrap", undefined, {
         method: "POST",
       });
       setNotice(
@@ -158,7 +230,9 @@ export function SetupPage() {
           result.error ??
           (result.onboarding?.length
             ? `Setting up ${result.onboarding.length} subscription${result.onboarding.length === 1 ? "" : "s"}.`
-            : "Everything visible is already set up."),
+            : result.extending?.length
+              ? `Importing earlier months for ${result.extending.length} subscription${result.extending.length === 1 ? "" : "s"}.`
+              : "Everything visible is already set up."),
       );
       await client.invalidateQueries({ queryKey: ["setup-progress"] });
     } catch (error) {
@@ -218,6 +292,17 @@ export function SetupPage() {
             <KpiTile index={2} label="Queued" value={count(data.totals.queued)} hint="newest month first" />
             <KpiTile index={3} label="Failed" value={count(data.totals.failed)} hint={data.totals.failed ? "existing costs are kept" : "none"} />
           </div>
+          {data.enabled && (
+            <History
+              key={data.history_months.chosen}
+              data={data}
+              admin={admin}
+              onSaved={(message) => {
+                setNotice(message);
+                void client.invalidateQueries({ queryKey: ["setup-progress"] });
+              }}
+            />
+          )}
           <Card>
             <CardHeader
               title="Import progress"

@@ -190,6 +190,8 @@ export interface SetupProgress {
   }>;
   totals: Record<SetupState, number>;
   history: { from: string; to: string };
+  /** Months managed setup imports: `chosen` (3 unless an administrator added earlier months), at most `max`. */
+  history_months: { chosen: number; default: number; max: number };
   expectation: string;
   checked_at: string | null;
   error: string | null;

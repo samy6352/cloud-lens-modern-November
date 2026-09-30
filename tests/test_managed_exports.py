@@ -146,22 +146,32 @@ def _month(offset: int, today: date | None = None) -> str:
     return cursor.isoformat()
 
 
-def test_managed_history_is_the_current_month_and_twelve_whole_months():
+def test_managed_history_defaults_to_three_months_and_allows_up_to_thirteen():
     from app import cost_data
 
-    assert cost_data.managed_history(date(2026, 9, 30)) == ("2025-09-01", "2026-09-30", 395)
-    assert cost_data.managed_history(date(2024, 3, 1)) == ("2023-03-01", "2024-03-01", 367)
+    assert cost_data.managed_history(date(2026, 9, 30)) == ("2026-07-01", "2026-09-30", 92)
+    assert cost_data.managed_history(date(2026, 9, 30), 13) == ("2025-09-01", "2026-09-30", 395)
+    assert cost_data.managed_history(date(2024, 3, 1), 13) == ("2023-03-01", "2024-03-01", 367)
+    for bad in (0, 14, "3", True, 3.0):
+        with pytest.raises(ValueError):
+            cost_data.managed_history(date(2026, 9, 30), bad)
     today = datetime.now(UTC).date()
     lo, hi, _ = cost_data.managed_history()
     assert cost_data.managed_window(lo, hi)[:2] == (lo, hi)
+    # Optional earlier months end before today, and reach back to the 13th month at most.
+    earlier = (_month(12), (date.fromisoformat(_month(2)) - timedelta(days=1)).isoformat())
+    assert cost_data.managed_window(*earlier)[:2] == earlier
     for bad in [((date.fromisoformat(lo) + timedelta(days=1)).isoformat(), hi),  # not month-aligned
                 (_month(13), hi),                                                # 14 months
+                (_month(13), earlier[1]),                                        # 14th month, ends early
                 (lo, (today + timedelta(days=1)).isoformat())]:                  # future
         with pytest.raises(ValueError):
             cost_data.managed_window(*bad)
     # The interactive horizon is unchanged: 365 days, validated as before.
     with pytest.raises(ValueError):
         cost_data.history_window(history_days=366)
+    assert cost_data.requested_from({}) is None
+    assert cost_data.requested_from({"history": {"from": "2026-07-01"}, "extended_from": "2025-10-01"}) == "2025-10-01"
 
 
 def test_subscription_listing_follows_next_link_and_refuses_to_leave_arm(azure, monkeypatch):
@@ -184,11 +194,11 @@ def test_subscription_listing_follows_next_link_and_refuses_to_leave_arm(azure, 
         asyncio.run(cost.list_subscriptions())
 
 
-def test_first_run_creates_parquet_exports_and_queues_thirteen_months_newest_first(azure):
+def test_first_run_creates_parquet_exports_and_queues_three_months_newest_first(azure):
     from app import bootstrap, cost_data
 
     first = asyncio.run(bootstrap.run_once())
-    assert first["error"] is None and first["subscriptions"] == 4
+    assert first["error"] is None and first["subscriptions"] == 4 and first["history_months"] == 3
     # S4's identity may read but not export: blocked, with the exact command that fixes it.
     assert first["onboarding"] == [S1, S3, S5]
     fix = first["blockers"][S4][0]["fix"]
@@ -202,8 +212,8 @@ def test_first_run_creates_parquet_exports_and_queues_thirteen_months_newest_fir
     assert (job["payload"]["from"], job["payload"]["to"]) == (lo, hi)
     windows = [t for t in job["tasks"] if t.get("from")]
     assert len([t for t in job["tasks"] if t.get("operation") == "configure"]) == 3
-    assert len(windows) == 3 * 13 and {t["from"][:7] for t in windows} == {
-        _month(n)[:7] for n in range(13)}
+    assert len(windows) == 3 * 3 and {t["from"][:7] for t in windows} == {
+        _month(n)[:7] for n in range(3)}
 
     # Idempotent: a second pass, or a second instance, creates nothing new.
     again = asyncio.run(bootstrap.run_once())
@@ -321,7 +331,8 @@ def test_progress_grid_months_by_subscription(azure):
     asyncio.run(azure.flow.step(job_id))
     subs = [{"id": s, "name": n} for s, n in ((S1, "One"), (S3, "Three"), (S4, "Four"), (S5, "Five"))]
     grid = bootstrap.progress(subs, admin=True)
-    assert grid["months"][0] == _month(0)[:7] and len(grid["months"]) == 13
+    assert grid["months"][0] == _month(0)[:7] and len(grid["months"]) == 3
+    assert grid["history_months"] == {"chosen": 3, "default": 3, "max": 13}
     rows = {r["id"]: r for r in grid["subscriptions"]}
     assert rows[S1]["cells"][_month(0)[:7]]["state"] == "loaded"
     assert rows[S3]["cells"][_month(0)[:7]]["state"] == "running"
@@ -363,6 +374,99 @@ def test_progress_and_check_now_routes(azure, monkeypatch):
     assert off.value.status_code == 409 and "CLOUDLENS_MANAGED_EXPORTS" in off.value.detail
 
 
+def _finish(azure, job_id: str) -> None:
+    """Run a job the way `launch` does, letting every report it asks for land, until it is done."""
+    for _ in range(30):
+        asyncio.run(azure.jobs.run(job_id, lambda: azure.flow.step(job_id)))
+        azure.landed.update((s, w["from"][:10]) for s, w in azure.arm.runs)
+        if azure.jobs.get(job_id)["status"] in azure.jobs.TERMINAL:
+            return
+    raise AssertionError("the job never finished")
+
+
+def test_earlier_history_is_optional_and_queued_once_after_current_work(azure):
+    """Three months by default. An administrator adds earlier ones: every configured subscription
+    gets just the months that adds, as one more job, after its first months -- and only once."""
+    from app import bootstrap, cost_data
+
+    setup = asyncio.run(bootstrap.run_once())["job_id"]
+    asyncio.run(azure.flow.step(setup))  # configures S1, S3 and S5; their first months start
+    assert bootstrap.history_months() == 3
+    assert bootstrap.set_history_months(13, "Admin") == 13 and bootstrap.history_months() == 13
+    for bad in (0, 14, "13", True):
+        with pytest.raises(ValueError):
+            bootstrap.set_history_months(bad)
+
+    # Still importing the first months: nothing is queued yet, and they are looked at again soon.
+    waiting = asyncio.run(bootstrap.run_once())
+    assert waiting["extending"] == [] and waiting["history_waiting"] == [S1, S3, S5]
+    assert len(azure.jobs.listing()) == 1
+
+    _finish(azure, setup)
+    assert azure.jobs.get(setup)["status"] == "ready"
+    extended = asyncio.run(bootstrap.run_once())
+    assert extended["error"] is None and extended["extending"] == [S1, S3, S5]
+    job = azure.jobs.get(extended["history_jobs"][0])
+    assert azure.launched[-1] == job["job_id"]
+    assert job["kind"] == "focus-setup" and job["identity"] == "workload"
+    assert job["payload"]["action"] == "history" and job["payload"]["managed"]
+    assert job["payload"]["to"] == (date.fromisoformat(_month(2)) - timedelta(days=1)).isoformat()
+    # Only the ten earlier months; no reconfiguration; reports Azure already delivered are reused.
+    assert not [t for t in job["tasks"] if t.get("operation") == "configure"]
+    assert len(job["tasks"]) == 3 * 10 and not any(t["force_new"] for t in job["tasks"])
+    assert {t["from"][:7] for t in job["tasks"]} == {_month(n)[:7] for n in range(3, 13)}
+    for sub in (S1, S3, S5):
+        config = cost_data.read(sub)
+        # Recorded with the job, so it is asked for once; the daily catch-up anchor is untouched.
+        assert config["extended_from"] == _month(12) and config["history"]["from"] == _month(2)
+    again = asyncio.run(bootstrap.run_once())
+    assert again["extending"] == [] and again["history_waiting"] == [] and len(azure.jobs.listing()) == 2
+
+    # All thirteen months show: the recent ones from the first job, the earlier ones queued.
+    grid = bootstrap.progress([{"id": s, "name": s} for s in (S1, S3, S4, S5)], admin=True)
+    assert len(grid["months"]) == 13 and grid["history_months"]["chosen"] == 13
+    row = {r["id"]: r for r in grid["subscriptions"]}[S1]
+    assert row["job_id"] == job["job_id"]
+    assert row["cells"][_month(0)[:7]]["state"] == "loaded"
+    assert row["cells"][_month(12)[:7]]["state"] == "queued"
+
+    # Newest earlier month first, round-robin across subscriptions, within the cap (2).
+    runs = len(azure.arm.runs)
+    asyncio.run(azure.flow.step(job["job_id"]))
+    assert [(s, w["from"][:10]) for s, w in azure.arm.runs[runs:]] == [(S1, _month(3)), (S3, _month(3))]
+
+
+def test_history_route_is_admin_only_bounded_and_applies_at_once(azure, monkeypatch):
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    from app import bootstrap, main
+
+    admin = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(
+        admin=True, source="local", name="Admin", sid="s")), query_params={})
+    viewer = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(
+        admin=False, source="local", name="Viewer", sid="s")), query_params={})
+    monkeypatch.setattr(main, "permitted", AsyncMock(return_value=None))
+    for bad in (0, 14, "6", 6.5, True):
+        with pytest.raises(ValidationError):
+            main.HistoryRequest(months=bad)
+    body = main.HistoryRequest(months=6)
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(main.set_cost_data_history(body, viewer))
+    assert denied.value.status_code == 403 and bootstrap.history_months() == 3
+    result = json.loads(asyncio.run(main.set_cost_data_history(body, admin)).body)
+    # Nothing was set up yet, so the first run itself imports the six months.
+    assert result["months"] == 6 and result["onboarding"] == [S1, S3, S5]
+    job = azure.jobs.get(result["job_id"])
+    assert {t["from"][:7] for t in job["tasks"] if t.get("from")} == {_month(n)[:7] for n in range(6)}
+    grid = json.loads(asyncio.run(main.cost_data_progress(viewer)).body)
+    assert grid["history_months"] == {"chosen": 6, "default": 3, "max": 13} and len(grid["months"]) == 6
+    monkeypatch.setenv("CLOUDLENS_MANAGED_EXPORTS", "false")
+    with pytest.raises(HTTPException) as off:
+        asyncio.run(main.set_cost_data_history(body, admin))
+    assert off.value.status_code == 409
+
+
 def test_blocked_setup_is_rechecked_in_minutes_not_hours(monkeypatch):
     """Right after an install the role assignments are still propagating."""
     from app import bootstrap
@@ -372,6 +476,8 @@ def test_blocked_setup_is_rechecked_in_minutes_not_hours(monkeypatch):
     assert bootstrap._next_pass({"blockers": {S4: [{"capability": "export-role"}]}}) == 300
     assert bootstrap._next_pass({"deployment_blockers": [{"capability": "storage"}]}) == 300
     assert bootstrap._next_pass({"error": "throttled"}) == 300
+    # Earlier months chosen while a subscription is still importing start minutes after it ends.
+    assert bootstrap._next_pass({"history_waiting": [S1]}) == 300
     assert bootstrap._next_pass({"blockers": {}, "deployment_blockers": [], "error": None}) == 3600
 
 

@@ -141,8 +141,9 @@ param(
     # Opt in to managing export schedules/budgets; read-only cost access is the default.
     [switch]$EnableExportManagement,
 
-    # The app creates its own FOCUS exports and backfills 13 months on first start
-    # (CLOUDLENS_MANAGED_EXPORTS). Needs -EnableExportManagement; infra/install.ps1 sets both.
+    # The app creates its own FOCUS exports and imports the last 3 months on first start
+    # (CLOUDLENS_MANAGED_EXPORTS); earlier months, up to 13, are optional from Setup.
+    # Needs -EnableExportManagement; infra/install.ps1 sets both.
     [bool]$ManagedExports = $false,
 
     # Skip provisioning the FOCUS exports CloudLens imports from.
@@ -759,9 +760,10 @@ Write-Host ""
 # State the data path explicitly. Without exports the dashboard still loads and Quick refresh
 # still works, so "it looks fine" is exactly the wrong signal to leave someone with.
 if ($ManagedExports) {
-    Write-Host "Cost detail  : CloudLens creates its own FOCUS exports and imports 13 months of history," -ForegroundColor Green
+    Write-Host "Cost detail  : CloudLens creates its own FOCUS exports and imports the last 3 months," -ForegroundColor Green
     Write-Host "               newest month first. First data usually within hours (a new export can" -ForegroundColor Green
-    Write-Host "               take up to 24 h). Progress: $webAppUrl/v2/admin/setup" -ForegroundColor Green
+    Write-Host "               take up to 24 h). Earlier months (up to 13) are optional on the Setup page:" -ForegroundColor Green
+    Write-Host "               $webAppUrl/v2/admin/setup" -ForegroundColor Green
 } elseif ($focusProvisioned) {
     Write-Host "Cost detail  : FOCUS exports provisioned. Azure delivers the first reports" -ForegroundColor Green
     Write-Host "               within a few hours; CloudLens imports them automatically." -ForegroundColor Green

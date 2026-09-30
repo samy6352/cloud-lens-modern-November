@@ -770,7 +770,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             ])
             from . import bootstrap
             if bootstrap.enabled():
-                # First run creates this deployment's exports and backfills 13 months (S2).
+                # First run creates this deployment's exports and imports the last 3 months;
+                # an administrator can add earlier months, up to 13, from Setup (S2).
                 background.append(asyncio.create_task(bootstrap.run_forever(), name="managed-exports"))
         # `AUTO_INGEST` before `summary()`, because `summary()` reads PostgreSQL and this
         # is the last database call left on the startup critical path. Asking whether
@@ -2955,6 +2956,28 @@ async def run_cost_data_bootstrap(request: Request) -> JSONResponse:
         raise HTTPException(409, f"Managed exports are off on this deployment. The installer sets "
                                  f"{bootstrap.FLAG}=true; set it and restart to enable them.")
     return JSONResponse(await bootstrap.run_once())
+
+
+class HistoryRequest(BaseModel):
+    # cost_data.MANAGED_HISTORY_MONTHS: the current month and the twelve before it.
+    months: int = Field(strict=True, ge=1, le=13)
+
+
+@app.post("/api/cost-data/history")
+async def set_cost_data_history(body: HistoryRequest, request: Request) -> JSONResponse:
+    """Choose how many months managed setup imports (3 unless changed, at most 13), then run a
+    pass: subscriptions already set up get just the earlier months this adds, each after its
+    current imports finish; subscriptions set up later get the whole horizon."""
+    from . import bootstrap
+    user = require_admin(request)
+    if not bootstrap.enabled():
+        raise HTTPException(409, f"Managed exports are off on this deployment. The installer sets "
+                                 f"{bootstrap.FLAG}=true; set it and restart to enable them.")
+    try:
+        await offload(bootstrap.set_history_months, body.months, getattr(user, "name", None))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse({"months": body.months, **await bootstrap.run_once()})
 
 
 @app.get("/api/cost-data/subscriptions")

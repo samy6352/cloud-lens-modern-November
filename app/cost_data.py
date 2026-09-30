@@ -190,44 +190,68 @@ def history_window(start: str | None = None, end: str | None = None,
     return lo.isoformat(), hi.isoformat(), count
 
 
-# Unattended first run (bootstrap.py): the current month plus the twelve before it -- the
-# history Cost Management will generate for a newly created export, one calendar month per run.
+# Unattended first run (bootstrap.py) imports the current month and the two before it: enough
+# for every 30- and 60-day view, and three export runs per subscription instead of thirteen.
+# Earlier months are optional (an administrator adds them from Setup), back to the current
+# month plus the twelve before it -- the history Cost Management generates for an export, one
+# calendar month per run.
+DEFAULT_HISTORY_MONTHS = 3
 MANAGED_HISTORY_MONTHS = 13
 # Twelve whole months plus a current month of at most 31 days.
 MANAGED_MAX_DAYS = 397
 
 
-def managed_history(today: date | None = None) -> tuple[str, str, int]:
+def managed_history(today: date | None = None,
+                    months: int = DEFAULT_HISTORY_MONTHS) -> tuple[str, str, int]:
+    if type(months) is not int or not 1 <= months <= MANAGED_HISTORY_MONTHS:
+        raise ValueError(f"Managed history is 1–{MANAGED_HISTORY_MONTHS} calendar months.")
     hi = today or datetime.now(UTC).date()
     lo = hi.replace(day=1)
-    for _ in range(MANAGED_HISTORY_MONTHS - 1):
+    for _ in range(months - 1):
         lo = (lo - timedelta(days=1)).replace(day=1)
     return lo.isoformat(), hi.isoformat(), (hi - lo).days + 1
 
 
 def managed_window(start: str, end: str) -> tuple[str, str, int]:
-    """Validate an unattended horizon: month-aligned, at most 13 calendar months, not future."""
+    """Validate an unattended window: starts on the 1st, within the last 13 calendar months
+    (today's month and the twelve before it), not future. Earlier-history windows end before
+    today; the first-run window ends today."""
     try:
         lo, hi = date.fromisoformat(start), date.fromisoformat(end)
     except (TypeError, ValueError) as exc:
         raise ValueError("Managed history dates must be valid YYYY-MM-DD UTC dates.") from exc
-    if (lo.day != 1 or lo > hi or hi > datetime.now(UTC).date()
-            or managed_history(hi)[0] > lo.isoformat()):
-        raise ValueError(f"Managed history is whole calendar months, at most {MANAGED_HISTORY_MONTHS}, "
-                         "ending no later than today.")
+    today = datetime.now(UTC).date()
+    if (lo.day != 1 or lo > hi or hi > today
+            or managed_history(today, MANAGED_HISTORY_MONTHS)[0] > lo.isoformat()):
+        raise ValueError(f"Managed history is whole calendar months within the last "
+                         f"{MANAGED_HISTORY_MONTHS}, ending no later than today.")
     return lo.isoformat(), hi.isoformat(), (hi - lo).days + 1
+
+
+def requested_from(config: dict) -> str | None:
+    """The earliest date this subscription's pipeline was ever asked to import: its first
+    setup's history, or earlier months an administrator added since (`extended_from`).
+
+    Kept apart from `history`, which anchors the daily catch-up (`_prepare_tick`): widening
+    that would make one unsupported historical month re-import the whole setup window daily.
+    """
+    dates = [d for d in ((config.get("history") or {}).get("from"), config.get("extended_from")) if d]
+    return min(dates) if dates else None
 
 
 async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
                   start: str | None = None, end: str | None = None, action: str = "setup",
                   history_days: int | None = None, managed: bool = False) -> dict:
     from . import archive, focus_sync
-    if cadence not in CADENCES or action not in {"setup", "schedule", "frequency", "refresh", "reconcile"}:
+    if cadence not in CADENCES or action not in {"setup", "schedule", "frequency", "refresh", "reconcile",
+                                                 "history"}:
         raise ValueError("Invalid cost-data setup action or frequency.")
     if not subscriptions:
         raise ValueError("Choose at least one subscription.")
-    if managed and (action != "setup" or history_days is not None):
-        raise ValueError("Managed setup imports its own fixed history; it takes no other action or length.")
+    if managed and (action not in {"setup", "history"} or history_days is not None):
+        raise ValueError("Managed setup imports its own history; it takes no other action or length.")
+    if action == "history" and not (managed and start and end):
+        raise ValueError("Earlier history is a managed import of an explicit month-aligned window.")
     if managed:
         start, end, history_days = (managed_window(start, end) if start or end else managed_history())
     elif action == "setup":
@@ -270,6 +294,11 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
                 blockers.append("Could not read destination reports using the workload identity: " + str(exc)[:250])
         if action not in {"setup", "schedule"} and config.get("version") != 2:
             blockers.append("Review initial setup before changing frequency or refreshing this pipeline.")
+        if action == "history" and config.get("version") == 2 and not config.get("enabled"):
+            blockers.append("Setup has not finished configuring this subscription's export yet.")
+        if action == "history" and not row and sid not in errors:
+            blockers.append("This deployment's export for the subscription was not found. An operator "
+                            f"recreates it with: {schedules.operator_command(sid)}")
         previous_update = (await asyncio.to_thread(jobs.get, config["update_job"])
                            if config.get("update_job") else None)
         if action in {"schedule", "frequency", "refresh", "reconcile"} and previous_update and previous_update["status"] in {"failed", "partial"}:
@@ -295,6 +324,7 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
             "action": (f"Refresh {config.get('cadence', cadence)} coverage; do not change frequency"
                        if action == "refresh" else "Reconcile the reviewed history; do not change frequency"
                        if action == "reconcile" else
+                       "Import earlier months; keep automatic updates as they are" if action == "history" else
                        "Reuse owned export and pause its native recurrence" if row else
                        "Create the deployment-owned FOCUS export and its managed-identity container access"),
         })
@@ -306,6 +336,8 @@ async def preview(subscriptions: list[dict], *, cadence: str = "Daily",
               "notes": [
                   ("This approval enables the selected automatic frequency without starting a historical import. Existing history and catch-up progress are preserved; use First-time import to request older data."
                    if action == "schedule" else
+                   "Imports the earlier months only. Automatic updates, their frequency and catch-up position are unchanged."
+                   if action == "history" else
                    "One approval authorizes history, automatic updates and internal coverage checks. Browser closure is safe; the backend and database must remain running."),
                   "Only deployment-owned exports are changed. External and legacy exports are untouched; reports are retained and storage charges grow.",
                   "Read checks are advisory, not proof of write permissions. Azure verifies export execution and storage access when work starts.",
@@ -329,14 +361,16 @@ async def create(plan: dict, idempotency_key: str) -> dict:
     if not plan["subscriptions"]:
         raise ValueError("Choose at least one subscription.")
     managed = bool(plan.get("managed"))
-    if plan["action"] == "setup":
+    if plan["action"] in {"setup", "history"}:
+        if plan["action"] == "history" and not managed:
+            raise ValueError("Earlier history is imported by managed setup only.")
         lo, hi, count = (managed_window(plan["from"], plan["to"]) if managed else
                          history_window(plan["from"], plan["to"], plan.get("history_days")))
         if any(row["window"] != {"from": lo, "to": hi} for row in plan["subscriptions"]):
             raise ValueError("The import windows do not match the reviewed history.")
         plan = {**plan, "history_days": count}
     elif managed:
-        raise ValueError("Managed setup is a first-time import only.")
+        raise ValueError("Managed setup only imports history.")
     if any(row["blockers"] for row in plan["subscriptions"]):
         raise ValueError("Resolve the subscription blockers, then review setup again.")
     tasks = []
@@ -346,14 +380,42 @@ async def create(plan: dict, idempotency_key: str) -> dict:
             tasks.append({"subscription": sid, "operation": "configure", "approved": row})
         if plan["action"] not in {"schedule", "frequency"}:
             lo, hi = row["window"]["from"], row["window"]["to"]
+            # Imports reuse a complete report Azure already delivered for the month; refreshes
+            # and reconciles ask for a new one.
             tasks.extend({"subscription": sid, **part, "schedule": row["export"],
-                          "force_new": plan["action"] != "setup"}
+                          "force_new": plan["action"] not in {"setup", "history"}}
                          for part in focus_workflow.chunks(lo, hi, MANAGED_MAX_DAYS if managed else 366))
     payload_keys = ("action", "cadence", "from", "to", "history_days", "preview_token")
+    payload = {**{k: plan.get(k) for k in payload_keys}, **({"managed": True} if managed else {})}
+    if plan["action"] == "history":
+        return await asyncio.to_thread(_create_history, plan, tasks, idempotency_key, payload)
     return await asyncio.to_thread(
         jobs.create, "focus-setup", [r["subscription"] for r in plan["subscriptions"]], tasks,
-        idempotency_key=idempotency_key, identity="workload",
-        payload={**{k: plan.get(k) for k in payload_keys}, **({"managed": True} if managed else {})})
+        idempotency_key=idempotency_key, identity="workload", payload=payload)
+
+
+def _create_history(plan: dict, tasks: list[dict], idempotency_key: str, payload: dict) -> dict:
+    """Queue earlier months and record them on each subscription in one transaction.
+
+    The record (`extended_from`) is what stops the next pass asking again, long after the job
+    itself has dropped out of recent listings; writing both together means a crash can neither
+    lose it nor queue the same months twice.
+    """
+    require_writable()
+    with jobs.transaction() as con:
+        configs = {}
+        for row in plan["subscriptions"]:
+            sid = row["subscription"]
+            configs[sid] = jobs._read(con, "focus-daily:" + sid) or {}
+            if configs[sid] != row["config"]:
+                raise ValueError("The saved update configuration changed after review. Review it again.")
+        record = jobs.create_in_transaction(
+            con, "focus-setup", list(configs), tasks, idempotency_key=idempotency_key,
+            identity="workload", payload=payload)
+        for sid, config in configs.items():
+            if (requested_from(config) or "9999-12-31") > plan["from"]:
+                _put_config(con, sid, {**config, "extended_from": plan["from"]})
+        return record
 
 
 async def configure(record: dict, task: dict) -> None:

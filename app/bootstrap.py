@@ -10,7 +10,8 @@ deployment may export them, and approve a setup. The work itself is the existing
 
   * one `focus-setup` job; per subscription a `configure` task that adopts this deployment's own
     Parquet export (created by the operator: Cost Management lets the app's identity *run* an export
-    but not *create* one, verified live 30 Sep 2026) and one task per month;
+    but not *create* one, verified live 30 Sep 2026) and one task per month -- by default the
+    current month and the two before it;
   * `focus_workflow.step` submits month-bounded runs newest month first, round-robin across
     subscriptions, one per subscription and at most CLOUDLENS_EXPORT_CONCURRENCY at once, backing
     off on 429; it polls manifests and imports exactly the run it asked for;
@@ -19,9 +20,15 @@ deployment may export them, and approve a setup. The work itself is the existing
   * `cost_data.tick` then keeps each subscription current daily and reconciles 90 days on the 7th,
     which is what picks up late adjustments to the previous month.
 
+Earlier months are optional. An administrator chooses up to 13 on the Setup page
+(`set_history_months`); each pass then queues only the months that choice adds, for every
+configured subscription whose current work has finished, as one more `focus-setup` job with no
+configure step. A subscription's `extended_from` records them, so they are asked for once.
+
 Newly visible subscriptions are onboarded on the next pass (hourly; every 5 minutes while something
-is blocked, since a fresh install's role assignments take minutes to propagate). One instance runs a pass at a
-time: a lease taken under the jobs advisory lock, plus idempotency keys on the job itself.
+is blocked or waiting, since a fresh install's role assignments take minutes to propagate). One
+instance runs a pass at a time: a lease taken under the jobs advisory lock, plus idempotency keys
+on the job itself.
 """
 from __future__ import annotations
 
@@ -35,13 +42,14 @@ from typing import Any
 from uuid import uuid4
 
 from . import cost_data, focus_workflow, jobs, schedules
-from .job_policy import read_only_mode
+from .job_policy import read_only_mode, require_writable
 
 log = logging.getLogger("cloudlens.bootstrap")
 
 FLAG = "CLOUDLENS_MANAGED_EXPORTS"
 STATUS_KEY = "bootstrap:status"
 LEASE_KEY = "bootstrap:lease"
+HISTORY_KEY = "bootstrap:history_months"
 LEASE_SECONDS = 900
 EXPECTATION = ("First data usually arrives within a few hours. Azure can take up to 24 hours to start "
                "a brand-new export, and each month of history is a separate run.")
@@ -75,8 +83,32 @@ def retry_interval() -> int:
 
 
 def _next_pass(result: dict[str, Any]) -> int:
-    waiting = bool(result.get("error") or result.get("deployment_blockers") or result.get("blockers"))
+    waiting = bool(result.get("error") or result.get("deployment_blockers") or result.get("blockers")
+                   or result.get("history_waiting"))
     return retry_interval() if waiting else interval()
+
+
+def history_months() -> int:
+    """Calendar months managed setup imports: the administrator's choice, else the default (3)."""
+    from .warehouse import warehouse
+
+    try:
+        months = json.loads(warehouse.get_meta(HISTORY_KEY) or "{}").get("months")
+    except (TypeError, ValueError, AttributeError):
+        months = None
+    if type(months) is int and 1 <= months <= cost_data.MANAGED_HISTORY_MONTHS:
+        return months
+    return cost_data.DEFAULT_HISTORY_MONTHS
+
+
+def set_history_months(months: int, by: str | None = None) -> int:
+    """Persist how many months to import; the next pass queues whatever that adds."""
+    if type(months) is not int or not 1 <= months <= cost_data.MANAGED_HISTORY_MONTHS:
+        raise ValueError(f"Choose 1–{cost_data.MANAGED_HISTORY_MONTHS} months of history.")
+    require_writable()
+    with jobs.transaction() as con:
+        jobs._put(con, HISTORY_KEY, {"months": months, "by": by, "at": jobs.now()})
+    return months
 
 
 def _assignee() -> str:
@@ -196,10 +228,12 @@ async def run_once() -> dict[str, Any]:
         configs = {s["id"]: await asyncio.to_thread(cost_data.read, s["id"]) for s in subs}
         managed = [s for s in subs if configs[s["id"]].get("version") == 2]
         unmanaged = [s for s in subs if configs[s["id"]].get("version") != 2 and s["id"] not in busy]
-        lo, hi, _ = cost_data.managed_history()
+        months = await asyncio.to_thread(history_months)
+        lo, hi, _ = cost_data.managed_history(months=months)
         result.update(subscriptions=len(subs), managed=len(managed), history={"from": lo, "to": hi},
-                      onboarding=[], job_id=None, blockers={}, deployment_blockers=[],
-                      in_progress=sorted(busy & {s["id"] for s in subs}), resumed=[])
+                      history_months=months, onboarding=[], job_id=None, blockers={},
+                      deployment_blockers=[], in_progress=sorted(busy & {s["id"] for s in subs}),
+                      resumed=[], extending=[], history_jobs=[], history_waiting=[])
         # Subscriptions whose setup stopped at "configure" -- almost always an export that only
         # an operator can create. Show the command, and resume the job on every pass so setup
         # continues by itself once the export exists.
@@ -246,6 +280,7 @@ async def run_once() -> dict[str, Any]:
                     log.info("managed exports: onboarding %d subscription(s), job %s", len(ids),
                              record["job_id"])
             result["blockers"] = {**blockers, **result["blockers"]}
+        await _extend_history(managed, configs, busy, lo, result)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - reported on the setup page and retried next pass
@@ -260,6 +295,48 @@ async def run_once() -> dict[str, Any]:
         finally:
             await asyncio.to_thread(_release, owner)
     return result
+
+
+async def _extend_history(managed: list[dict], configs: dict[str, dict], busy: set[str], lo: str,
+                          result: dict[str, Any]) -> None:
+    """Queue the earlier months the chosen horizon adds, for each configured subscription.
+
+    Only months before everything already requested: a month that was asked for and failed is
+    retried from Setup, never re-queued here. A subscription still working waits for the next
+    pass, so its current months finish first. Subscriptions needing the same window share one job,
+    because jobs step one at a time and a job per subscription would run them one after another.
+    """
+    windows: dict[tuple[str, str], list[dict]] = {}
+    for s in managed:
+        config = configs[s["id"]]
+        earliest = cost_data.requested_from(config)
+        if not config.get("enabled") or not earliest or earliest <= lo:
+            continue
+        if s["id"] in busy:
+            result["history_waiting"].append(s["id"])
+            continue
+        end = (date.fromisoformat(earliest) - timedelta(days=1)).isoformat()
+        windows.setdefault((lo, end), []).append(s)
+    for (start, end), subs in sorted(windows.items()):
+        plan = await cost_data.preview(subs, action="history", managed=True, start=start, end=end)
+        rows = []
+        for row in plan["subscriptions"]:
+            if row["blockers"]:
+                result["blockers"].setdefault(row["subscription"], []).extend(
+                    {"capability": "history", "detail": text} for text in row["blockers"])
+            else:
+                rows.append(row)
+        if not rows:
+            continue
+        plan["subscriptions"] = rows
+        ids = sorted(r["subscription"] for r in rows)
+        key = "history:" + hashlib.sha256(json.dumps([ids, start, end]).encode()).hexdigest()[:32]
+        record = await cost_data.create(plan, key)
+        focus_workflow.launch(record)
+        result["extending"].extend(ids)
+        result["history_jobs"].append(record["job_id"])
+        log.info("managed exports: importing %s..%s for %d subscription(s), job %s", start, end,
+                 len(ids), record["job_id"])
 
 
 async def run_forever(initial_delay: float = 20.0) -> None:
@@ -299,25 +376,39 @@ def _cell(task: dict) -> str:
 
 
 def progress(subscriptions: list[dict], *, admin: bool = False) -> dict[str, Any]:
-    """Months x subscriptions, from the database only -- safe to poll."""
+    """Months x subscriptions, from the database only -- safe to poll.
+
+    Columns run from the chosen horizon, or the earliest month any listed subscription was
+    already asked for if that is earlier, to today -- never beyond Cost Management's 13 months.
+    """
     from .warehouse import warehouse
 
     saved = status()
-    history = saved.get("history") or dict(zip(("from", "to"), cost_data.managed_history()[:2]))
-    months = _month_list(history["from"], history["to"])
+    chosen = history_months()
+    today = datetime.now(UTC).date()
+    lo, hi, _ = cost_data.managed_history(today, chosen)
+    floor = cost_data.managed_history(today, cost_data.MANAGED_HISTORY_MONTHS)[0]
     recent = jobs.listing(limit=500)
     rows, totals = [], dict.fromkeys((*CELL_STATES, "none"), 0)
     with warehouse.connect(read_only=True) as con:
+        configs = {sub["id"].lower(): jobs._read(con, "focus-daily:" + sub["id"].lower()) or {}
+                   for sub in subscriptions}
+        requested = [d for d in map(cost_data.requested_from, configs.values()) if d]
+        start = max(floor, min([lo, *requested]))[:8] + "01"
+        months = _month_list(start, hi)
         for sub in subscriptions:
             sid = sub["id"].lower()
-            job = max((j for j in recent if j["kind"] == "focus-setup" and sid in j["scope"]),
-                      key=lambda j: j["created_at"], default=None)
-            tasks = {t["from"][:7]: t for t in (job or {}).get("tasks", [])
+            own = sorted((j for j in recent if j["kind"] == "focus-setup" and sid in j["scope"]),
+                         key=lambda j: j["created_at"])
+            job = own[-1] if own else None
+            # The first setup holds the recent months and an earlier-history job the older ones;
+            # where two jobs asked for the same month, the later one is the current word.
+            tasks = {t["from"][:7]: t for j in own for t in j.get("tasks", [])
                      if t["subscription"] == sid and t.get("from")}
             prefix = f"focus-day:{sid}:"
             days: dict[str, int] = {}
             for (key,) in con.execute("SELECT key FROM meta WHERE key >= ? AND key <= ?",
-                                      [prefix + history["from"], prefix + history["to"]]).fetchall():
+                                      [prefix + start, prefix + hi]).fetchall():
                 month = key.rsplit(":", 1)[-1][:7]
                 days[month] = days.get(month, 0) + 1
             cells = {}
@@ -331,14 +422,17 @@ def progress(subscriptions: list[dict], *, admin: bool = False) -> dict[str, Any
                     state = "loaded" if days.get(month) else "none"
                     cells[month] = {"state": state, "detail": "", "retry_at": None}
                 totals[state] += 1
-            config = jobs._read(con, "focus-daily:" + sid) or {}
+            config = configs[sid]
             rows.append({"id": sid, "name": sub.get("name") or sid,
                          "configured": config.get("version") == 2 and bool(config.get("enabled")),
                          "job_id": job["job_id"] if job else None, "cells": cells,
                          "blockers": (saved.get("blockers") or {}).get(sid, []) if admin else []})
     return {
         "enabled": enabled(), "months": months, "subscriptions": rows, "totals": totals,
-        "history": history, "expectation": EXPECTATION,
+        "history": {"from": start, "to": hi},
+        "history_months": {"chosen": chosen, "default": cost_data.DEFAULT_HISTORY_MONTHS,
+                           "max": cost_data.MANAGED_HISTORY_MONTHS},
+        "expectation": EXPECTATION,
         "checked_at": saved.get("checked_at"), "error": saved.get("error") if admin else None,
         "deployment_blockers": saved.get("deployment_blockers", []) if admin else [],
         "concurrency": focus_workflow.export_concurrency(),

@@ -144,7 +144,7 @@ param entraAppUniqueName string = 'cloudlens'
 @description('True calls Azure as the signed-in person, so each sees exactly their own subscriptions. Needs one-time tenant admin consent for ARM `user_impersonation`; without it nobody can sign in. False is app-identity mode: the app resolves who holds a cost-capable role, bounded by the subscriptions its own identity reads.')
 param authDelegatedArm bool = true
 
-@description('The app creates its own FOCUS exports (one per visible subscription) and backfills 13 months on first start. Needs Cost Management Contributor for the app identity on the monitored scope.')
+@description('The app creates its own FOCUS exports (one per visible subscription) and imports the last 3 months on first start; earlier months, up to 13, are optional from Setup. Needs Cost Management Contributor for the app identity on the monitored scope.')
 param managedExports bool = false
 
 @description('Tags applied to every resource.')
