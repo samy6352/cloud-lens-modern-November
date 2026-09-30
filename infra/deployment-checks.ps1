@@ -82,3 +82,58 @@ function Wait-CloudLensApplication {
         throw "/ returned $status without an authentication challenge. Verify sign-in settings before hand-off."
     }
 }
+
+function Get-CloudLensScmHost([string]$WebAppUrl) {
+    <# The Kudu host: first DNS label + ".scm." -- also right for regional default hostnames. #>
+    return ([uri]$WebAppUrl).Host -replace '^([^.]+)\.', '$1.scm.'
+}
+
+function Get-CloudLensNewestDeployment([string]$ScmHost) {
+    <# The newest real App Service deployment record, or $null. "temp-*" records are placeholders. #>
+    $raw = az rest --method get --url "https://$ScmHost/api/deployments" `
+        --resource 'https://management.core.windows.net/' -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+    return @($raw | ConvertFrom-Json) |
+        Where-Object { $_.id -and -not ([string]$_.id).StartsWith('temp-') } |
+        Sort-Object { [string]$_.start_time } -Descending | Select-Object -First 1
+}
+
+function Wait-CloudLensDeployment {
+    <#
+    .SYNOPSIS
+        Follow one App Service ZIP deployment to its real outcome.
+
+    .DESCRIPTION
+        The first Python build on a small plan takes longer than the publish gateway waits, so a
+        synchronous `az webapp deploy` reports "504 GatewayTimeout" for a deployment that goes on
+        to succeed (measured: B1, build 8 min, 30 Sep 2026). A timeout is an unknown state, not a
+        failure. This polls the deployment record newer than -Previous until it succeeds (status 4)
+        or fails (status 3). No new record within -AppearSeconds means the upload never landed.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ScmHost,
+        [string]$Previous = '',
+        [ValidateRange(10, 7200)][int]$TimeoutSeconds = 1800,
+        [ValidateRange(10, 3600)][int]$AppearSeconds = 300,
+        [ValidateRange(1, 120)][int]$PollSeconds = 20
+    )
+    $started = [DateTime]::UtcNow
+    $deadline = $started.AddSeconds($TimeoutSeconds)
+    $seen = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $latest = Get-CloudLensNewestDeployment $ScmHost
+        if ($latest -and $latest.id -ne $Previous) {
+            $seen = $latest
+            if ([int]$latest.status -eq 4 -and $latest.complete) { return $latest }
+            if ([int]$latest.status -eq 3) {
+                throw "App Service deployment $($latest.id) failed. Its log: https://$ScmHost/api/deployments/$($latest.id)/log"
+            }
+            Write-Host "    build        : $($latest.id) status $($latest.status) $($latest.progress)"
+        } elseif (([DateTime]::UtcNow - $started).TotalSeconds -gt $AppearSeconds) {
+            throw "No new App Service deployment appeared within $AppearSeconds seconds; the upload did not land."
+        }
+        Start-Sleep -Seconds $PollSeconds
+    }
+    $which = if ($seen) { "Deployment $($seen.id) is still at status $($seen.status)" } else { 'No new deployment was seen' }
+    throw "$which after $TimeoutSeconds seconds. Its state is unknown, not failed: inspect https://$ScmHost/api/deployments before retrying."
+}

@@ -55,8 +55,12 @@ param(
     [string]$EntraClientId = '',
 
     # For tenants where app registration or admin consent is not available to the installer:
-    # sign in with a local administrator whose password is printed once in the app log.
+    # sign in with a local administrator. The installer generates its password here, gives the
+    # app only a PBKDF2 hash (AUTH_USERS), and shows the password once in this terminal.
     [switch]$LocalSignIn,
+
+    # With -LocalSignIn on a rerun: replace the local administrator's password instead of keeping it.
+    [switch]$ResetLocalPassword,
 
     # When not run from a CloudLens checkout (e.g. `irm .../install.ps1 | iex`): a release zip,
     # as an https URL or a local path.
@@ -129,6 +133,34 @@ function Get-ManagementGroupSubscriptions([string]$GroupId) {
     }
     if ($url) { throw "Management group $GroupId lists more than 100 pages of descendants; the listing is incomplete." }
     return @($found | Select-Object -Unique)
+}
+
+function ConvertTo-UrlBase64([byte[]]$Bytes) {
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function New-CloudLensLocalAdmin {
+    <#
+    A strong password and the AUTH_USERS entry for it, in app/auth.py's own format:
+    name:pbkdf2_sha256$<iterations>$<salt>$<key>:admin. Only the hash leaves this machine.
+    #>
+    $password = ConvertTo-UrlBase64 ([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(18))
+    $salt = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(16)
+    $key = [System.Security.Cryptography.Rfc2898DeriveBytes]::Pbkdf2(
+        [Text.Encoding]::UTF8.GetBytes($password), $salt, 260000,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256, 32)
+    return [pscustomobject]@{
+        Password = $password
+        AuthUsers = "admin:pbkdf2_sha256`$260000`$$(ConvertTo-UrlBase64 $salt)`$$(ConvertTo-UrlBase64 $key):admin"
+    }
+}
+
+function Get-CloudLensExistingSite([string]$Group) {
+    <# The CloudLens web app already in this resource group, if this is a rerun. #>
+    $exists = Invoke-Az -Raw @('group', 'exists', '--name', $Group)
+    if ($exists -ne 'true') { return $null }
+    return Invoke-Az @('webapp', 'list', '--resource-group', $Group,
+        '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}") | Select-Object -First 1
 }
 
 function Resolve-CloudLensRoot {
@@ -248,7 +280,26 @@ $deploy = [ordered]@{
 if ($target.Kind -eq 'managementGroup') { $deploy.CostScopeManagementGroup = $target.Id }
 else { $deploy.CostScopeSubscriptions = @($target.Id) }
 if ($EntraClientId) { $deploy.EntraClientId = $EntraClientId }
-if ($LocalSignIn) { $deploy.SkipEntra = $true; $deploy.AuthAllowLocal = $true }
+$localPassword = $null
+if ($LocalSignIn) {
+    $deploy.SkipEntra = $true
+    $deploy.AuthAllowLocal = $true
+    # A rerun keeps the administrator it created: the template owns AUTH_USERS, so passing
+    # nothing would erase it, and generating a new one would silently rotate the password.
+    $existing = Get-CloudLensExistingSite $ResourceGroup
+    $kept = if ($existing -and -not $ResetLocalPassword) {
+        Invoke-Az -Raw @('webapp', 'config', 'appsettings', 'list', '--resource-group', $ResourceGroup,
+            '--name', $existing.name, '--query', "[?name=='AUTH_USERS'].value | [0]")
+    } else { '' }
+    if ($kept) {
+        $deploy.AuthUsers = $kept
+        Info 'local admin  : keeping the existing administrator (-ResetLocalPassword replaces it)'
+    } elseif (-not $WhatIf) {
+        $admin = New-CloudLensLocalAdmin
+        $deploy.AuthUsers = $admin.AuthUsers
+        $localPassword = $admin.Password
+    }
+}
 if ($WhatIf) { $deploy.WhatIf = $true }
 & (Join-Path (Join-Path $root 'infra') 'deploy.ps1') @deploy
 if ($WhatIf) {
@@ -268,7 +319,12 @@ if ($site) {
 }
 Info "Monitoring   : $($target.Path)"
 Info 'First cost data usually arrives within a few hours; a brand-new export can take up to 24 h.'
-if ($LocalSignIn -and $site) {
-    Info "Sign in as the local administrator. Its password is printed once in the app log at first start:"
-    Info "  az webapp log tail --resource-group $ResourceGroup --name $($site.name)"
+if ($localPassword) {
+    Write-Host ''
+    Write-Host '    Sign in as   : admin' -ForegroundColor Green
+    Write-Host "    Password     : $localPassword" -ForegroundColor Green
+    Info 'Shown once and stored nowhere (the app holds only its hash). Keep it in a password manager;'
+    Info 'rerun with -LocalSignIn -ResetLocalPassword to replace it.'
+} elseif ($LocalSignIn) {
+    Info 'Sign in as the existing local administrator.'
 }

@@ -709,9 +709,13 @@ if ($clientId) {
         Write-Warning "granted Reader on. Once consent is granted, rerun without the switch."
     }
 } else {
-    Write-Host "    skipped -- the app will use a local password" -ForegroundColor DarkGray
-    Write-Host "    the generated password is printed once into the log at first start:"
-    Write-Host "      az webapp log tail -g $ResourceGroup -n $webAppName"
+    if ($AuthUsers) {
+        Write-Host "    skipped -- local administrators come from AUTH_USERS (password hashes only)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    skipped -- the app will use a local password" -ForegroundColor DarkGray
+        Write-Host "    the generated password is printed once into the log at first start:"
+        Write-Host "      az webapp log tail -g $ResourceGroup -n $webAppName"
+    }
 }
 
 # ------------------------------------------------------------------- code
@@ -724,6 +728,8 @@ if (-not $SkipCode) {
     Write-Host "    SHA-256      : $($package.Sha256)"
 
     Step "Publishing to $webAppName"
+    $scmHost = Get-CloudLensScmHost $webAppUrl
+    $previousDeployment = (Get-CloudLensNewestDeployment $scmHost).id
     try {
         az webapp deploy `
             --resource-group $ResourceGroup `
@@ -731,7 +737,13 @@ if (-not $SkipCode) {
             --src-path $zip `
             --type zip `
             --only-show-errors -o none
-        Assert-AzSuccess 'Publishing application code'
+        if ($LASTEXITCODE -ne 0) {
+            # Usually "504 GatewayTimeout": the first build on a small plan outlasts the publish
+            # gateway and then succeeds. Decide on the deployment record, not on the CLI.
+            Write-Warning 'The publish call did not confirm completion (commonly a 504 while the first build runs). Following the deployment itself.'
+            $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
+            Write-Host "    build        : $($published.id) succeeded"
+        }
     } finally {
         Remove-Item -LiteralPath $zip -Force
     }

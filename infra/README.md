@@ -47,9 +47,15 @@ identity Storage Blob Data Contributor. Anything missing is shown on the setup p
 `az` command that fixes it, and rechecked every few minutes.
 
 Other options: `-EntraClientId <id>` adopts an app registration an identity team created;
-`-LocalSignIn` skips Entra entirely and uses a local administrator whose password is printed once in
-the app log (for tenants where app registration or admin consent is unavailable); `-WhatIf` previews
-without registering or deploying anything.
+`-LocalSignIn` skips Entra entirely: the installer generates a local administrator password, gives
+the app only its PBKDF2 hash (`AUTH_USERS`) and shows the password once in your terminal (a rerun
+keeps it; `-ResetLocalPassword` replaces it) — for tenants where app registration or admin consent
+is unavailable; `-WhatIf` previews without registering or deploying anything.
+
+The first Python build on a small plan outlasts the publish gateway, so `az webapp deploy` often
+reports `504 GatewayTimeout` for a deployment that then succeeds. `deploy.ps1` treats that as an
+unknown state and follows the App Service deployment record to its real outcome (success, or the
+failed build's log) before checking readiness.
 
 **Distribution** is not settled: the script already accepts `-Source <https zip URL or path>` so the
 second line can become `iex "& { $(irm https://<host>/install.ps1) } -Location centralindia -Source <zip>"`

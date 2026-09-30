@@ -65,6 +65,8 @@ function global:az {
         return '{}'
     }
     if ($call.StartsWith('provider show')) { return 'Registered' }
+    if ($call.StartsWith('group exists')) { return $(if ($fixture.site) { 'true' } else { 'false' }) }
+    if ($call.StartsWith('webapp config appsettings list')) { return [string]$fixture.authUsers }
     if ($call.StartsWith('webapp list')) {
         return '[{"name":"cloudlens-web-abc","host":"cloudlens-web-abc.azurewebsites.net"}]'
     }
@@ -78,7 +80,7 @@ param(
     [string]$Location, [string]$ResourceGroup, [string]$PostgresSku, [int]$PostgresStorageGb,
     [string]$AppServicePlanSku, [switch]$SkipFocusExports, [switch]$EnableExportManagement,
     [bool]$ManagedExports, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup,
-    [string]$EntraClientId, [switch]$SkipEntra, [bool]$AuthAllowLocal, [switch]$WhatIf
+    [string]$EntraClientId, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
 )
 $bound = [ordered]@{}
 foreach ($key in $PSBoundParameters.Keys) {
@@ -241,10 +243,44 @@ exit $code
         result, _, deploy = self.install("-LocalSignIn")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(deploy["SkipEntra"] and deploy["AuthAllowLocal"])
-        self.assertIn("az webapp log tail", result.stdout)
         _, _, deploy = self.install("-EntraClientId 55555555-5555-4555-8555-555555555555")
         self.assertEqual(deploy["EntraClientId"], "55555555-5555-4555-8555-555555555555")
         self.assertNotIn("SkipEntra", deploy)
+        self.assertNotIn("AuthUsers", deploy)
+
+    def test_local_admin_password_is_made_here_and_only_its_hash_is_deployed(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from app.auth import verify_password
+
+        result, _, deploy = self.install("-LocalSignIn")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        password = next(line.split(":", 1)[1].strip() for line in result.stdout.splitlines()
+                        if line.strip().startswith("Password"))
+        name, _, rest = deploy["AuthUsers"].partition(":")
+        self.assertEqual(name, "admin")
+        self.assertTrue(rest.endswith(":admin"))
+        stored = rest[: -len(":admin")]
+        self.assertTrue(stored.startswith("pbkdf2_sha256$260000$"))
+        self.assertGreaterEqual(len(password), 20)
+        self.assertNotIn(password, deploy["AuthUsers"])
+        # The app's own verifier accepts it: the installer and app/auth.py agree on the format.
+        self.assertTrue(verify_password(password, stored))
+        self.assertFalse(verify_password(password + "x", stored))
+        self.assertNotIn("az webapp log tail", result.stdout)
+
+    def test_rerun_keeps_the_local_admin_unless_asked_to_reset(self):
+        data = fixture()
+        data["site"] = True
+        data["authUsers"] = "admin:pbkdf2_sha256$260000$c2FsdA$a2V5:admin"
+        result, _, deploy = self.install("-LocalSignIn", data=data)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(deploy["AuthUsers"], data["authUsers"])
+        self.assertIn("keeping the existing administrator", result.stdout)
+        self.assertFalse(any(line.strip().startswith("Password") for line in result.stdout.splitlines()))
+        _, _, reset = self.install("-LocalSignIn -ResetLocalPassword", data=data)
+        self.assertNotEqual(reset["AuthUsers"], data["authUsers"])
+        self.assertTrue(reset["AuthUsers"].startswith("admin:pbkdf2_sha256$260000$"))
 
     def test_outside_a_checkout_it_needs_a_source_and_touches_nothing(self):
         lonely = Path(self.work.name) / "elsewhere"
@@ -277,5 +313,55 @@ $command.Parameters.Values | ForEach-Object {{ $_.Name + '=' + $_.ParameterType.
                 self.assertEqual(kind, "bool", key)
 
 
+
+@unittest.skipUnless(POWERSHELL, "PowerShell 7 (pwsh) is required for installer checks")
+class DeploymentFollow(unittest.TestCase):
+    """A publish timeout is decided by the App Service deployment record, not by the CLI."""
+
+    def follow(self, records, previous="old", appear=300):
+        checks = str(ROOT / "infra" / "deployment-checks.ps1").replace("'", "''")
+        literal = json.dumps(records).replace("'", "''")
+        command = f"""
+$ErrorActionPreference = 'Stop'
+$script:pages = ConvertFrom-Json '{literal}'
+$script:index = 0
+function global:Start-Sleep {{}}
+function global:az {{
+    $global:LASTEXITCODE = 0
+    $page = $script:pages[[math]::Min($script:index, $script:pages.Count - 1)]
+    $script:index++
+    return (ConvertTo-Json -Depth 5 -InputObject @($page))
+}}
+. '{checks}'
+try {{
+    $done = Wait-CloudLensDeployment -ScmHost 'app.scm.azurewebsites.net' -Previous '{previous}' -AppearSeconds {appear} -PollSeconds 10
+    Write-Output ('DONE:' + $done.id)
+}} catch {{ Write-Output ('FAILURE:' + $_.Exception.Message) }}
+Write-Output ('HOST:' + (Get-CloudLensScmHost 'https://cloudlens-5f6eh.azurewebsites.net'))
+Write-Output ('REGIONAL:' + (Get-CloudLensScmHost 'https://app-x.centralindia-01.azurewebsites.net'))
+"""
+        result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command],
+                                capture_output=True, text=True, timeout=120)
+        return {line.split(":", 1)[0]: line.split(":", 1)[1] for line in result.stdout.splitlines() if ":" in line}
+
+    def record(self, rid, status, complete=False, start="2026-09-30T13:32:27Z"):
+        return {"id": rid, "status": status, "complete": complete, "start_time": start, "progress": ""}
+
+    def test_a_timed_out_publish_that_then_succeeds_is_a_success(self):
+        old = self.record("old", 4, True, "2026-09-30T10:00:00Z")
+        out = self.follow([[old], [old, self.record("temp-1", 0)], [old, self.record("new", 1)],
+                           [old, self.record("new", 4, True)]])
+        self.assertEqual(out.get("DONE"), "new", out)
+        self.assertEqual(out["HOST"], "cloudlens-5f6eh.scm.azurewebsites.net")
+        self.assertEqual(out["REGIONAL"], "app-x.scm.centralindia-01.azurewebsites.net")
+
+    def test_a_failed_build_is_a_failure_with_its_log(self):
+        out = self.follow([[self.record("new", 3)]])
+        self.assertIn("failed", out.get("FAILURE", ""))
+        self.assertIn("/api/deployments/new/log", out["FAILURE"])
+
+    def test_no_new_record_means_the_upload_never_landed(self):
+        out = self.follow([[self.record("old", 4, True)]], appear=10)
+        self.assertIn("did not land", out.get("FAILURE", ""))
 if __name__ == "__main__":
     unittest.main()
