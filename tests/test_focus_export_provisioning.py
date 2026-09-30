@@ -123,6 +123,14 @@ def test_the_script_is_safe_to_re_run(script):
     """Re-running is how an operator fixes a partial failure, so it must not duplicate a grant."""
     assert "role', 'assignment', 'list'" in script, "the grant is not checked before it is made"
     assert "already granted" in script
+    # Azure refuses to update an existing export without its current eTag.
+    assert "$body.eTag = $existing.eTag" in script, "a rerun cannot update an existing export"
+
+
+def test_managed_installs_create_the_export_paused(script):
+    """The app runs exact month windows itself; the operator only creates the export (S3)."""
+    assert "[switch]$Paused" in script
+    assert "status = $(if ($Paused) { 'Inactive' } else { 'Active' })" in script
 
 
 def test_the_script_can_be_rehearsed(script):

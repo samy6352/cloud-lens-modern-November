@@ -8,8 +8,9 @@ This module only does the part a person used to do -- find the subscriptions, ch
 deployment may export them, and approve a setup. The work itself is the existing durable pipeline
 (cost_data -> focus_workflow -> jobs), unchanged in kind:
 
-  * one `focus-setup` job; per subscription a `configure` task (create the owned Parquet export,
-    grant the export's identity its container, pause native recurrence) and one task per month;
+  * one `focus-setup` job; per subscription a `configure` task that adopts this deployment's own
+    Parquet export (created by the operator: Cost Management lets the app's identity *run* an export
+    but not *create* one, verified live 30 Sep 2026) and one task per month;
   * `focus_workflow.step` submits month-bounded runs newest month first, round-robin across
     subscriptions, one per subscription and at most CLOUDLENS_EXPORT_CONCURRENCY at once, backing
     off on 429; it polls manifests and imports exactly the run it asked for;
@@ -33,7 +34,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from . import cost_data, focus_workflow, jobs
+from . import cost_data, focus_workflow, jobs, schedules
 from .job_policy import read_only_mode
 
 log = logging.getLogger("cloudlens.bootstrap")
@@ -198,7 +199,30 @@ async def run_once() -> dict[str, Any]:
         lo, hi, _ = cost_data.managed_history()
         result.update(subscriptions=len(subs), managed=len(managed), history={"from": lo, "to": hi},
                       onboarding=[], job_id=None, blockers={}, deployment_blockers=[],
-                      in_progress=sorted(busy & {s["id"] for s in subs}))
+                      in_progress=sorted(busy & {s["id"] for s in subs}), resumed=[])
+        # Subscriptions whose setup stopped at "configure" -- almost always an export that only
+        # an operator can create. Show the command, and resume the job on every pass so setup
+        # continues by itself once the export exists.
+        stalled: dict[str, list[dict]] = {}
+        for s in managed:
+            config = configs[s["id"]]
+            if config.get("enabled") or s["id"] in busy or not config.get("setup_job"):
+                continue
+            job = await asyncio.to_thread(jobs.get, config["setup_job"])
+            task = next((t for t in (job or {}).get("tasks", []) if t["subscription"] == s["id"]
+                         and t.get("operation") == "configure"), None)
+            if job and task and task["status"] == "failed":
+                result["blockers"][s["id"]] = [{
+                    "capability": "export-create",
+                    "detail": (task.get("detail") or "Setup could not configure this subscription's export.")[:600],
+                    "fix": schedules.operator_command(s["id"]),
+                }]
+                # A job still working on other subscriptions keeps going; retry once it settles.
+                if job["status"] in jobs.TERMINAL:
+                    stalled.setdefault(job["job_id"], []).append(s)
+        for job_id in stalled:
+            focus_workflow.launch(await focus_workflow.resume(job_id))
+            result["resumed"].append(job_id)
         if unmanaged:
             blockers, deployment = await self_check([s["id"] for s in unmanaged])
             result["deployment_blockers"] = deployment
@@ -221,7 +245,7 @@ async def run_once() -> dict[str, Any]:
                     result.update(onboarding=ids, job_id=record["job_id"])
                     log.info("managed exports: onboarding %d subscription(s), job %s", len(ids),
                              record["job_id"])
-            result["blockers"] = blockers
+            result["blockers"] = {**blockers, **result["blockers"]}
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - reported on the setup page and retried next pass

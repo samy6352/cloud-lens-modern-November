@@ -19,8 +19,10 @@
          identity gets Reader, Cost Management Reader and Cost Management Contributor on the scope
          (plain Azure RBAC -- no EA or billing roles) and, on its own storage account only, the
          ABAC-limited right to grant an export's identity Storage Blob Data Contributor.
-      4. Waits for the app, then prints its URL. On first start the app creates one FOCUS export
-         per subscription and imports the current month plus 12 more, newest first.
+      4. Creates one paused FOCUS export per monitored subscription, as you (infra/focus-exports.ps1):
+         Cost Management lets the app's identity run an export but not create one. Then prints the
+         URL. On first start the app adopts those exports and imports the current month plus 12
+         more, newest first; subscriptions added later show the one command to run on its Setup page.
 
     Safe to re-run: every step is idempotent and a rerun upgrades in place.
 
@@ -311,6 +313,25 @@ if ($WhatIf) {
 # ------------------------------------------------------------------ 4. hand-off
 $site = Invoke-Az @('webapp', 'list', '--resource-group', $ResourceGroup,
     '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}") | Select-Object -First 1
+
+# Cost Management lets the app's identity *run* an export but not *create* one: the creator must
+# be able to grant the export's own identity a role on the storage account (verified live, 30 Sep
+# 2026: 401 RBACAccessDenied even with an unconditional role-assignment grant). So the exports are
+# created here, as you, paused -- the app then adopts them and runs every month window itself.
+Step 'Creating the FOCUS exports (once, as you)'
+if (-not $monitored.Count) {
+    Info 'no subscriptions to export yet'
+} elseif (-not $site) {
+    Write-Warning "The web app was not found in $ResourceGroup; exports were not created."
+} else {
+    try {
+        & (Join-Path (Join-Path $root 'infra') 'focus-exports.ps1') -ResourceGroup $ResourceGroup `
+            -WebAppName $site.name -Subscriptions $monitored -HostingSubscriptionId $hosting -Paused
+    } catch {
+        Write-Warning "Exports were not all created: $($_.Exception.Message)"
+        Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
+    }
+}
 $elapsed = (Get-Date) - $started
 Step "CloudLens is installed ($([int]$elapsed.TotalMinutes) min $($elapsed.Seconds) s)"
 if ($site) {

@@ -93,6 +93,20 @@ Write-Output ('DEPLOY:' + (ConvertTo-Json -Compress -Depth 5 -InputObject $bound
 """
 
 
+STUB_EXPORTS = r"""
+[CmdletBinding()]
+param([string]$ResourceGroup, [string]$WebAppName, [string[]]$Subscriptions,
+      [string]$HostingSubscriptionId, [switch]$Paused)
+$bound = [ordered]@{}
+foreach ($key in $PSBoundParameters.Keys) {
+    $value = $PSBoundParameters[$key]
+    if ($value -is [System.Management.Automation.SwitchParameter]) { $bound[$key] = $value.IsPresent }
+    else { $bound[$key] = $value }
+}
+Write-Output ('EXPORTS:' + (ConvertTo-Json -Compress -Depth 5 -InputObject $bound))
+"""
+
+
 def _account(sub, name, tenant=TENANT):
     return {"id": sub, "name": name, "tenantId": tenant, "state": "Enabled"}
 
@@ -133,6 +147,7 @@ class Installer(unittest.TestCase):
         (self.root / "app" / "main.py").write_text("", encoding="utf-8")
         shutil.copy(ROOT / "infra" / "install.ps1", self.root / "infra" / "install.ps1")
         (self.root / "infra" / "deploy.ps1").write_text(STUB_DEPLOY, encoding="utf-8")
+        (self.root / "infra" / "focus-exports.ps1").write_text(STUB_EXPORTS, encoding="utf-8")
 
     def install(self, options="", data=None, script=None):
         data = data or fixture()
@@ -159,6 +174,7 @@ exit $code
         lines = result.stdout.splitlines()
         recorded = json.loads(next((line[7:] for line in lines if line.startswith("RESULT:")), "{}"))
         deploy = next((json.loads(line[7:]) for line in lines if line.startswith("DEPLOY:")), None)
+        self.exports = next((json.loads(line[8:]) for line in lines if line.startswith("EXPORTS:")), None)
         return result, recorded, deploy
 
     def registered(self, recorded):
@@ -179,6 +195,10 @@ exit $code
             ("Microsoft.CostManagementExports", HOST)]))
         self.assertIn("https://cloudlens-web-abc.azurewebsites.net", result.stdout)
         self.assertIn("/v2/admin/setup", result.stdout)
+        # The operator creates the export, paused; the app's identity may run but not create one.
+        self.assertEqual(self.exports, {"ResourceGroup": "rg-cloudlens", "WebAppName": "cloudlens-web-abc",
+                                        "Subscriptions": [HOST], "HostingSubscriptionId": HOST,
+                                        "Paused": True})
 
     def test_management_group_scope_pages_descendants_and_grants_once_at_the_group(self):
         result, recorded, deploy = self.install(
@@ -191,6 +211,8 @@ exit $code
         self.assertEqual(sorted(exports), sorted([S1, S3]))  # S2 already had it; the nested MG is not a sub
         self.assertIn(("Microsoft.CostManagement", S1), self.registered(recorded))
         self.assertIn("3 subscription(s) today", result.stdout)
+        self.assertEqual(sorted(self.exports["Subscriptions"]), sorted([S1, S2, S3]))
+        self.assertTrue(self.exports["Paused"])
 
     def test_subscription_scope_accepts_both_spellings(self):
         for scope in (OTHER, f"/subscriptions/{OTHER}/"):
@@ -219,6 +241,7 @@ exit $code
         self.assertIn("would register Microsoft.CostManagementExports", result.stdout)
         self.assertIn("Preview only", result.stdout)
         self.assertFalse(any(c.startswith("webapp list") for c in recorded["calls"]))
+        self.assertIsNone(self.exports)
 
     def test_rerun_with_everything_registered_writes_nothing(self):
         data = fixture()
@@ -311,6 +334,12 @@ $command.Parameters.Values | ForEach-Object {{ $_.Name + '=' + $_.ParameterType.
                 continue
             if real[key] == "Boolean":
                 self.assertEqual(kind, "bool", key)
+        exporter = str(ROOT / "infra" / "focus-exports.ps1").replace("'", "''")
+        probe = subprocess.run([POWERSHELL, "-NoProfile", "-Command",
+                                f"(Get-Command '{exporter}').Parameters.Keys"],
+                               capture_output=True, text=True, timeout=60)
+        for key in ("ResourceGroup", "WebAppName", "Subscriptions", "HostingSubscriptionId", "Paused"):
+            self.assertIn(key, probe.stdout.split(), f"install.ps1 passes -{key} to focus-exports.ps1")
 
 
 

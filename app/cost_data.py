@@ -385,30 +385,53 @@ async def configure(record: dict, task: dict) -> None:
         await asyncio.to_thread(write, sid, config)
     current = next(iter(await focus_sync.owned([sid])), None)
     expected = approved["export"]
+    # Unattended (bootstrap.py) setups adopt this deployment's own export whenever it appears:
+    # an operator creates it (the app's identity may run exports but not create them), and the
+    # name is derived from this deployment's destination, so nothing else can own it.
+    managed = bool(record["payload"].get("managed"))
     if current is None and expected:
         raise ValueError("The reviewed owned export was deleted. Review setup again.")
     if expected is None and not task.get("provisioned"):
-        if current and not task.get("provisioning_started"):
+        if current and not task.get("provisioning_started") and not managed:
             raise ValueError("An export appeared after review. Review setup again before changing it.")
-        await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"],
-                                provisioning_started=True)
-        await schedules.create(sid, "FocusCost", **approved["destination"], run_now=False, native_active=False)
-        current = next(iter(await focus_sync.owned([sid])), None)
-        if not current:
-            raise ValueError("Created export cannot yet be read. Retry missing work after permissions propagate.")
+        if current is None:
+            await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"],
+                                    provisioning_started=True)
+            try:
+                await schedules.create(sid, "FocusCost", **approved["destination"], run_now=False,
+                                       native_active=False)
+            except schedules.ScheduleError as exc:
+                if not managed:
+                    raise
+                raise ValueError(
+                    "This subscription's export must be created once by an operator: Cost Management "
+                    "lets the app's identity run an export but not create one. Run: "
+                    f"{schedules.operator_command(sid)} -- setup resumes by itself within minutes. "
+                    f"Azure said: {str(exc)[:160]}") from exc
+            current = next(iter(await focus_sync.owned([sid])), None)
+            if not current:
+                raise ValueError("Created export cannot yet be read. Retry missing work after permissions propagate.")
         await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"], provisioned=True)
     if expected and current["name"] != expected["name"]:
         raise ValueError("The reviewed export changed. Review setup again.")
     if expected and current.get("etag") != expected.get("etag") and not task.get("pause_started"):
         raise ValueError("The owned export changed after review. Review setup again.")
+    native = "paused"
     if current["status"] != "Inactive":
         # Retry after a confirmed pause is safe; a different active ETag is not.
         etag = expected.get("etag") if expected else current.get("etag")
         await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"], pause_started=True)
-        await schedules.set_native_active(sid, active=False, etag=etag)
+        try:
+            await schedules.set_native_active(sid, active=False, etag=etag)
+        except Exception:
+            if not managed:
+                raise
+            # Updating an export is the same refused operation as creating one. A native daily
+            # month-to-date run left active is harmless: only runs the app asked for are imported.
+            native = "active (operator-created; its daily runs are not imported)"
     config.update(enabled=True, next_check=next_check(config["cadence"], datetime.now(UTC)),
                   detail="Automatic updates configured. Initial coverage is tracked separately.",
-                  export=current["name"], destination=approved["destination"],
+                  export=current["name"], destination=approved["destination"], native_schedule=native,
                   format=current.get("format"), optimization="Awaiting returned-window evidence")
     await asyncio.to_thread(write, sid, config)
 

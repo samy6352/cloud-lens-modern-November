@@ -74,6 +74,13 @@ param(
     # the export's own schedule, which is tomorrow.
     [switch]$RunNow,
 
+    # Create the export with its own schedule paused. For managed exports (infra/install.ps1):
+    # the app runs exact month windows itself, so the native daily run would only duplicate them.
+    # The app's identity may run an export but not create one -- Cost Management requires the
+    # creator to be able to grant roles on the storage account (verified 30 Sep 2026) -- so the
+    # operator creates it here, once, and the app does everything after.
+    [switch]$Paused,
+
     [string]$HostingSubscriptionId = ''
 )
 
@@ -236,7 +243,7 @@ foreach ($sub in $Subscriptions) {
         location = $Location
         properties = [ordered]@{
             schedule = [ordered]@{
-                status = 'Active'
+                status = $(if ($Paused) { 'Inactive' } else { 'Active' })
                 recurrence = $Recurrence
                 recurrencePeriod = [ordered]@{ from = $from; to = $to }
             }
@@ -266,6 +273,17 @@ foreach ($sub in $Subscriptions) {
     if (-not $PSCmdlet.ShouldProcess("$sub/$name", 'create or update FOCUS export')) {
         $results += [pscustomobject]@{ subscription = $sub; export = $name; status = 'skipped (WhatIf)' }
         continue
+    }
+
+    # A rerun updates rather than recreates: Azure requires the current eTag to change an
+    # existing export, and keeping its schedule window and identity leaves its history intact.
+    $existing = Invoke-Az -AllowFailure -Arguments @('rest', '--method', 'get', '--uri', $uri, '-o', 'json')
+    if ($existing -and $existing.PSObject.Properties.Name -contains 'eTag') {
+        $body.eTag = $existing.eTag
+        $body.location = $(if ($existing.location) { $existing.location } else { $Location })
+        $body.properties.schedule.recurrencePeriod = $existing.properties.schedule.recurrencePeriod
+        if (-not $Paused) { $body.properties.schedule.status = $existing.properties.schedule.status }
+        Info 'export exists; updating it in place'
     }
 
     $file = New-TemporaryFile

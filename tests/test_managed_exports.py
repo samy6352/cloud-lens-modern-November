@@ -39,6 +39,8 @@ class FakeArm:
         self.grants: list[str] = []
         self.runs: list[tuple[str, dict]] = []
         self.throttle: dict[str, int] = {}
+        # What the live tenant does (30 Sep 2026): the app's identity may run exports, not write them.
+        self.deny_writes = False
         self.permissions = {S1: EXPORT_GRANT, S3: EXPORT_GRANT, S4: READ_ONLY, S5: EXPORT_GRANT}
         self.pages = [
             [{"subscriptionId": S1, "displayName": "One", "state": "Enabled"},
@@ -82,6 +84,10 @@ class FakeArm:
             self.runs.append((sub, body["timePeriod"]))
             return httpx.Response(200, json={})
         if request.method == "PUT":
+            if self.deny_writes:
+                return httpx.Response(401, json={"error": {
+                    "code": "RBACAccessDenied",
+                    "message": "The client does not have authorization to perform action."}})
             self.puts.append((sub, body))
             saved = {**body, "name": name, "eTag": f"v{len(self.puts)}",
                      "identity": {"type": "SystemAssigned", "principalId": f"mi-{sub[-1]}"}}
@@ -376,3 +382,48 @@ def test_an_unregistered_export_provider_says_who_can_fix_it():
         "Azure returned 409: MissingSubscriptionRegistration: The subscription is not registered to use "
         "namespace 'Microsoft.CostManagementExports'.", S1)
     assert f"az provider register --namespace Microsoft.CostManagementExports --subscription {S1}" in text
+
+
+def test_an_export_the_app_may_not_create_is_created_by_an_operator_and_then_adopted(azure, monkeypatch):
+    """The live finding: the app's identity may run an export but not create or update one.
+
+    Setup stops at `configure` with the exact operator command, keeps rechecking, and continues on
+    its own once the operator has created the export -- which it then adopts as its own, leaves
+    alone (its native schedule cannot be paused either), and runs month by month.
+    """
+    from app import bootstrap, cost, cost_data, schedules
+
+    monkeypatch.setenv("WEBSITE_RESOURCE_GROUP", "rg-cl")
+    monkeypatch.setenv("WEBSITE_SITE_NAME", "cloudlens-abc")
+    azure.arm.deny_writes = True
+    job_id = asyncio.run(bootstrap.run_once())["job_id"]
+    asyncio.run(azure.jobs.run(job_id, lambda: azure.flow.step(job_id)))
+    job = azure.jobs.get(job_id)
+    configure = next(t for t in job["tasks"] if t["subscription"] == S1 and t.get("operation") == "configure")
+    command = f"./infra/focus-exports.ps1 -ResourceGroup rg-cl -WebAppName cloudlens-abc -Subscriptions {S1} -Paused"
+    assert configure["status"] == "failed" and command in configure["detail"]
+    assert job["status"] == "failed" and azure.arm.runs == []
+
+    # The next pass names the fix per subscription and retries (every 5 min while blocked).
+    second = asyncio.run(bootstrap.run_once())
+    assert second["resumed"] == [job_id]
+    assert second["blockers"][S1][0]["fix"] == command
+    assert bootstrap._next_pass(second) == bootstrap.retry_interval()
+
+    # The operator runs the command: the export now exists, created by a person, and active.
+    for sub in (S1, S3, S5):
+        name = schedules.export_name("FocusCost", **schedules.destination(sub))
+        body = schedules._body("FocusCost", ACCOUNT, "focus-exports", f"focus/{sub}")
+        body["properties"]["schedule"]["status"] = "Active"
+        azure.arm.exports.setdefault(sub, {})[name] = {**body, "name": name, "eTag": "op1"}
+    cost.clear_cache()
+    # The job the second pass resumed now runs, as `launch` would run it.
+    asyncio.run(azure.jobs.run(job_id, lambda: azure.flow.step(job_id)))
+    assert azure.arm.puts == []  # adopted, never rewritten
+    config = cost_data.read(S1)
+    assert config["enabled"] and config["native_schedule"].startswith("active")
+    # Month windows now run as the app's identity -- the operation it is allowed.
+    assert [(s, w["from"][:10]) for s, w in azure.arm.runs] == [(S1, _month(0)), (S3, _month(0))]
+    fourth = asyncio.run(bootstrap.run_once())
+    # Only S4's genuinely missing export role remains; nothing is resumed again.
+    assert set(fourth["blockers"]) == {S4} and fourth["resumed"] == []

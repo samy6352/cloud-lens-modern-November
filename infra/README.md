@@ -36,15 +36,18 @@ It prints the URL and the setup-progress page (`/v2/admin/setup`). Re-running up
 | `medium` (default) | ~1–5M | Standard_D2ds_v5 | 128 GB | B2 |
 | `large` | ~5–20M | Standard_E4ds_v5 | 256 GB | B2 |
 
-Managed exports (`CLOUDLENS_MANAGED_EXPORTS=true`, the `managedExports` template parameter): on
-first start the app creates one Parquet FOCUS export per visible subscription in its own storage
-and imports the current month plus the previous 12, newest month first, at most
-`CLOUDLENS_EXPORT_CONCURRENCY` Azure runs at a time. Roles are plain Azure RBAC only — no EA or
-billing roles: Reader, Cost Management Reader and Cost Management Contributor for the app identity
-on the monitored scope (once at the management group when `-Scope` is one), plus the existing
-ABAC-limited User Access Administrator on its own storage account so it can grant each export's
-identity Storage Blob Data Contributor. Anything missing is shown on the setup page with the exact
-`az` command that fixes it, and rechecked every few minutes.
+Managed exports (`CLOUDLENS_MANAGED_EXPORTS=true`, the `managedExports` template parameter): the
+installer creates one **paused** Parquet FOCUS export per monitored subscription **as you**, then on
+first start the app adopts them and imports the current month plus the previous 12, newest month
+first, at most `CLOUDLENS_EXPORT_CONCURRENCY` Azure runs at a time. Why the split: Cost Management
+lets the app's managed identity *run* an export but not *create or update* one — creation needs a
+caller it will let grant the export's own identity a role on the storage account, and a service
+principal was refused (`401 RBACAccessDenied`) even with an unconditional role-assignment grant held
+for 14 minutes (live test, 30 Sep 2026). Roles stay plain Azure RBAC — no EA or billing roles:
+Reader, Cost Management Reader and Cost Management Contributor for the app identity on the monitored
+scope (once at the management group when `-Scope` is one). A subscription that appears later shows
+the one operator command (`infra/focus-exports.ps1 … -Paused`) on the setup page, and setup
+continues by itself within minutes of it being run.
 
 Other options: `-EntraClientId <id>` adopts an app registration an identity team created;
 `-LocalSignIn` skips Entra entirely: the installer generates a local administrator password, gives

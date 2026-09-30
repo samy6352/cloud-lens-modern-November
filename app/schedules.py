@@ -126,6 +126,19 @@ def destination(subscription_id: str) -> dict[str, str]:
             "folder": f"{FOCUS_PREFIX}/{subscription_id.lower()}".strip("/")}
 
 
+def operator_command(subscription_id: str) -> str:
+    """The one command that creates this deployment's export for a subscription, as a person.
+
+    Cost Management refuses to let the app's managed identity *create* an export (it must be able
+    to grant the export's own identity a role on the storage account), yet lets it *run* one --
+    verified live on 30 Sep 2026. So creation is an operator step; App Service names the app.
+    """
+    group = os.getenv("WEBSITE_RESOURCE_GROUP") or "<resource-group>"
+    site = os.getenv("WEBSITE_SITE_NAME") or "<web-app>"
+    return (f"./infra/focus-exports.ps1 -ResourceGroup {group} -WebAppName {site} "
+            f"-Subscriptions {subscription_id} -Paused")
+
+
 def coverage(recurrence: str) -> str:
     return ("Previous calendar month (TheLastMonth); Azure may later restate charges."
             if recurrence == "Monthly" else
