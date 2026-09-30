@@ -183,3 +183,25 @@ def test_a_failed_refresh_leaves_readers_on_the_direct_path(estate, monkeypatch)
     estate.refresh_serving()
     with estate.reader() as r:
         assert r.counts == resource_counts.TABLE
+
+
+def test_tags_skips_daily_detail_only_when_provably_over_the_cap(estate, monkeypatch):
+    """The Tags tab drops per-day detail over MAX_DAILY_CELLS; it must not build it to learn that."""
+    from app import tags
+
+    def run(cap):
+        monkeypatch.setattr(tags, "MAX_DAILY_CELLS", cap)
+        return tags.cost_by_tag(None, days=90)
+
+    real = tags._daily_cells_exceed_cap
+    calls = []
+    monkeypatch.setattr(tags, "_daily_cells_exceed_cap",
+                        lambda *a, **k: calls.append(real(*a, **k)) or calls[-1])
+    # Plenty of room: computed, kept, and identical to never asking.
+    roomy = run(10_000)
+    assert calls[-1] is False and not roomy["daily_dropped"] and roomy["dates"]
+    # Fewer cells than rows but more resources than the cap: provably dropped, not computed.
+    tight = run(5)
+    assert calls[-1] is True and tight["daily_dropped"] and tight["dates"] == []
+    monkeypatch.setattr(tags, "_daily_cells_exceed_cap", lambda *a, **k: False)
+    assert run(5) == tight

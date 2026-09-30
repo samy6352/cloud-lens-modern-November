@@ -250,19 +250,29 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
         # driven entirely client-side: the whole point of the tab is that changing the tag
         # selection re-answers instantly, and a daily series fetched per selection would put a
         # round trip behind every click.
-        daily = r.rows(
-            f"""
-            SELECT
-              COALESCE(NULLIF("ResourceId", ''), "ResourceName", '(unnamed)') AS id,
-              "ChargePeriodStart"                                             AS day,
-              COALESCE(NULLIF("BillingCurrency", ''), 'unknown')              AS currency,
-              SUM(COALESCE("BilledCost", 0))                                  AS cost
-            FROM {named}
-            WHERE {display_window}
-            GROUP BY 1, 2, 3
-            """,
-            limit=MAX_DAILY_CELLS + 1,
-        )
+        #
+        # Over MAX_DAILY_CELLS the detail is dropped below, so it is only computed when it can
+        # be kept. Every resource active in the window owns at least one cell, so a resource
+        # count over the cap proves the answer is "dropped" without building 2.7M cells to
+        # find out -- measured 50.7 s of the tab's 77 s on the 16.9M-row estate.
+        over_cap = _daily_cells_exceed_cap(r, named, display_window, start,
+                                           currency if mixed else None)
+        if over_cap:
+            daily = []
+        else:
+            daily = r.rows(
+                f"""
+                SELECT
+                  COALESCE(NULLIF("ResourceId", ''), "ResourceName", '(unnamed)') AS id,
+                  "ChargePeriodStart"                                             AS day,
+                  COALESCE(NULLIF("BillingCurrency", ''), 'unknown')              AS currency,
+                  SUM(COALESCE("BilledCost", 0))                                  AS cost
+                FROM {named}
+                WHERE {display_window}
+                GROUP BY 1, 2, 3
+                """,
+                limit=MAX_DAILY_CELLS + 1,
+            )
 
     # Budget amounts are native billing units, never the dashboard's converted currency.
     # Aggregate per subscription before applying a row cap so a mixed unit cannot look single.
@@ -287,7 +297,7 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
 
     rows = [r for r in rows if (r.get("currency") or "unknown") == currency] if mixed else rows
 
-    daily_dropped = len(daily) > MAX_DAILY_CELLS
+    daily_dropped = over_cap or len(daily) > MAX_DAILY_CELLS
     if daily_dropped:
         log.info("cost_by_tag: over %d daily cells; dropping per-resource detail", MAX_DAILY_CELLS)
         daily = []
@@ -426,6 +436,39 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
         "totals_scope": "returned_resources",
         "latest": str(hi),
     }
+
+
+def _daily_cells_exceed_cap(r: Any, source: str, window: str, start: str,
+                            currency: str | None) -> bool:
+    """Whether the per-resource daily detail would exceed MAX_DAILY_CELLS -- only when provable.
+
+    False means "compute it and see", never "it fits": the caller then runs the query and
+    applies the cap exactly as before. True is returned only on proof:
+
+    * Cells are (resource, day, currency) groups, so there are never more cells than rows;
+      a window of at most MAX_DAILY_CELLS rows is answered by computing it (cheap then).
+    * Every resource active in the window owns at least one cell, so more active
+      resources than the cap -- read from `resource_counts` when it serves this reader --
+      proves the detail would be dropped. Identities without a `ResourceId` may collapse
+      under the tab's name fallback, so they are left out of that lower bound.
+    """
+    from . import reporting, resource_counts
+
+    rows = r.rows(f"SELECT count(*) AS n FROM (SELECT 1 FROM {source} WHERE {window} "
+                  f"LIMIT {MAX_DAILY_CELLS + 1}) capped", None)
+    found = rows[0].get("n") if rows else None
+    if not isinstance(found, int) or found <= MAX_DAILY_CELLS:
+        return False
+    counts = getattr(r, "counts", None)
+    if not counts or currency == "unknown":
+        return False
+    month = reporting.month_bounds()
+    served = r.rows(resource_counts.window_sql(counts, start, month[0] if month else None,
+                                               by_region=False), None)
+    active = sum(int(row.get("resources") or 0) for row in served
+                 if currency is None or row.get("currency") == currency)
+    # Two identities at most can merge under the fallback (NULL and '' resource ids).
+    return active - 2 > MAX_DAILY_CELLS
 
 
 def _empty(days: int) -> dict[str, Any]:
