@@ -13,6 +13,48 @@ az account set --subscription <subscription-id>
 `deploy.ps1` provisions the infrastructure, grants the app the cost access it needs, wires
 sign-in, publishes the code, and polls `/readyz` plus an unauthenticated sign-in challenge.
 
+## Two-line install (Azure Cloud Shell)
+
+The customer path. Open Cloud Shell in **PowerShell** mode, get the CloudLens source (for now a
+clone; see *Distribution* below), then:
+
+```powershell
+az account set --subscription <subscription-to-host-cloudlens>
+./infra/install.ps1 -Location centralindia     # -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
+```
+
+`install.ps1` checks PowerShell 7, the Azure CLI and the account; resolves what to monitor (the
+current subscription by default, or every subscription under a management group, including ones
+added later); registers the resource providers the stack needs plus `Microsoft.CostManagementExports`
+in every monitored subscription (the app's identity may not register providers, and cannot create
+an export without that one); then runs `deploy.ps1` sized by `-Size` with **managed exports** on.
+It prints the URL and the setup-progress page (`/v2/admin/setup`). Re-running upgrades in place.
+
+| `-Size` | Estate | PostgreSQL | Storage | App Service |
+|---|---|---|---|---|
+| `small` | up to ~1M cost rows/month | Standard_D2ds_v5 | 64 GB | B1 |
+| `medium` (default) | ~1–5M | Standard_D2ds_v5 | 128 GB | B2 |
+| `large` | ~5–20M | Standard_E4ds_v5 | 256 GB | B2 |
+
+Managed exports (`CLOUDLENS_MANAGED_EXPORTS=true`, the `managedExports` template parameter): on
+first start the app creates one Parquet FOCUS export per visible subscription in its own storage
+and imports the current month plus the previous 12, newest month first, at most
+`CLOUDLENS_EXPORT_CONCURRENCY` Azure runs at a time. Roles are plain Azure RBAC only — no EA or
+billing roles: Reader, Cost Management Reader and Cost Management Contributor for the app identity
+on the monitored scope (once at the management group when `-Scope` is one), plus the existing
+ABAC-limited User Access Administrator on its own storage account so it can grant each export's
+identity Storage Blob Data Contributor. Anything missing is shown on the setup page with the exact
+`az` command that fixes it, and rechecked every few minutes.
+
+Other options: `-EntraClientId <id>` adopts an app registration an identity team created;
+`-LocalSignIn` skips Entra entirely and uses a local administrator whose password is printed once in
+the app log (for tenants where app registration or admin consent is unavailable); `-WhatIf` previews
+without registering or deploying anything.
+
+**Distribution** is not settled: the script already accepts `-Source <https zip URL or path>` so the
+second line can become `iex "& { $(irm https://<host>/install.ps1) } -Location centralindia -Source <zip>"`
+once a public release (or a zip handed to the customer) exists.
+
 ## Common commands
 
 ```powershell

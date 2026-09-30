@@ -7,13 +7,19 @@ param(
     [Parameter(Mandatory)]
     [string]$Destination,
     [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$Python = 'python',
+    # Defaults to whichever of python / python3 exists: Azure Cloud Shell has only python3.
+    [string]$Python = '',
     # Package the web/v2 build already on disk instead of running npm (for example in CI, where
     # the UI was built in an earlier step).
     [switch]$SkipUiBuild
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Python) {
+    $Python = @('python', 'python3') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
+    if (-not $Python) { throw 'Python 3 was not found (tried python and python3); pass -Python <path>.' }
+}
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root = (Get-Item -LiteralPath $SourceRoot).FullName.TrimEnd('\', '/')

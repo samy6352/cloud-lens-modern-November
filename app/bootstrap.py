@@ -18,7 +18,8 @@ deployment may export them, and approve a setup. The work itself is the existing
   * `cost_data.tick` then keeps each subscription current daily and reconciles 90 days on the 7th,
     which is what picks up late adjustments to the previous month.
 
-Newly visible subscriptions are onboarded on the next pass (hourly). One instance runs a pass at a
+Newly visible subscriptions are onboarded on the next pass (hourly; every 5 minutes while something
+is blocked, since a fresh install's role assignments take minutes to propagate). One instance runs a pass at a
 time: a lease taken under the jobs advisory lock, plus idempotency keys on the job itself.
 """
 from __future__ import annotations
@@ -61,6 +62,20 @@ def interval() -> int:
         return max(60, int(os.getenv("CLOUDLENS_BOOTSTRAP_INTERVAL", "3600")))
     except ValueError:
         return 3600
+
+
+def retry_interval() -> int:
+    """How soon to look again while setup is blocked. Right after an install, role assignments
+    take minutes to propagate; waiting a full hour for the first export would be the norm."""
+    try:
+        return max(60, int(os.getenv("CLOUDLENS_BOOTSTRAP_RETRY", "300")))
+    except ValueError:
+        return 300
+
+
+def _next_pass(result: dict[str, Any]) -> int:
+    waiting = bool(result.get("error") or result.get("deployment_blockers") or result.get("blockers"))
+    return retry_interval() if waiting else interval()
 
 
 def _assignee() -> str:
@@ -227,13 +242,15 @@ async def run_forever(initial_delay: float = 20.0) -> None:
     """Started from the app lifespan when the flag is on."""
     await asyncio.sleep(initial_delay)
     while True:
+        result: dict[str, Any] = {}
         try:
-            await run_once()
+            result = await run_once()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - never let one bad pass stop the next
             log.warning("managed exports loop: %s", str(exc)[:300])
-        await asyncio.sleep(interval())
+            result = {"error": str(exc)}
+        await asyncio.sleep(_next_pass(result))
 
 
 # ------------------------------------------------------------------ progress grid

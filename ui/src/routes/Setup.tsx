@@ -68,7 +68,7 @@ function Blockers({ data }: { data: SetupProgress }) {
     <Card className="mb-5 border-warn/40">
       <CardHeader
         title="Needs an administrator"
-        subtitle="Setup skips these until fixed and retries automatically every hour. Run each command once in Cloud Shell."
+        subtitle="Setup skips these until fixed and checks again every few minutes. Run each command once in Cloud Shell."
       />
       <CardBody>
         {data.error && <p className="mb-3 text-sm text-bad">Last check failed: {data.error}</p>}

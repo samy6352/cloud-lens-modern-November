@@ -325,6 +325,16 @@ async def create(subscription_id: str, metric: str, *, account_id: str, containe
 def _explain_create(detail: str, subscription_id: str) -> str:
     """The refusals that actually happen, in words rather than as an ARM code."""
     low = detail.lower()
+    # Exports belong to their own resource provider, registered per subscription. The app's
+    # identity (Cost Management Contributor) is not allowed to register one, so say who can.
+    if ("missingsubscriptionregistration" in low or "subscriptionnotregistered" in low
+            or "not registered to use namespace" in low):
+        return (
+            "This subscription has not registered the resource provider Cost Management exports "
+            "use. Register it once (needs Contributor on the subscription; infra/install.ps1 does "
+            "this for every monitored subscription): az provider register --namespace "
+            f"Microsoft.CostManagementExports --subscription {subscription_id}"
+        )
     if "key-based authentication" in low or "allow storage account key access" in low:
         return (
             "Azure tried to authenticate to storage with an account key, which this tenant "

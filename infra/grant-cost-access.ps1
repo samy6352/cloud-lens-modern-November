@@ -13,6 +13,7 @@ param(
     [string]$HostingSubscriptionId = '',
     [string[]]$CostScopeSubscriptions = @(),
     [switch]$CostScopeAllVisible,
+    [string]$CostScopeManagementGroup = '',
     [switch]$EnableExportManagement,
     [switch]$InstructionsOnly,
     [string]$ReportPath = ''
@@ -24,4 +25,5 @@ $readOnly = $InstructionsOnly -or -not $PSCmdlet.ShouldProcess(
 )
 Invoke-CloudLensCostAccess -HostingSubscriptionId $HostingSubscriptionId -ResourceGroup $ResourceGroup `
     -AppName $AppName -CostScopeSubscriptions $CostScopeSubscriptions -CostScopeAllVisible:$CostScopeAllVisible `
+    -CostScopeManagementGroup $CostScopeManagementGroup `
     -EnableExportManagement:$EnableExportManagement -InstructionsOnly:$readOnly -ReportPath $ReportPath

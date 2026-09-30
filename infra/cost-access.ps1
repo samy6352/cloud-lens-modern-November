@@ -113,12 +113,16 @@ function Invoke-CloudLensCostAccess {
     param(
         [string]$HostingSubscriptionId, [string]$ResourceGroup, [string]$AppName,
         [string[]]$CostScopeSubscriptions = @(), [switch]$CostScopeAllVisible,
+        # One assignment at a management group covers every subscription beneath it, including
+        # ones added later -- the scope a customer install should normally use.
+        [string]$CostScopeManagementGroup = '',
         [switch]$EnableExportManagement, [switch]$InstructionsOnly,
         [string]$ReportPath = '', [string]$AzCommand = 'az',
         [ValidateRange(1, 10)][int]$VerificationAttempts = 3
     )
     if (-not $ReportPath) {
-        $ReportPath = Join-Path (Split-Path $PSScriptRoot -Parent) "data\cost-access\$([guid]::NewGuid().ToString('N')).json"
+        # Segment by segment: a literal "data\cost-access\x.json" is one file name on Linux (Cloud Shell).
+        $ReportPath = Join-Path (Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'data') 'cost-access') "$([guid]::NewGuid().ToString('N')).json"
     }
     $ReportPath = [IO.Path]::GetFullPath($ReportPath)
     $directory = Split-Path $ReportPath -Parent
@@ -140,6 +144,9 @@ function Invoke-CloudLensCostAccess {
     try {
         if ($HostingSubscriptionId -and -not (Test-CloudLensGuid $HostingSubscriptionId)) { throw 'Invalid hosting subscription GUID.' }
         if ($CostScopeAllVisible -and $CostScopeSubscriptions.Count) { throw 'Choose explicit -CostScopeSubscriptions OR opt-in -CostScopeAllVisible, not both.' }
+        if ($CostScopeManagementGroup -and ($CostScopeAllVisible -or $CostScopeSubscriptions.Count)) {
+            throw 'Choose one cost scope: -CostScopeManagementGroup, explicit -CostScopeSubscriptions, or -CostScopeAllVisible.'
+        }
         $accountArgs = @('account', 'show')
         if ($HostingSubscriptionId) { $accountArgs += @('--subscription', $HostingSubscriptionId) }
         $accountRead = Invoke-CloudLensCostAz @cli -Arguments $accountArgs
@@ -157,10 +164,30 @@ function Invoke-CloudLensCostAccess {
             $requested = @($list.Data | Where-Object { $_.tenantId -ieq $account.tenantId -and $_.state -eq 'Enabled' } | ForEach-Object { $_.id })
             if (-not $requested.Count) { throw 'No enabled subscriptions found in the managed identity tenant.' }
         }
-        if (-not $requested.Count) { $requested = @($account.id) }
+        if (-not $requested.Count -and -not $CostScopeManagementGroup) { $requested = @($account.id) }
+        if ($CostScopeManagementGroup) {
+            $mg = $CostScopeManagementGroup
+            $entry = [ordered]@{
+                kind = 'managementGroup'; subscriptionId = $null; managementGroupId = $mg; scope = $null
+                name = $null; tenantId = $null; required = $true; validation = 'blocked'; error = $null; roles = @()
+            }
+            if ($mg -notmatch '^[A-Za-z0-9._()-]{1,90}$') {
+                $entry.error = 'Invalid management group ID; no grant command generated.'
+            } else {
+                $entry.scope = "/providers/Microsoft.Management/managementGroups/$mg"
+                $info = Invoke-CloudLensCostAz @cli -Arguments @('account', 'management-group', 'show', '--name', $mg)
+                if (-not $info.Success) { $entry.error = "Reading management group failed: $($info.Error)" }
+                elseif ($info.Data.name -ine $mg -or $info.Data.tenantId -ine $account.tenantId) {
+                    $entry.error = 'Management group ID/tenant mismatch; cross-tenant grants are forbidden.'
+                } else {
+                    $entry.name = $info.Data.displayName; $entry.tenantId = $info.Data.tenantId; $entry.validation = 'valid'
+                }
+            }
+            $report.subscriptions += $entry
+        }
         foreach ($sub in @($requested | Select-Object -Unique)) {
             $entry = [ordered]@{
-                subscriptionId = $sub; scope = $null; name = $null; tenantId = $null
+                kind = 'subscription'; subscriptionId = $sub; scope = $null; name = $null; tenantId = $null
                 required = (-not $CostScopeAllVisible); validation = 'blocked'; error = $null; roles = @()
             }
             if (-not (Test-CloudLensGuid $sub)) {
@@ -185,8 +212,11 @@ function Invoke-CloudLensCostAccess {
             -ResourceGroup $ResourceGroup -AppName $AppName @cli
         foreach ($entry in $report.subscriptions) {
             $principal = $report.identity.principalObjectId
-            $listArgs = @('role', 'assignment', 'list', '--scope', $entry.scope, '--include-inherited',
-                '--subscription', $entry.subscriptionId, '--fill-principal-name', 'false',
+            # A management-group scope is not addressed through a subscription.
+            $at = if ($entry.subscriptionId) { @('--subscription', $entry.subscriptionId) } else { @() }
+            $atText = if ($entry.subscriptionId) { " --subscription $($entry.subscriptionId)" } else { '' }
+            $listArgs = @('role', 'assignment', 'list', '--scope', $entry.scope, '--include-inherited') + $at + @(
+                '--fill-principal-name', 'false',
                 '--query', "[?principalId=='$principal'].{principalId:principalId,roleDefinitionId:roleDefinitionId,scope:scope,condition:condition}")
             $existing = if (-not $blocked) { Invoke-CloudLensCostAz @cli -Arguments $listArgs } else { $null }
             foreach ($role in $roles) {
@@ -196,8 +226,8 @@ function Invoke-CloudLensCostAccess {
                     grantCommand = $null; verifyCommand = $null
                 }
                 if ($entry.validation -eq 'valid') {
-                    $item.grantCommand = "az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role $($role.id) --scope $($entry.scope) --subscription $($entry.subscriptionId) --only-show-errors"
-                    $item.verifyCommand = "az role assignment list --scope $($entry.scope) --include-inherited --subscription $($entry.subscriptionId) --fill-principal-name false --query `"[?principalId=='$principal' && ends_with(roleDefinitionId, '$($role.id)')].{principalId:principalId,roleDefinitionId:roleDefinitionId,scope:scope,condition:condition}`" -o json"
+                    $item.grantCommand = "az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal --role $($role.id) --scope $($entry.scope)$atText --only-show-errors"
+                    $item.verifyCommand = "az role assignment list --scope $($entry.scope) --include-inherited$atText --fill-principal-name false --query `"[?principalId=='$principal' && ends_with(roleDefinitionId, '$($role.id)')].{principalId:principalId,roleDefinitionId:roleDefinitionId,scope:scope,condition:condition}`" -o json"
                 }
                 if ($role.selected) {
                     if ($blocked) {
@@ -209,9 +239,9 @@ function Invoke-CloudLensCostAccess {
                     } elseif ($InstructionsOnly) {
                         $item.status = 'pending-instructions'
                     } else {
-                        $grant = Invoke-CloudLensCostAz @cli -Arguments @('role', 'assignment', 'create',
+                        $grant = Invoke-CloudLensCostAz @cli -Arguments (@('role', 'assignment', 'create',
                             '--assignee-object-id', $principal, '--assignee-principal-type', 'ServicePrincipal',
-                            '--role', $role.id, '--scope', $entry.scope, '--subscription', $entry.subscriptionId)
+                            '--role', $role.id, '--scope', $entry.scope) + $at)
                         if (-not $grant.Success) {
                             $item.status = 'grant-failed'; $item.error = $grant.Error
                         } else {
@@ -248,7 +278,7 @@ function Invoke-CloudLensCostAccess {
     $pending = @($report.subscriptions | Where-Object {
         $_.validation -ne 'valid' -or @($_.roles | Where-Object { $_.selected -and $_.status -notin @('already-present', 'granted-verified') }).Count
     })
-    $report.pendingSubscriptions = @($pending | ForEach-Object { $_.subscriptionId })
+    $report.pendingSubscriptions = @($pending | ForEach-Object { if ($_.subscriptionId) { $_.subscriptionId } else { $_.scope } })
     $report.status = if ($report.errors.Count -or @($report.subscriptions | Where-Object { $_.validation -ne 'valid' }).Count) {
         'blocked'
     } elseif ($pending.Count) { 'pending' } else { 'complete' }
@@ -265,9 +295,10 @@ function Invoke-CloudLensCostAccess {
     Write-Host "Cost access report: $ReportPath [$($report.status)]"
     foreach ($errorMessage in $report.errors) { Write-Warning $errorMessage }
     foreach ($entry in $report.subscriptions) {
-        if ($entry.error) { Write-Warning "$($entry.subscriptionId): $($entry.error)" }
+        $label = if ($entry.subscriptionId) { $entry.subscriptionId } elseif ($entry.scope) { $entry.scope } else { $entry.managementGroupId }
+        if ($entry.error) { Write-Warning "${label}: $($entry.error)" }
         foreach ($role in $entry.roles | Where-Object { $_.selected }) {
-            Write-Host "  $($entry.subscriptionId) : $($role.name) [$($role.status)]"
+            Write-Host "  $label : $($role.name) [$($role.status)]"
             if ($role.status -notin @('already-present', 'granted-verified')) {
                 if ($role.error) { Write-Warning $role.error }
                 if ($role.grantCommand) {

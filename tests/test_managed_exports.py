@@ -355,3 +355,24 @@ def test_progress_and_check_now_routes(azure, monkeypatch):
     with pytest.raises(HTTPException) as off:
         asyncio.run(main.run_cost_data_bootstrap(admin))
     assert off.value.status_code == 409 and "CLOUDLENS_MANAGED_EXPORTS" in off.value.detail
+
+
+def test_blocked_setup_is_rechecked_in_minutes_not_hours(monkeypatch):
+    """Right after an install the role assignments are still propagating."""
+    from app import bootstrap
+
+    monkeypatch.delenv("CLOUDLENS_BOOTSTRAP_INTERVAL", raising=False)
+    monkeypatch.delenv("CLOUDLENS_BOOTSTRAP_RETRY", raising=False)
+    assert bootstrap._next_pass({"blockers": {S4: [{"capability": "export-role"}]}}) == 300
+    assert bootstrap._next_pass({"deployment_blockers": [{"capability": "storage"}]}) == 300
+    assert bootstrap._next_pass({"error": "throttled"}) == 300
+    assert bootstrap._next_pass({"blockers": {}, "deployment_blockers": [], "error": None}) == 3600
+
+
+def test_an_unregistered_export_provider_says_who_can_fix_it():
+    from app import schedules
+
+    text = schedules._explain_create(
+        "Azure returned 409: MissingSubscriptionRegistration: The subscription is not registered to use "
+        "namespace 'Microsoft.CostManagementExports'.", S1)
+    assert f"az provider register --namespace Microsoft.CostManagementExports --subscription {S1}" in text

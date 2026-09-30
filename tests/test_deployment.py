@@ -51,11 +51,16 @@ function global:az {
                 'postgresStorageGb=128', 'postgresStorageType=PremiumV2_LRS',
                 'postgresIops=3000', 'postgresThroughput=125',
                 'partitionCosts=true', 'snapshotWarmingEnabled=true',
-                'pgStatementTimeout=25s'
+                'pgStatementTimeout=25s', 'managedExports=false'
             )) {
                 if (-not $call.Contains($setting)) { throw "Missing reference profile setting: $setting" }
             }
             Write-Host 'REFERENCE_CAPACITY_DEFAULTS_OK'
+            return
+        }
+        if ($scenario -eq 'managed-preview') {
+            if (-not $call.Contains('managedExports=true')) { throw 'Managed exports did not reach the template' }
+            Write-Host 'MANAGED_EXPORTS_IN_TEMPLATE'
             return
         }
         $global:LASTEXITCODE = 7
@@ -187,6 +192,16 @@ class DeploymentFailures(unittest.TestCase):
         result = self.run_deploy("capacity-preview", "-WhatIf -SkipEntra")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("REFERENCE_CAPACITY_DEFAULTS_OK", result.stdout)
+
+    def test_managed_exports_reach_the_template_and_need_the_export_role(self):
+        result = self.run_deploy("managed-preview",
+                                 "-WhatIf -SkipEntra -EnableExportManagement -ManagedExports $true")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("MANAGED_EXPORTS_IN_TEMPLATE", result.stdout)
+        refused = self.run_deploy("managed-preview", "-WhatIf -SkipEntra -ManagedExports $true")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("-ManagedExports needs -EnableExportManagement", refused.stdout + refused.stderr)
+        self.assertNotIn("MANAGED_EXPORTS_IN_TEMPLATE", refused.stdout)
 
     def test_failed_role_grant_stops_deployment(self):
         result = self.run_deploy("role-failure", "-SkipCode -SkipEntra")

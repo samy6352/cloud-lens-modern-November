@@ -135,6 +135,9 @@ param modelCapacity int
 @description('True calls Azure as the signed-in person; false is app-identity mode. See main.bicep.')
 param authDelegatedArm bool = true
 
+@description('The app creates its own FOCUS exports and backfills history on first start. See main.bicep.')
+param managedExports bool = false
+
 @description('Tags applied to every resource.')
 param tags object
 
@@ -744,6 +747,12 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'AUTO_REFRESH'
           value: autoRefresh ? 'true' : 'false'
+        }
+        {
+          // Declared here, not set with the CLI afterwards: appSettings belongs to this template,
+          // so the next deployment would silently discard a setting added any other way.
+          name: 'CLOUDLENS_MANAGED_EXPORTS'
+          value: managedExports ? 'true' : 'false'
         }
         {
           name: 'AUTH_ALLOW_LOCAL'

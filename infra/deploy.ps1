@@ -134,8 +134,16 @@ param(
     # everyone regardless of their own rights.
     [switch]$CostScopeAllVisible,
 
+    # Grant cost access once at a management group instead; it covers every subscription under
+    # it, including ones added later. Mutually exclusive with the two options above.
+    [string]$CostScopeManagementGroup = '',
+
     # Opt in to managing export schedules/budgets; read-only cost access is the default.
     [switch]$EnableExportManagement,
+
+    # The app creates its own FOCUS exports and backfills 13 months on first start
+    # (CLOUDLENS_MANAGED_EXPORTS). Needs -EnableExportManagement; infra/install.ps1 sets both.
+    [bool]$ManagedExports = $false,
 
     # Skip provisioning the FOCUS exports CloudLens imports from.
     #
@@ -168,6 +176,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if ($ManagedExports -and -not $EnableExportManagement) {
+    throw '-ManagedExports needs -EnableExportManagement: the app creates and runs exports with Cost Management Contributor.'
+}
 . (Join-Path $PSScriptRoot 'deployment-checks.ps1')
 . (Join-Path $PSScriptRoot 'cost-access.ps1')
 . (Join-Path $PSScriptRoot 'storage-naming.ps1')
@@ -373,7 +384,7 @@ if (-not $StorageNameStatePath) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $scopeKey = [BitConverter]::ToString($sha.ComputeHash($scopeBytes)).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
-    $StorageNameStatePath = Join-Path $root "data\deployments\$scopeKey.storage.json"
+    $StorageNameStatePath = Join-Path (Join-Path (Join-Path $root 'data') 'deployments') "$scopeKey.storage.json"
 }
 $StorageAccountName = Get-CloudLensStorageAccountName -SubscriptionId $account.id `
     -ResourceGroup $ResourceGroup -NamePrefix $NamePrefix -NameSuffix $NameSuffix `
@@ -500,6 +511,7 @@ $templateParameters = @(
     "entraAppUniqueName=$EntraAppUniqueName"
     "deployEntraApp=$((-not $SkipEntra -and -not $EntraClientId).ToString().ToLower())"
     "authDelegatedArm=$((-not $AllowAppIdentityFallback).ToString().ToLower())"
+    "managedExports=$($ManagedExports.ToString().ToLower())"
 )
 
 if ($EmitArm) {
@@ -548,6 +560,7 @@ Write-Host "    foundry      : $($result.foundryAccount.value) ($AiLocation, $Mo
 Step 'Granting managed-identity cost access'
 $costAccess = Invoke-CloudLensCostAccess -HostingSubscriptionId $account.id -ResourceGroup $ResourceGroup `
     -AppName $webAppName -CostScopeSubscriptions $CostScopeSubscriptions -CostScopeAllVisible:$CostScopeAllVisible `
+    -CostScopeManagementGroup $CostScopeManagementGroup `
     -EnableExportManagement:$EnableExportManagement -ReportPath $CostAccessReportPath
 if ($costAccess.pendingSubscriptions.Count) {
     Write-Warning 'Optional cost scopes remain pending; this deployment does not have complete cost coverage. Use infra\grant-cost-access.ps1 to repair access without redeploying.'
@@ -569,7 +582,7 @@ if ($costAccess.pendingSubscriptions.Count) {
 if (-not $SkipFocusExports) {
     Step 'Provisioning FOCUS exports'
     $focusScope = @($costAccess.subscriptions |
-        Where-Object { $_.validation -eq 'valid' } |
+        Where-Object { $_.validation -eq 'valid' -and $_.subscriptionId } |
         ForEach-Object { $_.subscriptionId })
     if (-not $focusScope -or $focusScope.Count -eq 0) { $focusScope = @($account.id) }
 
@@ -733,7 +746,11 @@ Write-Host ""
 
 # State the data path explicitly. Without exports the dashboard still loads and Quick refresh
 # still works, so "it looks fine" is exactly the wrong signal to leave someone with.
-if ($focusProvisioned) {
+if ($ManagedExports) {
+    Write-Host "Cost detail  : CloudLens creates its own FOCUS exports and imports 13 months of history," -ForegroundColor Green
+    Write-Host "               newest month first. First data usually within hours (a new export can" -ForegroundColor Green
+    Write-Host "               take up to 24 h). Progress: $webAppUrl/v2/admin/setup" -ForegroundColor Green
+} elseif ($focusProvisioned) {
     Write-Host "Cost detail  : FOCUS exports provisioned. Azure delivers the first reports" -ForegroundColor Green
     Write-Host "               within a few hours; CloudLens imports them automatically." -ForegroundColor Green
 } else {

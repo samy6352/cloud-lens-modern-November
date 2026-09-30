@@ -22,6 +22,7 @@ COST_READER = "72fafb9e-0641-4937-9268-a91bfd8191a3"
 CONTRIBUTOR = "434105ed-43f6-45c7-a02f-909b2ba83430"
 APP_ID = f"/subscriptions/{HOST}/resourceGroups/fixture/providers/Microsoft.Web/sites/fixture"
 UAI_ID = f"/subscriptions/{HOST}/resourceGroups/fixture/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cloudlens-mi"
+MG_SCOPE = "/providers/Microsoft.Management/managementGroups/finance"
 
 MOCK = r"""
 function global:Start-Sleep {}
@@ -37,12 +38,20 @@ function global:az {
     }
     $sub = arg '--subscription'
     if (-not $sub) { $sub = $fixture.host }
+    # Management-group scopes are addressed by scope, never through a subscription.
+    $scopeArg = arg '--scope'
+    $key = if ($scopeArg -match '/managementGroups/') { $scopeArg } else { $sub }
     $operation = $flat[0..([math]::Min(2, $flat.Count - 1))] -join ' '
     $failure = $fixture.failures["${operation}:$sub"]
     if ($failure) {
         Write-Error $failure -ErrorAction Continue
         $global:LASTEXITCODE = 9
         return
+    }
+    if ($call.StartsWith('account management-group show')) {
+        $group = $fixture.groups[(arg '--name')]
+        if (-not $group) { Write-Error 'ResourceNotFound' -ErrorAction Continue; $global:LASTEXITCODE = 3; return }
+        return (ConvertTo-Json -Depth 20 -InputObject $group)
     }
     if ($call.StartsWith('account list')) {
         return (ConvertTo-Json -Depth 20 -InputObject @($fixture.accounts.Values))
@@ -61,7 +70,7 @@ function global:az {
         return (ConvertTo-Json -Depth 20 -InputObject $fixture.identities[(arg '--ids')])
     }
     if ($call.StartsWith('role assignment list')) {
-        return (ConvertTo-Json -Depth 20 -InputObject @($grants[$sub]))
+        return (ConvertTo-Json -Depth 20 -InputObject @($grants[$key]))
     }
     if ($call.StartsWith('role assignment create')) {
         $writes.Add($call)
@@ -70,10 +79,10 @@ function global:az {
             return
         }
         if (-not $fixture.unverified) {
-            $grants[$sub] = @($grants[$sub]) + @(@{
+            $grants[$key] = @($grants[$key]) + @(@{
                 principalId = (arg '--assignee-object-id')
                 roleDefinitionId = "/subscriptions/$sub/providers/Microsoft.Authorization/roleDefinitions/$(arg '--role')"
-                scope = "/subscriptions/$sub"
+                scope = $(if ($key -eq $sub) { "/subscriptions/$sub" } else { $key })
             })
         }
         return '{}'
@@ -299,6 +308,54 @@ exit $code
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(calls["writes"])
             self.assertTrue(report["errors"])
+
+    # ------------------------------------------------ management group scope (S3 installer)
+
+    def with_group(self, tenant=TENANT):
+        data = fixture()
+        data["groups"] = {"finance": {"name": "finance", "displayName": "Finance", "tenantId": tenant}}
+        data["grants"][MG_SCOPE] = []
+        return data
+
+    def test_management_group_is_granted_once_at_the_group_not_per_subscription(self):
+        result, calls, report = self.run_access(
+            self.with_group(), options="-CostScopeManagementGroup finance -EnableExportManagement")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(len(calls["writes"]), 3)
+        for call in calls["writes"]:
+            self.assertIn(f"--scope {MG_SCOPE}", call)
+            self.assertNotIn("--subscription", call)
+            self.assertIn(f"--assignee-object-id {PRINCIPAL}", call)
+        self.assertTrue(any(CONTRIBUTOR in call for call in calls["writes"]))
+        [entry] = report["subscriptions"]
+        self.assertEqual((entry["kind"], entry["managementGroupId"], entry["scope"]),
+                         ("managementGroup", "finance", MG_SCOPE))
+        self.assertNotIn("--subscription", entry["roles"][0]["grantCommand"])
+        # The hosting subscription is not granted unless it was asked for.
+        self.assertFalse(any(f"/subscriptions/{HOST}" in call and "role assignment" in call
+                             for call in calls["calls"]))
+        again, calls, report = self.run_access(
+            {**self.with_group(), "grants": {HOST: [], OTHER: [], MG_SCOPE: [
+                {"principalId": PRINCIPAL, "scope": MG_SCOPE,
+                 "roleDefinitionId": f"{MG_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{role}"}
+                for role in (READER, COST_READER, CONTRIBUTOR)]}},
+            options="-CostScopeManagementGroup finance -EnableExportManagement")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertFalse(calls["writes"])
+
+    def test_management_group_must_be_alone_valid_and_in_the_tenant(self):
+        for data, options, scopes, expected in (
+            (self.with_group(), "-CostScopeManagementGroup finance", [HOST], "Choose one cost scope"),
+            (self.with_group(), "-CostScopeManagementGroup 'bad/group'", None, "Invalid management group"),
+            (self.with_group(HUMAN), "-CostScopeManagementGroup finance", None, "cross-tenant"),
+            (self.with_group(), "-CostScopeManagementGroup missing", None, "Reading management group failed"),
+        ):
+            with self.subTest(options=options, scopes=scopes):
+                result, calls, report = self.run_access(data, options=options, scopes=scopes)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(calls["writes"])
+                self.assertIn(expected, result.stdout + result.stderr + json.dumps(report))
 
 
 if __name__ == "__main__":
