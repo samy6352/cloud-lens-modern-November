@@ -143,6 +143,21 @@ try {
   check(await page.getByRole("radio", { name: "90 days" }).getAttribute("aria-checked") === "true", "Anomalies re-asks the server for a longer window");
   await axe(page, "Anomalies (dark)");
 
+  // Tags: cost grouped by a tag key's values, then the resources behind one value.
+  await page.goto(`${BASE}/v2/explore/tags`, { waitUntil: "domcontentloaded" });
+  const keyList = page.getByRole("list", { name: "Tag keys" });
+  await keyList.waitFor({ timeout: DATA_TIMEOUT });
+  const keyCount = await keyList.getByRole("button").count();
+  check(keyCount > 0, "Tags lists the tag keys in use", `${keyCount} keys`);
+  await keyList.getByRole("button").nth(Math.min(1, keyCount - 1)).click();
+  const valueButton = page.locator('[role="table"] [role="cell"] button').first();
+  await valueButton.waitFor({ timeout: 15000 });
+  const picked = (await valueButton.textContent())?.trim() ?? "";
+  await valueButton.click();
+  await page.getByRole("button", { name: "Clear" }).waitFor({ timeout: 15000 });
+  check(await page.getByText(/\d+ resources$/).last().isVisible(), "choosing a value lists the resources behind it", picked);
+  await axe(page, "Tags (dark)");
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");
   const other = errors.filter((e) => !/Content Security Policy|Refused to/i.test(e));

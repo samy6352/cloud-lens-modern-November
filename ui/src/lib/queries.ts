@@ -307,3 +307,49 @@ export const anomaliesQuery = (s: Scope, days: number, currency: string) =>
     queryFn: () => api<AnomalyReport>("dashboard/anomalies", { days, scope: s.scope, currency }),
     staleTime: 60_000,
   });
+
+export interface TagKey {
+  key: string;
+  cost: number;
+  resources: number;
+  platform: boolean;
+  values: number;
+}
+
+export interface TagResource {
+  id: string;
+  name: string;
+  service: string | null;
+  subscription: string | null;
+  subscription_id: string | null;
+  group: string | null;
+  cost: number;
+  /** Tag keys on this resource; `v[i]` is the index into `TagReport.values` of the value for `keys[i]`. */
+  keys: string[];
+  v: number[];
+  tag_status: "tagged" | "untagged" | "unknown";
+}
+
+export interface TagReport {
+  keys: TagKey[];
+  values: string[];
+  resources: TagResource[];
+  currency: string | null;
+  mixed: boolean;
+  tagged: { cost: number; resources: number };
+  untagged: { cost: number; resources: number };
+  unknown: { cost: number; resources: number };
+  tags_not_loaded: boolean;
+  total: number;
+  days: number;
+  truncated: boolean;
+  latest: string | null;
+}
+
+/** Heavy on purpose (every tagged resource, filtered in the browser), so cached for minutes. */
+export const tagsQuery = (s: Scope, days: number) =>
+  queryOptions({
+    queryKey: ["tags", s.scope ?? "", days],
+    queryFn: () => api<TagReport>("dashboard/tags", { days, scope: s.scope }),
+    staleTime: 5 * 60_000,
+  });

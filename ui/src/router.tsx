@@ -50,13 +50,18 @@ const anomaliesRoute = createRoute({
   path: "/explore/anomalies",
   component: lazyRouteComponent(() => import("./routes/Anomalies"), "AnomaliesPage"),
 });
+const tagsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/explore/tags",
+  component: lazyRouteComponent(() => import("./routes/Tags"), "TagsPage"),
+});
 const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/setup",
   component: lazyRouteComponent(() => import("./routes/Setup"), "SetupPage"),
 });
 
-const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute, setupRoute, classicRoute]);
+const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute, tagsRoute, setupRoute, classicRoute]);
 
 export function makeRouter(queryClient: QueryClient) {
   return createRouter({

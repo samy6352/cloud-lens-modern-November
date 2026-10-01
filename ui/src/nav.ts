@@ -66,7 +66,7 @@ export const WORKSPACES: Workspace[] = [
     screens: [
       { id: "billing", label: "Billing", icon: BadgeIndianRupee, to: "/explore/billing", migrated: true, keywords: ["statement", "invoice", "cost"] },
       classic("uptime", "Hourly Billing", Clock, ["uptime", "hours", "usage"]),
-      classic("tags", "Cost by Application / Tags", Tags, ["application", "tag"]),
+      { id: "tags", label: "Cost by Application / Tags", icon: Tags, to: "/explore/tags", migrated: true, keywords: ["application", "tag"] },
       { id: "resources", label: "All resources", icon: Boxes, to: "/explore/resources", migrated: true, keywords: ["inventory", "resource"] },
       { id: "anomalies", label: "Anomalies", icon: Bell, to: "/explore/anomalies", migrated: true, keywords: ["spike", "alert"] },
       classic("history", "History", History, ["archive", "compare"]),
