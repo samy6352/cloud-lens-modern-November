@@ -324,7 +324,7 @@ def test_waste_pricing_falls_back_when_the_ranked_read_fails(estate, monkeypatch
     original = warehouse.Reader.rows
 
     def rows(self, sql, *args, **kwargs):
-        if "resource_daily" in sql:
+        if resource_ranks.DAILY in sql:
             raise RuntimeError("simulated")
         return original(self, sql, *args, **kwargs)
 

@@ -398,8 +398,8 @@ def _ranked_costs(reader: Any, wanted: list[str], since: str) -> list[dict[str, 
 
     The presence query normalises every row's `ResourceId` in the window to find a few
     dozen resources -- 25 s on the 16.9M-row estate, `lower()` costing microseconds a
-    call under the database's libc collation. `resource_ids` holds that normalised id
-    once per identity, hash-indexed, and `resource_daily` its billed money per day, both
+    call under the database's libc collation. `resource_rank_ids` holds that normalised id
+    once per identity, hash-indexed, and `resource_rank_daily` its billed money per day, both
     built from the same published presence table. They answer only a connection that
     sees everything unconverted -- this reader has no scope, filter or currency of its
     own -- and a selected reporting month is applied to the day as the view would.

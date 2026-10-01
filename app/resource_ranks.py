@@ -15,17 +15,22 @@ What it is
 ----------
 Five tables, rebuilt together from the *published* `resource_presence`:
 
-    resource_ids          one integer `rkey` per identity the tab groups by:
+    resource_rank_ids     one integer `rkey` per identity the tab groups by:
                           (lower(trim(ResourceId)), lower(SubAccountId), currency)
                           -- also how Waste prices resources by id (`waste._costs_for`)
-    resource_raw          every raw (ResourceId, SubAccountId, BillingCurrency) spelling
+    resource_rank_raw     every raw (ResourceId, SubAccountId, BillingCurrency) spelling
                           and the rkey it folds to -- so a page can go back to presence
                           through its ResourceId index, and a narrowed reader can join
                           to integers without re-normalising every row
-    resource_daily        (ChargePeriodStart, rkey, BilledCost), the integer fact
+    resource_rank_daily   (ChargePeriodStart, rkey, BilledCost), the integer fact
     resource_rank_periods the periods ranked, each by its exact bounds (lo, mid, hi):
                           prior is (lo, mid], current is (mid, hi]
     resource_ranks        (period, rnk, rkey, cost, prior) for each of those periods
+
+Every name carries the `resource_rank` prefix. The local database is shared with
+CloudLens v2, which publishes its own `resource_ids` (a view over `resource_ids_a/_b`);
+a v3 table of that name was dropped and renamed over it by each rebuild here, and v2
+then refused to start.
 
 Periods are keyed by their *bounds*, not their names. A request is served from a stored
 ranking only when the bounds it computes -- by the same rule `reporting.window` uses --
@@ -54,10 +59,10 @@ from . import presence
 
 log = logging.getLogger("cloudlens.resource_ranks")
 
-IDS = "resource_ids"
-SUBS = "resource_subs"
-RAW = "resource_raw"
-DAILY = "resource_daily"
+IDS = "resource_rank_ids"
+SUBS = "resource_rank_subs"
+RAW = "resource_rank_raw"
+DAILY = "resource_rank_daily"
 PERIODS = "resource_rank_periods"
 TOTALS = "resource_rank_totals"
 TABLE = "resource_ranks"
@@ -313,7 +318,7 @@ def scope_keys(reader: Any) -> list[int] | None:
 
     Read from the connection's own `_scope`, so it is exactly the scope every other
     query on the connection applies. "All of them" is exact, not a shortcut: every
-    ranked resource belongs to one of `resource_subs`, so a scope naming each of those
+    ranked resource belongs to one of `resource_rank_subs`, so a scope naming each of those
     selects every row -- and can use the unscoped paths and totals.
     """
     rows = reader.rows(
@@ -327,7 +332,7 @@ def filters_sql(*, skeys: list[int] | None, q: str, currency: str, change: str
                 ) -> tuple[list[str], list[Any], list[str], list[Any]]:
     """`(identity conditions on i, their params, ranking conditions on r, their params)`.
 
-    `i` is `resource_ids`, `r` a ranking. Kept apart because identity conditions are
+    `i` is `resource_rank_ids`, `r` a ranking. Kept apart because identity conditions are
     resolved to a set of keys first; ranking conditions read columns the ranking holds.
     """
     ids: list[str] = []
