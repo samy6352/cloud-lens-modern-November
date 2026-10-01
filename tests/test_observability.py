@@ -14,10 +14,11 @@ from starlette.requests import Request
 
 assert os.environ.get("PGSCHEMA", "").startswith("t_cl_test_observability_")
 
-from app import cost, main, observability, reporting
+from app import cost, main, observability, reporting, service_health
 from app.auth import User
 from app.azure_updates import SourceError
 from app.exports import _load_rows
+from app.service_health import ScopeNotVisible
 from app.warehouse import insert_rows, warehouse
 
 A = "11111111-1111-1111-1111-111111111111"
@@ -152,6 +153,66 @@ class Routes(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SourceError):
                 await observability.scoped_graph("resources", [])
             self.assertEqual(query.await_count, 1)
+
+    async def test_unreadable_subscriptions_are_an_unavailable_envelope_not_a_failure(self):
+        # An identity that cannot see the subscriptions is an expected state: HTTP 200, but still
+        # "unavailable" -- never an empty success -- with every field a screen needs to say why.
+        empty = {"source": "Azure Resource Graph (resourcechanges)", "changes": []}
+        with patch.object(main, "permitted", AsyncMock(return_value=[A])), \
+                patch.object(main, "auth_service", return_value=SimpleNamespace(
+                    sso=SimpleNamespace(delegated=False))):
+            response = await main._live_evidence_response(
+                self.request(), A, 7, AsyncMock(side_effect=ScopeNotVisible("Grant Reader.")), empty)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        payload = json.loads(response.body)
+        self.assertEqual((payload["status"], payload["available"]), ("unavailable", False))
+        self.assertEqual(payload["reason"], "Grant Reader.")
+        self.assertEqual(payload["notices"], ["Grant Reader."])
+        self.assertEqual((payload["changes"], payload["source"]), ([], empty["source"]))
+        self.assertEqual(payload["window"]["days"], 7)
+        self.assertTrue(payload["generated_at"].endswith("Z"))
+
+    async def test_only_visibility_refusals_are_softened(self):
+        # Throttling, outages, timeouts and other 4xx keep failing loudly.
+        for error in (httpx.HTTPStatusError("x", request=httpx.Request("POST", "https://x"),
+                                            response=httpx.Response(429)),
+                      httpx.HTTPStatusError("x", request=httpx.Request("POST", "https://x"),
+                                            response=httpx.Response(500)),
+                      SourceError("Resource Graph returned invalid JSON."), TimeoutError()):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(main, "permitted", AsyncMock(return_value=[A])), \
+                    patch.object(main, "auth_service", return_value=SimpleNamespace(
+                        sso=SimpleNamespace(delegated=False))):
+                response = await main._live_evidence_response(
+                    self.request(), A, 7, AsyncMock(side_effect=error), {"changes": []})
+            self.assertEqual(response.status_code, 502)
+            self.assertNotIn("changes", json.loads(response.body))
+
+    async def test_resource_graph_refusal_is_classified_from_its_error_code(self):
+        def arg(status, body):
+            def handler(request):
+                return httpx.Response(status, content=body if isinstance(body, bytes) else json.dumps(body).encode())
+            real = httpx.AsyncClient
+            return patch.object(service_health.httpx, "AsyncClient",
+                                lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+        no_subs = {"error": {"code": "BadRequest", "details": [{"code": "NoValidSubscriptionsInQueryRequest"}]}}
+        for status, body, expected in (
+                (400, no_subs, ScopeNotVisible),
+                (403, {"error": {"code": "AuthorizationFailed"}}, ScopeNotVisible),
+                (400, {"error": {"code": "BadRequest", "details": [{"code": "InvalidQuery"}]}}, httpx.HTTPStatusError),
+                (400, b"not json", httpx.HTTPStatusError),
+                (400, {"error": "oops"}, httpx.HTTPStatusError),
+                (429, no_subs, httpx.HTTPStatusError),
+                (500, no_subs, httpx.HTTPStatusError)):
+            with self.subTest(status=status, body=str(body)[:40]), arg(status, body):
+                with self.assertRaises(expected):
+                    await service_health._arg_page("Resources", [A], "token", {})
+
+    async def test_scope_not_visible_is_still_a_source_error(self):
+        # Other callers (Service Health) already treat SourceError as a safe, public message.
+        self.assertTrue(issubclass(ScopeNotVisible, SourceError))
 
     async def test_both_routes_are_registered_before_dynamic_dashboard(self):
         paths = [route.path for route in main.app.routes]

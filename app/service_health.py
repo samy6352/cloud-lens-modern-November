@@ -14,6 +14,15 @@ import httpx
 from .azure_updates import SourceCache, SourceError, envelope, iso_date, plain_text, read_response
 from .cost import ARM, azure
 
+
+class ScopeNotVisible(SourceError):
+    """Resource Graph refused because this identity cannot see the selected subscriptions.
+
+    A definite, expected condition (no Reader role yet, or a subscription the identity was never
+    given), as opposed to a timeout, throttle or outage, which stay failures.
+    """
+
+
 SOURCE = {"name": "Azure Service Health", "visibility": "private",
           "url": "https://portal.azure.com/#view/Microsoft_Azure_Health/AzureHealthBrowseBlade/~/serviceIssues"}
 HEALTH_TTL = 120
@@ -138,6 +147,26 @@ async def _groups(scopes: list[str]) -> list[tuple[str, list[str]]]:
     return list(groups.items())
 
 
+async def _scope_refused(response: httpx.Response) -> bool:
+    """Whether a 400/403 from Resource Graph means "you cannot see these subscriptions"."""
+    if response.status_code == 403:
+        return True
+    body = bytearray()
+    async for chunk in response.aiter_bytes(chunk_size=8192):
+        body.extend(chunk)
+        if len(body) > 65536:
+            return False
+    try:
+        error = json.loads(bytes(body)).get("error") or {}
+    except (ValueError, UnicodeError, AttributeError):
+        return False
+    if not isinstance(error, dict):
+        return False
+    details = error.get("details") if isinstance(error.get("details"), list) else []
+    codes = {str(error.get("code", ""))} | {str(d.get("code", "")) for d in details if isinstance(d, dict)}
+    return "NoValidSubscriptionsInQueryRequest" in codes
+
+
 async def _arg_page(query: str, scopes: list[str], token: str,
                     options: dict[str, Any]) -> dict[str, Any]:
     if not scopes:
@@ -150,6 +179,9 @@ async def _arg_page(query: str, scopes: list[str], token: str,
             json={"query": query, "subscriptions": scopes, "options": options},
         ) as response,
     ):
+        if response.status_code in (400, 403) and await _scope_refused(response):
+            raise ScopeNotVisible("The Azure identity used by CloudLens cannot read the selected "
+                                  "subscriptions. Grant it Reader on them to see this view.")
         data = await read_response(response, MAX_ARG_BYTES)
     try:
         payload = json.loads(data)

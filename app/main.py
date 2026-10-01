@@ -4345,19 +4345,20 @@ async def dashboard_service_health(request: Request, scope: str = "",
 async def _live_evidence_response(
     request: Request, scope: str, window_days: int,
     loader: Callable[[list[str], int], Awaitable[dict[str, Any]]],
+    empty: dict[str, Any] | None = None,
 ) -> JSONResponse:
     import httpx
 
     from .azure_updates import SourceError, error_text
     from .cost import CostError
     from .observability import evidence_window
-    from .service_health import normalize_scopes
+    from .service_health import ScopeNotVisible, normalize_scopes
 
     user = current_user(request)
     headers = {"Cache-Control": "private, no-store"}
     try:
         picked = normalize_scopes(scope.split(","))
-        evidence_window(window_days)
+        window = evidence_window(window_days)
     except SourceError as exc:
         raise HTTPException(400, str(exc)) from exc
     allowed = await permitted(user)
@@ -4366,6 +4367,16 @@ async def _live_evidence_response(
     try:
         async with asyncio.timeout(110), as_user(user):
             result = await loader(picked, window_days)
+    except ScopeNotVisible as exc:
+        # An expected state, not an outage: the identity cannot see these subscriptions yet. It is
+        # still "unavailable" (never an empty success), but a complete envelope so a screen can say so.
+        reason = error_text(exc)
+        log.info("live evidence not visible to this identity: %s", reason)
+        return JSONResponse({
+            "status": "unavailable", "available": False, "reason": reason, "error": reason,
+            "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "window": window, "notices": [reason], "truncated": False, **(empty or {}),
+        }, headers=headers)
     except (SourceError, CostError, httpx.HTTPError, TimeoutError) as exc:
         error = error_text(SourceError(str(exc))) if isinstance(exc, CostError) else error_text(exc)
         log.warning("live evidence source failed: %s", error)
@@ -4378,18 +4389,21 @@ async def _live_evidence_response(
 async def dashboard_change_analysis(request: Request, scope: str = "",
                                     window_days: int = 7) -> JSONResponse:
     """Recent resource changes and scoped billing context, without modifying Azure."""
-    from .change_analysis import report
+    from .change_analysis import SOURCE, report
 
-    return await _live_evidence_response(request, scope, window_days, report)
+    return await _live_evidence_response(request, scope, window_days, report,
+                                         {"source": SOURCE, "changes": []})
 
 
 @app.get("/api/dashboard/performance")
 async def dashboard_performance(request: Request, scope: str = "",
                                 window_days: int = 7) -> JSONResponse:
     """Bounded service-specific metrics, with unknown observations kept distinct from zero."""
-    from .performance_metrics import report
+    from .performance_metrics import SOURCE, report
 
-    return await _live_evidence_response(request, scope, window_days, report)
+    return await _live_evidence_response(
+        request, scope, window_days, report,
+        {"source": SOURCE, "resources": [], "inventory_count": None, "sampled_count": 0})
 
 
 @app.get("/api/dashboard/ai-billing")
