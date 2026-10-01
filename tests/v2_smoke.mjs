@@ -173,6 +173,35 @@ try {
   check((await hoursHeader.getAttribute("aria-sort")) !== "none", "clicking Hours sorts the meters", await hoursHeader.getAttribute("aria-sort"));
   await axe(page, "Hourly Billing (dark)");
 
+  // History: the real server has no archive configured locally, so the real state is "unavailable".
+  await page.goto(`${BASE}/v2/explore/history`, { waitUntil: "domcontentloaded" });
+  await page.getByText("Archive unavailable").waitFor({ timeout: DATA_TIMEOUT });
+  check(true, "History explains an unconfigured archive");
+  await axe(page, "History, archive unavailable (dark)");
+
+  // ... and a populated comparison, served by mocked archive endpoints.
+  await page.route(/\/api\/archive\?/, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ enabled: true, reachable: true, account: "stacct", container: "cloudlens", count: 3,
+      comparable: ["actual"], days: { actual: ["2026-09-30", "2026-09-29", "2026-09-28"] }, files: [] }),
+  }));
+  await page.route(/\/api\/archive\/compare\?/, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ currency: "INR", group_by: "ServiceName",
+      earlier: { day: "2026-09-29", cost: 1000000, rows: 500, from: "2026-09-01", to: "2026-09-27" },
+      later: { day: "2026-09-30", cost: 1012500, rows: 520, from: "2026-09-01", to: "2026-09-27" },
+      total_delta: 12500, total_percent: 1.25, row_delta: 20, coverage_changed: false, comparison_period: { from: "2026-09-01", to: "2026-09-27", days: 27 },
+      changes: [{ key: "Azure Databricks", was: 400000, now: 420000, delta: 20000, percent: 5 },
+                { key: "Storage", was: 100000, now: 92500, delta: -7500, percent: -7.5 }] }),
+  }));
+  await page.goto(`${BASE}/v2/explore/history`, { waitUntil: "domcontentloaded" });
+  await page.getByText("Azure Databricks").waitFor({ timeout: 15000 });
+  check(await page.getByText("Restated by").isVisible(), "History shows the restatement between two reads");
+  check(await page.getByText("Storage", { exact: true }).isVisible(), "History lists decreases as well as increases");
+  await axe(page, "History comparison (dark)");
+  await page.unroute(/\/api\/archive\?/);
+  await page.unroute(/\/api\/archive\/compare\?/);
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");
   const other = errors.filter((e) => !/Content Security Policy|Refused to/i.test(e));

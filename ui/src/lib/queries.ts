@@ -410,3 +410,61 @@ export const uptimeQuery = (s: Scope, days: number) =>
     queryFn: () => api<UptimeReport>("dashboard/uptime", { days, scope: s.scope }),
     staleTime: 5 * 60_000,
   });
+
+export interface ArchiveStatus {
+  enabled: boolean;
+  reachable: boolean;
+  account: string;
+  container: string;
+  error?: string | null;
+  count?: number;
+  /** Datasets with at least two snapshot days, so they can be compared. */
+  comparable?: string[];
+  /** Snapshot days per dataset, newest first. */
+  days?: Record<string, string[]>;
+}
+
+export interface ArchiveSide {
+  day: string;
+  cost: number;
+  rows: number;
+  from?: string | null;
+  to?: string | null;
+}
+
+export interface ArchiveChange {
+  key: string | null;
+  was: number;
+  now: number;
+  delta: number;
+  percent: number | null;
+}
+
+export interface ArchiveComparison {
+  currency: string | null;
+  group_by: string;
+  earlier: ArchiveSide;
+  later: ArchiveSide;
+  total_delta: number | null;
+  total_percent: number | null;
+  row_delta: number;
+  coverage_changed?: boolean;
+  coverage_added?: { coverage_keys?: number; cost?: number };
+  coverage_removed?: { coverage_keys?: number; cost?: number };
+  comparison_period?: { from: string; to: string; days: number } | null;
+  changes: ArchiveChange[];
+}
+
+export const archiveQuery = queryOptions({
+  queryKey: ["archive"],
+  queryFn: () => api<ArchiveStatus>("archive", { limit: 200 }),
+  staleTime: 60_000,
+});
+
+/** What changed between two archived reads of the same dataset. */
+export const archiveCompareQuery = (s: Scope, p: { dataset: string; earlier: string; later: string; groupBy: string }) =>
+  queryOptions({
+    queryKey: ["archive-compare", s.scope ?? "", p.dataset, p.earlier, p.later, p.groupBy],
+    queryFn: () => api<ArchiveComparison>("archive/compare", { dataset: p.dataset, earlier: p.earlier, later: p.later, group_by: p.groupBy, top: 20, scope: s.scope }),
+    staleTime: 5 * 60_000,
+  });

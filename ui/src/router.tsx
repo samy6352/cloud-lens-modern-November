@@ -60,13 +60,18 @@ const uptimeRoute = createRoute({
   path: "/explore/uptime",
   component: lazyRouteComponent(() => import("./routes/Uptime"), "UptimePage"),
 });
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/explore/history",
+  component: lazyRouteComponent(() => import("./routes/History"), "HistoryPage"),
+});
 const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/setup",
   component: lazyRouteComponent(() => import("./routes/Setup"), "SetupPage"),
 });
 
-const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute, tagsRoute, uptimeRoute, setupRoute, classicRoute]);
+const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute, tagsRoute, uptimeRoute, historyRoute, setupRoute, classicRoute]);
 
 export function makeRouter(queryClient: QueryClient) {
   return createRouter({
