@@ -158,6 +158,21 @@ try {
   check(await page.getByText(/\d+ resources$/).last().isVisible(), "choosing a value lists the resources behind it", picked);
   await axe(page, "Tags (dark)");
 
+  // Hourly Billing: hour-meter quantities, filterable by usage pattern, sortable.
+  await page.goto(`${BASE}/v2/explore/uptime`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Hourly Billing", level: 2 }).waitFor({ timeout: DATA_TIMEOUT });
+  await rows.first().waitFor({ timeout: DATA_TIMEOUT });
+  check(await page.getByText(/not monitored availability/).first().isVisible(), "Hourly Billing says it is billing quantity, not availability");
+  const meterRows = async () => Number(await page.locator('[role="table"]').last().getAttribute("aria-rowcount"));
+  const allMeters = await meterRows();
+  await page.getByRole("radio", { name: "Always on" }).click();
+  await page.waitForFunction((n) => Number(document.querySelector('[role="table"]:last-of-type')?.getAttribute("aria-rowcount")) < n, allMeters, { timeout: 15000 }).catch(() => {});
+  check((await meterRows()) < allMeters, "the Always on filter narrows the meters", `${allMeters} → ${await meterRows()}`);
+  const hoursHeader = page.locator('[role="columnheader"]', { hasText: "Hours" }).last();
+  await hoursHeader.locator("button").click();
+  check((await hoursHeader.getAttribute("aria-sort")) !== "none", "clicking Hours sorts the meters", await hoursHeader.getAttribute("aria-sort"));
+  await axe(page, "Hourly Billing (dark)");
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");
   const other = errors.filter((e) => !/Content Security Policy|Refused to/i.test(e));

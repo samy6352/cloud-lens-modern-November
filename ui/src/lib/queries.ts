@@ -353,3 +353,60 @@ export const tagsQuery = (s: Scope, days: number) =>
     queryFn: () => api<TagReport>("dashboard/tags", { days, scope: s.scope }),
     staleTime: 5 * 60_000,
   });
+
+export interface UptimeMeter {
+  id: string;
+  key: string;
+  name: string;
+  service: string | null;
+  subscription: string | null;
+  resource_group: string | null;
+  region: string | null;
+  meter: string | null;
+  hours: number;
+  cost: number;
+  rate: number;
+  units: number;
+  span_days: number;
+  days_billed: number;
+  uptime_pct: number | null;
+  always_on: boolean;
+  schedulable: boolean;
+  schedule_status: string;
+  first_day: string;
+  last_day: string;
+}
+
+export interface UptimeReport {
+  days: number;
+  latest: string | null;
+  currency: string | null;
+  mixed_currency: boolean;
+  truncated: boolean;
+  totals: {
+    hours: number;
+    cost: number;
+    total_spend: number;
+    coverage_pct: number | null;
+    avg_rate: number | null;
+    run_rate: number | null;
+    resources: number;
+    meters: number;
+    always_on: number;
+    always_on_cost: number;
+    schedulable: number;
+    schedulable_cost: number;
+  };
+  resources: UptimeMeter[];
+  trend: { labels: string[]; hours: number[]; cost: number[]; rate: number[] };
+  weekday: Array<{ day: string; short: string; days: number; hours: number; cost: number }>;
+  tags_not_loaded: boolean;
+}
+
+/** Hour-meter billing quantities (not monitored availability). Heavy: cached for minutes. */
+export const uptimeQuery = (s: Scope, days: number) =>
+  queryOptions({
+    queryKey: ["uptime", s.scope ?? "", days],
+    queryFn: () => api<UptimeReport>("dashboard/uptime", { days, scope: s.scope }),
+    staleTime: 5 * 60_000,
+  });
