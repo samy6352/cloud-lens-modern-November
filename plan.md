@@ -472,7 +472,7 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
   month requested for any listed subscription (never beyond 13) and merges tasks across a subscription's jobs.
   Subscriptions set up after the choice get the whole horizon in their first job. Known limit: a subscription's
   daily update waits while its earlier-history job runs (existing one-job-per-subscription rule; R8 allows 24 h).
-- **ADR-6 (1 Oct) Keep the Python loader: `azure_storage` 1.10 drops the sign of decimals between −1 and 0.**
+- **ADR-6 (1 Oct) [accepted by Ravi, 1 Oct 16:07] Keep the Python loader: `azure_storage` 1.10 drops the sign of decimals between −1 and 0.**
   Spike on the test deployment's PostgreSQL (D2ds_v5; a point-in-time copy, because the original was stuck),
   harness outside the repo (`…\Microsoft Scout\cloud-lens-v3-s5`): container instances in the VNet as
   `id-cloudlens`; the Python side is the app's own `ingest_export` path; the SQL side is
