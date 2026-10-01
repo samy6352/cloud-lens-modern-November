@@ -194,3 +194,21 @@ def test_the_tab_asks_for_the_fast_list_then_the_history():
     assert "expand=history" in server and '"/api/schedules/history"' in server
     assert "&history=false" in client and "loadScheduleHistory(sched, token, sequence)" in client
 
+
+def test_startup_warms_the_export_list_without_expansion(three_exports):
+    import app.main as main
+
+    asyncio.run(main._warm_export_list())
+    reads = [c for c in three_exports["calls"] if c["method"] == "GET"]
+    assert len(reads) == 1 and reads[0]["cache"] is True
+
+
+def test_a_failed_warm_up_is_swallowed(monkeypatch):
+    import app.main as main
+
+    async def boom(*a, **k):
+        raise RuntimeError("azure down")
+
+    monkeypatch.setattr(schedules, "listing", boom)
+    asyncio.run(main._warm_export_list())
+

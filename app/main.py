@@ -181,6 +181,21 @@ def _finish_savings(key: tuple[Any, ...], task: asyncio.Task) -> None:
             _savings_failed(state, message)
 
 
+async def _warm_export_list() -> None:
+    """Read each subscription's export list once at startup, as the server identity.
+
+    The first Reports load after a restart waited 4-10s on Azure for it, queued behind the
+    overview's own reads. The cache key includes the caller, and the server identity is the
+    default caller, so this serves the local admin and every user without delegated sign-in.
+    """
+    from . import schedules
+
+    try:
+        await schedules.listing(None, expand=False)
+    except Exception as exc:  # noqa: BLE001 - a warm-up must never matter
+        log.info("export list warm-up skipped: %s", str(exc)[:160])
+
+
 async def _refresh_overview() -> None:
     from . import cost
 
@@ -762,6 +777,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             app.state.snapshot_bootstrap_ready = True
         background.append(asyncio.create_task(_refresh_overview(), name="overview-refresh"))
+        if os.getenv("CLOUDLENS_WARM_EXPORTS", "true").lower() != "false":
+            background.append(asyncio.create_task(_warm_export_list(), name="export-list-warmup"))
         if not read_only_mode():
             background.extend([
                 asyncio.create_task(_daily_refresh(), name="daily-refresh"),
