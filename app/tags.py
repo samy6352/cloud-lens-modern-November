@@ -42,6 +42,10 @@ log = logging.getLogger("cloudlens.tags")
 # a browser's memory. Beyond this the response says it is partial rather than quietly trimming.
 MAX_RESOURCES = 8000
 
+# Candidates read from the stored rankings beyond the rows returned, so a resource whose raw
+# spellings merge into one ranked identity cannot fall just outside them.
+CANDIDATE_MARGIN = 1000
+
 # Per-resource-per-day cells. A large estate over 90 days can reach seven figures, which is a
 # response nobody wants to parse and a browser tab nobody wants to scroll. Past this the daily
 # detail is dropped and the response says so, so the chart can fall back to estate-wide totals
@@ -152,6 +156,60 @@ def merge_live_keys(payload: dict[str, Any], live: list[dict[str, Any]]) -> dict
 
 
 
+def _ranked_candidates(r: Any, hi: Any, days: int, code: str | None
+                       ) -> tuple[list[str], float | None] | None:
+    """Raw ResourceIds of the highest-cost resources, from the stored rankings, or None.
+
+    The full ranking of two million resources, to publish the top 8,000, was 20 of this tab's
+    34 seconds. `resource_ranks` already holds every resource's cost per rolling window, in
+    order, so the answer's candidates are a range read. The caller still computes every figure
+    itself, over only these ids -- this chooses *which* resources, never what they cost.
+
+    None means "use the full query": a calendar month or a window the rankings do not hold, a
+    converted or filtered reader, a stale ranking, or fewer rankings than needed. The second
+    value is the lowest cost among the candidates, which the caller uses to prove nothing
+    outside them could have made the answer, or None when every ranked resource is included.
+    """
+    import datetime as dt
+
+    from . import reporting, resource_ranks
+
+    if (reporting.month_bounds() or getattr(r, "narrowed", False)
+            or not getattr(r, "ranks", None) or days not in resource_ranks.ROLLING):
+        return None
+    newest = dt.date.fromisoformat(str(hi)[:10])
+    lo, mid, top = resource_ranks.window_dates(newest, days)
+    # The window the caller aggregates is (newest - days, newest], which is the ranking's
+    # "current" half; anything else would rank a different set of days.
+    if top != newest or mid != newest - dt.timedelta(days=days):
+        return None
+    stored = resource_ranks.stored_period(r, lo, mid, top)
+    if stored is None:
+        return None
+
+    skeys = resource_ranks.scope_keys(r) if getattr(r, "scoped", False) else None
+    where, params = ["period = ?"], [stored]
+    if code is not None:
+        # Rankings hold the currency upper-cased, with blank and UNKNOWN as "unknown".
+        norm = code.strip().upper()
+        where.append("currency = ?")
+        params.append("unknown" if norm in ("", "UNKNOWN") else norm)
+    if skeys is not None:
+        where.append("skey = ANY(?)")
+        params.append(skeys)
+    wanted = MAX_RESOURCES + 1 + CANDIDATE_MARGIN
+    ranked = r.rows(
+        f"SELECT rkey, cost FROM {resource_ranks.TABLE} WHERE {' AND '.join(where)} "
+        "ORDER BY rnk LIMIT ?", limit=None, params=[*params, wanted])
+    if not ranked:
+        return None
+    raw = [row["raw"] for row in r.rows(
+        f"SELECT raw FROM {resource_ranks.RAW} WHERE rkey = ANY(?)", limit=None,
+        params=[[row["rkey"] for row in ranked]])]
+    cutoff = float(ranked[-1]["cost"]) if len(ranked) >= wanted else None
+    return raw, cutoff
+
+
 def cost_by_tag(scope: list[str] | None = None, days: int = 30,
                 currency: str | None = None) -> dict[str, Any]:
     """Every tagged resource in the window, with its cost, its tag keys and its daily spend."""
@@ -186,6 +244,7 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
             f'FROM {agg} WHERE {window} GROUP BY 1',
             limit=MAX_RESOURCES + 1,
         )
+        display_currency = currency
         currency, mixed = _dominant(totals)
         display_window = window
         if mixed:
@@ -206,27 +265,78 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
         if tag_source:
             # The subscription's display name from the rollup, which holds it per
             # subscription; the per-resource summary does not carry it.
-            rows = r.rows(
-                f"""
-                WITH names AS (
-                  SELECT "SubAccountId" AS name_sub, MAX("SubAccountName") AS name_text
-                  FROM {agg} WHERE {display_window} GROUP BY 1
-                ), top AS (
+            lateral = resource_tags.lateral_sql(tag_source, "top.id", "top.currency", start, str(hi)[:10])
+            rows = None
+            candidates = None
+            if not display_currency and named == "resource_presence":
+                try:
+                    candidates = _ranked_candidates(r, hi, days, currency if mixed else None)
+                except Exception as exc:  # noqa: BLE001 - the full query still answers
+                    log.warning("cost_by_tag: ranked candidates failed (%s); using the full query",
+                                str(exc)[:300])
+            if candidates is not None:
+                raw, cutoff = candidates
+                part = f"""
                   SELECT {identity}
                     MAX(COALESCE(name_text, ''))                              AS subscription,
                     {grouped}
                   FROM {named} LEFT JOIN names ON name_sub = "SubAccountId"
-                  WHERE {display_window}
-                  GROUP BY 1, 6
-                  ORDER BY cost DESC, id, currency
-                  LIMIT {MAX_RESOURCES + 1}
+                  WHERE {display_window} AND %s
+                  GROUP BY 1, 6"""
+                by_id = part % '"ResourceId" = ANY(?)'
+                # Rows the rankings leave out: no ResourceId, or one that is only spaces. They are
+                # grouped by that text or by name, exactly as the full query does.
+                by_name = part % "(\"ResourceId\" IS NULL OR trim(\"ResourceId\") = '')"
+                ranked = r.rows(
+                    f"""
+                    WITH names AS (
+                      SELECT "SubAccountId" AS name_sub, MAX("SubAccountName") AS name_text
+                      FROM {agg} WHERE {display_window} GROUP BY 1
+                    ), part AS (
+                      {by_id}
+                      UNION ALL
+                      {by_name}
+                    ), top AS (
+                      SELECT * FROM part ORDER BY cost DESC, id, currency LIMIT {MAX_RESOURCES + 1}
+                    )
+                    SELECT top.*, tg.tags, NOT tg.unknown AS tags_available FROM top
+                    {lateral}
+                    ORDER BY cost DESC, id, currency
+                    """,
+                    limit=MAX_RESOURCES + 1, params=[raw],
                 )
-                SELECT top.*, tg.tags, NOT tg.unknown AS tags_available FROM top
-                {resource_tags.lateral_sql(tag_source, "top.id", "top.currency", start, str(hi)[:10])}
-                ORDER BY cost DESC, id, currency
-                """,
-                limit=MAX_RESOURCES + 1,
-            )
+                # Accepted only when nothing left out of the candidates could have ranked inside
+                # the answer: the cut-off is the lowest cost among the candidates, and a resource's
+                # cost in one raw spelling never exceeds its ranked (merged) cost. `cutoff` None
+                # means every ranked resource was a candidate.
+                if cutoff is None or (len(ranked) > MAX_RESOURCES
+                                      and float(ranked[MAX_RESOURCES]["cost"]) > cutoff):
+                    rows = ranked
+                else:
+                    log.info("cost_by_tag: ranked candidates cannot prove the top %d; "
+                             "using the full query", MAX_RESOURCES)
+            if rows is None:
+                rows = r.rows(
+                    f"""
+                    WITH names AS (
+                      SELECT "SubAccountId" AS name_sub, MAX("SubAccountName") AS name_text
+                      FROM {agg} WHERE {display_window} GROUP BY 1
+                    ), top AS (
+                      SELECT {identity}
+                        MAX(COALESCE(name_text, ''))                              AS subscription,
+                        {grouped}
+                      FROM {named} LEFT JOIN names ON name_sub = "SubAccountId"
+                      WHERE {display_window}
+                      GROUP BY 1, 6
+                      ORDER BY cost DESC, id, currency
+                      LIMIT {MAX_RESOURCES + 1}
+                    )
+                    SELECT top.*, tg.tags, NOT tg.unknown AS tags_available FROM top
+                    {lateral}
+                    ORDER BY cost DESC, id, currency
+                    """,
+                    limit=MAX_RESOURCES + 1,
+                )
         else:
             rows = r.rows(
                 f"""
