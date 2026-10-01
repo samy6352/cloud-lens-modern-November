@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
@@ -29,6 +30,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -179,6 +181,41 @@ def _finish_savings(key: tuple[Any, ...], task: asyncio.Task) -> None:
             message = ("The scan was cancelled." if task.cancelled()
                        else (str(exc) or type(exc).__name__)[:200])
             _savings_failed(state, message)
+
+
+# The tabs that call live Azure on every cold read (13-35s). Warmed in the viewer's own session
+# because the snapshot cache key includes who is asking: nothing a server-side warm could do
+# would ever be read by a person.
+LIVE_AZURE_TABS = (
+    "/api/dashboard/recommendations", "/api/dashboard/esu", "/api/dashboard/governance",
+    "/api/dashboard/rightsizing", "/api/dashboard/savings", "/api/dashboard/waste",
+)
+
+
+async def warm_live_tabs(session_cookie: str, *, days: int = 30,
+                         paths: tuple[str, ...] = LIVE_AZURE_TABS) -> int:
+    """Request the live-Azure tabs once, one at a time, as the person who just signed in.
+
+    Goes through the application itself, so each answer lands under exactly the cache key that
+    person's browser will ask for -- the unscoped default view, which is what the UI sends when
+    every subscription is selected. One at a time because Azure throttles per tenant.
+    """
+    if os.getenv("CLOUDLENS_WARM_LIVE_TABS", "true").lower() == "false":
+        return 0
+    warmed = 0
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1",
+                                     cookies={COOKIE: session_cookie}, timeout=300) as client:
+            for path in paths:
+                try:
+                    r = await client.get(path, params={"days": days})
+                    warmed += r.status_code == 200
+                except Exception as exc:  # noqa: BLE001 - one tab failing must not stop the rest
+                    log.info("live tab warm-up %s skipped: %s", path, str(exc)[:120])
+    except Exception as exc:  # noqa: BLE001 - a warm-up must never matter
+        log.info("live tab warm-up skipped: %s", str(exc)[:160])
+    return warmed
 
 
 async def _warm_export_list() -> None:
@@ -1575,11 +1612,13 @@ async def sso_callback(request: Request) -> Response:
             return RedirectResponse(_consent_redirect(auth, problem), status_code=303)
         return RedirectResponse(f"/login?error={quote(problem, safe='')}", status_code=303)
 
-    response = RedirectResponse(safe_next(target), status_code=303)
+    token = entra_sign(session.sid, auth.sessions.secret)
+    response = RedirectResponse(safe_next(target), status_code=303,
+                                background=BackgroundTask(warm_live_tabs, token))
     response.delete_cookie("cloudlens_oauth", path="/")
     response.set_cookie(
         COOKIE,
-        entra_sign(session.sid, auth.sessions.secret),
+        token,
         max_age=int(float(os.getenv("AUTH_SESSION_HOURS", "12")) * 3600),
         **auth.cookie_kwargs(request.url.scheme == "https"),
     )
@@ -1602,10 +1641,12 @@ def login(body: Credentials, request: Request) -> JSONResponse:
                             status_code=429 if retry_after else 401, headers=headers)
 
     log.info("%s signed in from %s", user.name, client)
-    response = JSONResponse({"user": user.public()})
+    token = auth.sessions.issue(user)
+    response = JSONResponse({"user": user.public()},
+                            background=BackgroundTask(warm_live_tabs, token))
     response.set_cookie(
         COOKIE,
-        auth.sessions.issue(user),
+        token,
         max_age=int(float(os.getenv("AUTH_SESSION_HOURS", "12")) * 3600),
         **auth.cookie_kwargs(request.url.scheme == "https"),
     )

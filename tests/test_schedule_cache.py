@@ -212,3 +212,68 @@ def test_a_failed_warm_up_is_swallowed(monkeypatch):
     monkeypatch.setattr(schedules, "listing", boom)
     asyncio.run(main._warm_export_list())
 
+
+# ------------------------------------------------- live-Azure tabs warmed on sign-in
+
+def _recording_app(seen, fail=()):
+    """A bare ASGI app: records who asked for what, and answers 502 for the tabs in `fail`."""
+    from urllib.parse import parse_qs
+
+    async def stand_in(scope, receive, send):
+        headers = dict(scope["headers"])
+        cookie = headers.get(b"cookie", b"").decode()
+        days = parse_qs(scope["query_string"].decode()).get("days", [None])[0]
+        tab = scope["path"].rsplit("/", 1)[-1]
+        seen.append((tab, days, cookie.partition("=")[2]))
+        status = 502 if tab in fail else 200
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    return stand_in
+
+
+def test_sign_in_warms_each_live_tab_once_as_that_session(monkeypatch):
+    import app.main as main
+
+    seen = []
+    monkeypatch.setattr(main, "app", _recording_app(seen))
+    monkeypatch.setattr(main, "COOKIE", "cloudlens_session")
+    warmed = asyncio.run(main.warm_live_tabs("signed-token", paths=("/api/dashboard/waste",
+                                                                   "/api/dashboard/esu")))
+    assert warmed == 2
+    assert seen == [("waste", "30", "signed-token"), ("esu", "30", "signed-token")]
+
+
+def test_one_failing_tab_does_not_stop_the_others(monkeypatch):
+    import app.main as main
+
+    seen = []
+    monkeypatch.setattr(main, "app", _recording_app(seen, fail={"waste"}))
+    monkeypatch.setattr(main, "COOKIE", "cloudlens_session")
+    warmed = asyncio.run(main.warm_live_tabs("t", paths=("/api/dashboard/waste",
+                                                        "/api/dashboard/esu")))
+    assert warmed == 1 and [s[0] for s in seen] == ["waste", "esu"]
+
+
+def test_the_live_tab_warm_up_can_be_switched_off(monkeypatch):
+    import app.main as main
+
+    seen = []
+    monkeypatch.setattr(main, "app", _recording_app(seen))
+    monkeypatch.setenv("CLOUDLENS_WARM_LIVE_TABS", "false")
+    assert asyncio.run(main.warm_live_tabs("t")) == 0 and seen == []
+
+
+def test_every_sign_in_path_starts_the_warm_up():
+    from pathlib import Path
+
+    server = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    assert server.count("BackgroundTask(warm_live_tabs, token)") == 2, (
+        "password sign-in and the Entra callback must both warm the viewer's tabs")
+    live = server[server.index("LIVE_AZURE_TABS = ("):server.index("async def warm_live_tabs")]
+    from app.snapshot_cache import DEFAULT_POLICIES
+    assert all(path in DEFAULT_POLICIES for path in
+               __import__("re").findall(r'"(/api/dashboard/[a-z-]+)"', live)), (
+        "a tab that is not snapshot-cached would be warmed for nothing")
+
