@@ -261,3 +261,49 @@ export const resourcesQuery = (s: Scope, r: ResourceQuery) =>
         change: r.change,
       }),
   });
+
+export interface AnomalyIncident {
+  id: string;
+  dimension: string;
+  key: string;
+  currency: string;
+  direction: "up" | "down";
+  first_day: string;
+  last_day: string;
+  duration_days: number;
+  days: number;
+  peak_day: string;
+  cost: number | null;
+  baseline: number | null;
+  peak_delta: number | null;
+  total_delta: number;
+  score: number;
+  severity: string;
+}
+
+export interface AnomalyReport {
+  incidents: AnomalyIncident[];
+  incident_count: number;
+  count: number;
+  high: number;
+  increases: number;
+  decreases: number;
+  impact: number | null;
+  currency: string | null;
+  mixed_currency: boolean;
+  partial: boolean;
+  unavailable: boolean;
+  note: string | null;
+  days: number;
+  window_from: string | null;
+  window_to: string | null;
+  daily: Array<{ day: string; cost: number }>;
+}
+
+/** Days that did not look like the others, collapsed into incidents. Warehouse-only on the server. */
+export const anomaliesQuery = (s: Scope, days: number, currency: string) =>
+  queryOptions({
+    queryKey: ["anomalies", s.scope ?? "", days, currency],
+    queryFn: () => api<AnomalyReport>("dashboard/anomalies", { days, scope: s.scope, currency }),
+    staleTime: 60_000,
+  });

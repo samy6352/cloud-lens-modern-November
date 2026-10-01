@@ -132,6 +132,17 @@ try {
   check(await page.getByText(/up to 24 hours/).first().isVisible(), "Setup states the 24-hour expectation");
   await axe(page, "Setup progress (dark)");
 
+  // Anomalies: incidents when the estate has verified history, a plain statement when it does not.
+  await page.goto(`${BASE}/v2/explore/anomalies`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Anomalies", level: 2 }).waitFor({ timeout: DATA_TIMEOUT });
+  const verdict = page.getByText(/Nothing unusual|Not enough verified history|→|\d{4}-\d{2}-\d{2}/).first();
+  await verdict.waitFor({ timeout: DATA_TIMEOUT });
+  check(await page.getByText("Incidents", { exact: true }).first().isVisible(), "Anomalies shows its incident count");
+  await page.getByRole("radio", { name: "90 days" }).click();
+  await page.waitForFunction(() => !document.querySelector('[role="table"][aria-busy="true"]'), null, { timeout: DATA_TIMEOUT });
+  check(await page.getByRole("radio", { name: "90 days" }).getAttribute("aria-checked") === "true", "Anomalies re-asks the server for a longer window");
+  await axe(page, "Anomalies (dark)");
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
   check(csp.length === 0, "no CSP violations", csp[0] ?? "");
   const other = errors.filter((e) => !/Content Security Policy|Refused to/i.test(e));

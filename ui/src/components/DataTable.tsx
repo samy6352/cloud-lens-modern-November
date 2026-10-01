@@ -108,6 +108,8 @@ export function DataTable<T extends RowData>({
         role="table"
         aria-rowcount={rows.length}
         aria-busy={busy}
+        // With no sortable header nothing inside can take focus, so keyboard users could not scroll.
+        tabIndex={table.getHeaderGroups()[0]?.headers.some((h) => h.column.getCanSort()) ? undefined : 0}
         className="overflow-auto"
         style={{ maxHeight: height }}
       >
