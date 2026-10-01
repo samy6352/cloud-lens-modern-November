@@ -136,7 +136,61 @@ def test_the_endpoint_and_the_button_agree_on_the_parameter():
     client = (root / "web" / "assets" / "dashboard-reports.js").read_text(encoding="utf-8")
 
     assert "fresh: bool = False" in server
-    assert "schedules.listing(picked or allowed, fresh=fresh)" in server
+    assert "schedules.listing(picked or allowed, fresh=fresh," in server
     assert 'fresh ? "&fresh=true" : ""' in client
     assert "renderSettings(ctx.loadToken, true)" in client, (
         "the Reload button has to be the thing that asks for it")
+
+
+# ------------------------------------------------------ last-run history, split from the list
+
+@pytest.fixture
+def three_exports(monkeypatch, listing_probe):
+    """One list call returning three exports; any expansion read is recorded and answered."""
+    from app import cost as real_cost
+
+    names = ["cloudlens-focus-a", "legacy-b", "legacy-c"]
+
+    async def fake_request(method, url, *, json_body=None, params=None, cache=True):
+        listing_probe["calls"].append({"method": method, "url": url, "cache": cache})
+        if url.endswith("/exports"):
+            return {"value": [{"name": n, "properties": {}} for n in names]}
+        name = url.rsplit("/", 1)[-1]
+        run = {"properties": {"status": "Completed", "executionTime": "2026-10-01T00:00:00Z"}}
+        return {"name": name, "properties": {"runHistory": {"value": [run]}}}
+
+    monkeypatch.setattr(real_cost.azure, "request", fake_request)
+    return listing_probe
+
+
+def test_listing_without_expansion_is_one_read_per_subscription(three_exports):
+    result = asyncio.run(schedules.listing(["sub-a"], expand=False))
+    reads = [c for c in three_exports["calls"] if c["method"] == "GET"]
+    assert len(reads) == 1, f"{len(reads)} reads; the expansions are what made this 145s"
+    assert result["count"] == 3
+    assert all(e["history_pending"] and e["last_status"] is None for e in result["schedules"])
+
+
+def test_listing_with_expansion_is_unchanged(three_exports):
+    result = asyncio.run(schedules.listing(["sub-a"]))
+    assert len([c for c in three_exports["calls"] if c["method"] == "GET"]) == 4
+    assert all(not e["history_pending"] and e["last_status"] == "Completed"
+               for e in result["schedules"])
+
+
+def test_history_is_keyed_by_subscription_and_name(three_exports):
+    found = asyncio.run(schedules.history_for(["sub-a"]))
+    assert found["sub-a/legacy-b"] == {"last_run": "2026-10-01T00:00:00Z",
+                                       "last_status": "Completed"}
+    assert len(found) == 3
+
+
+def test_the_tab_asks_for_the_fast_list_then_the_history():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    server = (root / "app" / "main.py").read_text(encoding="utf-8")
+    client = (root / "web" / "assets" / "dashboard-reports.js").read_text(encoding="utf-8")
+    assert "expand=history" in server and '"/api/schedules/history"' in server
+    assert "&history=false" in client and "loadScheduleHistory(sched, token, sequence)" in client
+

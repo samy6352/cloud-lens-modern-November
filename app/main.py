@@ -2671,7 +2671,8 @@ async def archive_compare(request: Request, dataset: str = "actual",
 
 
 @app.get("/api/schedules")
-async def list_schedules(request: Request, scope: str = "", fresh: bool = False) -> JSONResponse:
+async def list_schedules(request: Request, scope: str = "", fresh: bool = False,
+                         history: bool = True) -> JSONResponse:
     """Scheduled Cost Management exports, and where they write.
 
     A schedule is how a refresh stops taking minutes: Azure writes the data to blob storage on
@@ -2686,7 +2687,8 @@ async def list_schedules(request: Request, scope: str = "", fresh: bool = False)
 
     try:
         async with as_user(user):
-            result = await schedules.listing(picked or allowed, fresh=fresh)
+            result = await schedules.listing(picked or allowed, fresh=fresh,
+                                                     expand=history)
 
             # One ARM role lookup per subscription, asked for all of them at once.
             #
@@ -2766,6 +2768,25 @@ async def assert_may_write_schedule(user: User, subscription: str) -> None:
             "yourself. This needs Cost Management Contributor, Contributor or Owner on that "
             "subscription; Cost Management Reader is not enough.",
         )
+
+
+@app.get("/api/schedules/history")
+async def schedule_history(request: Request, scope: str = "", fresh: bool = False) -> JSONResponse:
+    """Last-run status per export, split from the listing because it costs one ARM read each."""
+    from . import schedules
+
+    user = current_user(request)
+    allowed = await permitted(user)
+    picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
+    try:
+        async with as_user(user):
+            return JSONResponse({"history": await schedules.history_for(picked or allowed,
+                                                                        fresh=fresh)})
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the list is already on screen
+        log.info("could not read export history: %s", str(exc)[:200])
+        return JSONResponse({"history": {}, "error": str(exc)[:300]})
 
 
 @app.post("/api/schedules")

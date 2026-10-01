@@ -1021,7 +1021,7 @@ function wireCostData() {
     const button = $("cdLoadExports");
     button.disabled = true;
     try {
-      const result = await get(`/api/schedules?scope=${encodeURIComponent(scope.join(","))}`, { timeout: 45000 });
+      const result = await get(`/api/schedules?scope=${encodeURIComponent(scope.join(","))}`, { timeout: 120000 });
       if (active()) $("cdExports").innerHTML = (result.schedules || []).map(s => scheduleRow(s, false)).join("") ||
         '<p class="muted note">No exports found.</p>';
     } catch (error) { if (active()) notice.textContent = scheduleReadError(error); }
@@ -1056,7 +1056,7 @@ async function renderLegacySettings(token, fresh = false) {
   const sequence = ++settingsSequence;
   let sched;
   try {
-    sched = await get(`/api/schedules${qs()}${fresh ? "&fresh=true" : ""}`, { timeout: 45000 });
+    sched = await get(`/api/schedules${qs()}&history=false${fresh ? "&fresh=true" : ""}`, { timeout: 45000 });
   } catch (error) {
     if (token !== ctx.loadToken || sequence !== settingsSequence) return;
     const message = scheduleReadError(error);
@@ -1211,6 +1211,36 @@ async function renderLegacySettings(token, fresh = false) {
   paintFocusStatus();
   wireFocusWorkflow(sched);
   if (focusPending || sched.sync?.status === "running") queueFocusCheck();
+  void loadScheduleHistory(sched, token, sequence);
+}
+
+// The list draws without last-run status; Azure charges one read per export for it.
+async function loadScheduleHistory(sched, token, sequence) {
+  if (!(sched.schedules || []).some((s) => s.history_pending)) return;
+  let history;
+  try {
+    history = (await get(`/api/schedules/history${qs()}`, { timeout: 120000 })).history || {};
+  } catch { history = {}; }
+  if (token !== ctx.loadToken || sequence !== settingsSequence) return;
+  for (const s of sched.schedules) {
+    if (!s.history_pending) continue;
+    const found = history[`${s.subscription_id}/${s.name}`];
+    s.history_pending = false;
+    s.last_status = found?.last_status || "Not reported by Azure";
+    s.last_run = found?.last_run || s.last_run;
+  }
+  const list = $("sScheduleList");
+  if (!list) return;
+  for (const s of sched.schedules) {
+    const key = `schedule-${JSON.stringify([s.subscription_id || s.subscription || "", s.name || ""])}`;
+    const row = [...list.querySelectorAll("details.sched")].find((d) => d.dataset.stateKey === key);
+    const text = row?.querySelector("[data-last-status]");
+    if (text) text.textContent = `Last run: ${s.last_status}`;
+    const meta = row?.querySelector(".budget-meta");
+    if (meta && s.last_run && !meta.querySelector("[data-last-run]")) {
+      meta.insertAdjacentHTML("beforeend", `<span data-last-run>Last run date: ${esc(s.last_run)}</span>`);
+    }
+  }
 }
 
 async function focusPost(url, body) {
@@ -1523,7 +1553,7 @@ function scheduleRow(s, admin = false) {
       <span class="muted"> · ${esc(s.metric || "—")} · ${esc(s.recurrence || "—")}
         · ${s.owned ? "Owned by this deployment" : "Legacy / external — not changed automatically"}
         · ${esc(s.subscription || s.subscription_id || "Unknown subscription")}
-        · Last run: ${esc(s.last_status || "Not reported by Azure")}</span>
+        · <span data-last-status>Last run: ${esc(s.history_pending ? "checking…" : s.last_status || "Not reported by Azure")}</span></span>
       ${managed ? "" : `<span class="no-alerts"> · no identity — cannot write to a key-disabled account</span>`}
     </summary>
     <div class="budget-meta">
@@ -1958,7 +1988,7 @@ async function refreshLegacyGlobalScope({ onStatus = () => {}, isCurrent = () =>
   try {
     let sched;
     try {
-      sched = await get(`/api/schedules${qs()}`, { timeout: 45000 });
+      sched = await get(`/api/schedules${qs()}&history=false`, { timeout: 45000 });
     } catch (error) {
       if (current()) toast(scheduleReadError(error), "err");
       return { status: "failed", scope: [] };

@@ -408,7 +408,8 @@ def _explain_create(detail: str, subscription_id: str) -> str:
 
 
 async def listing(subscription_ids: list[str] | None = None, *,
-                  fresh: bool = False, owned_only: bool = False) -> dict[str, Any]:
+                  fresh: bool = False, owned_only: bool = False,
+                  expand: bool = True) -> dict[str, Any]:
     """Every export CloudLens can see, with its last run — the Cost exports tab's whole content.
 
     Read through the cache. This is one ARM call per subscription plus one per export to expand
@@ -416,6 +417,11 @@ async def listing(subscription_ids: list[str] | None = None, *,
     -- 16.5s before the Reports tab could draw. Export definitions change when somebody changes
     them, and `_request` purges this subscription's entries on every write, so a cached read is
     never older than the last change made through CloudLens.
+
+    `expand=False` skips the per-export `runHistory` expansion, which is nearly all of the cost:
+unHistory expansion, which is nearly all of the cost:
+    49 exports meant 49 extra ARM reads (145s cold). Rows come back flagged `history_pending` and
+    `history_for` supplies the last-run fields afterwards.
 
     `fresh` bypasses it, for the one case the invalidation cannot see: an export created or
     deleted in the Azure portal, by someone else. That is what the tab's "Reload list" button
@@ -455,7 +461,7 @@ async def listing(subscription_ids: list[str] | None = None, *,
                 return e
 
         entries = ([e for e in payload.get("value", []) if owned(e, sub["id"])]
-                   if owned_only else await asyncio.gather(
+                   if owned_only else payload.get("value", []) if not expand else await asyncio.gather(
                        *(with_history(e) for e in payload.get("value", []))))
         out = []
         for e in entries:
@@ -487,7 +493,9 @@ async def listing(subscription_ids: list[str] | None = None, *,
                     (p.get("definition") or {}).get("timeframe"),
                 "retention": p.get("dataOverwriteBehavior") or "CreateNewReport",
                 "last_run": last.get("executionTime") or last.get("submittedTime"),
-                "last_status": last.get("status") or "Not reported by Azure",
+                "last_status": (None if not expand and not owned_only else
+                                 last.get("status") or "Not reported by Azure"),
+                "history_pending": not expand and not owned_only,
                 # Two different times, and they were previously both wrong. `recurrencePeriod.
                 # from` is when the schedule *starts* -- which for anything created here is
                 # roughly when it was created, since `_body` sets it to tomorrow. It was called
@@ -517,6 +525,15 @@ async def listing(subscription_ids: list[str] | None = None, *,
         "errors": errors,
         "partial": bool(errors),
     }
+
+
+async def history_for(subscription_ids: list[str] | None = None, *,
+                      fresh: bool = False) -> dict[str, dict[str, Any]]:
+    """Last-run fields per export, keyed <subscription id>/<export name>."""
+    found = await listing(subscription_ids, fresh=fresh)
+    return {f"{e['subscription_id']}/{e['name']}": {"last_run": e["last_run"],
+                                                  "last_status": e["last_status"]}
+            for e in found["schedules"]}
 
 
 async def run_now(subscription_id: str, name: str, *, current_month: bool = False,
