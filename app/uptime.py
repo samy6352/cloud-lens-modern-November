@@ -49,6 +49,48 @@ NOT_SCHEDULABLE = ("licen", "disk", "storage", "bandwidth", "ip address", "softw
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
+STAGED_SRC = "_uptime_src"
+STAGED_DAILY = "_uptime_daily"
+
+
+def _stage_daily(r: Any, hourly: str) -> bool:
+    """Aggregate the window once, into a temp table on the reader's connection.
+
+    The meters, the estate's daily series and the per-meter cells are all reductions of one
+    thing, the hour-billed rows per resource, meter and day. Each used to rebuild it from the
+    summary through its own `GROUP BY`, three times over 577,000 rows. The first stage pulls the
+    filtered rows into a table, which is what tells the planner how many there really are:
+    estimated from the summary's statistics it expects two, and sorts long text ids to group them
+    (measured 11.9 s); knowing the count it hashes (3.7 s). No ANALYZE is needed or wanted, it
+    cost more than it saved.
+
+    Returns False, leaving the caller on the original queries, for a reader that cannot run
+    statements (the tests' fakes) or if staging fails.
+    """
+    execute = getattr(r, "execute", None)
+    if not callable(execute):
+        return False
+    try:
+        for name in (STAGED_SRC, STAGED_DAILY):
+            execute(f"DROP TABLE IF EXISTS {name}")
+        execute(f"CREATE TEMP TABLE {STAGED_SRC} AS {hourly}")
+        execute(
+            f"""
+            CREATE TEMP TABLE {STAGED_DAILY} AS
+            SELECT id, meter, currency, day,
+                   SUM(hours) AS hours, SUM(cost) AS cost,
+                   MAX(name) AS name, MAX(service) AS service,
+                   MAX(subscription) AS subscription,
+                   MAX(resource_group) AS resource_group, MAX(region) AS region
+            FROM {STAGED_SRC} GROUP BY id, meter, currency, day
+            """)
+        execute(f"DROP TABLE {STAGED_SRC}")
+        return True
+    except Exception as exc:  # noqa: BLE001 - the original queries still answer
+        log.warning("hourly_cost: staging failed (%s); using the original queries", str(exc)[:300])
+        return False
+
+
 def hourly_cost(scope: list[str] | None = None, days: int = 30,
                 currency: str | None = None) -> dict[str, Any]:
     """Billed hours, derived rates and estimated billed coverage for the window."""
@@ -126,69 +168,113 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
 
         # One row per resource, meter and day is the grain everything else is built from: the
         # peak day gives the instance count, and the day list gives the weekday profile.
-        rows = r.rows(
-            f"""
-            WITH src AS ({hourly}),
-                 daily AS (
-                   SELECT id, meter, currency, day,
-                          SUM(hours) AS hours, SUM(cost) AS cost,
-                          MAX(name) AS name, MAX(service) AS service,
-                          MAX(subscription) AS subscription,
-                          MAX(resource_group) AS resource_group, MAX(region) AS region
-                   FROM src GROUP BY id, meter, currency, day
-                 ),
-                 meters AS (
-                   SELECT id, meter, currency,
-                          MAX(name)            AS name,
-                          MAX(service)         AS service,
-                          MAX(subscription)    AS subscription,
-                          MAX(resource_group)  AS resource_group,
-                          MAX(region)          AS region,
-                          SUM(hours)           AS hours,
-                          SUM(cost)            AS cost,
-                          MAX(hours)           AS peak_day_hours,
-                          COUNT(*)             AS days_billed,
-                          MIN(day)             AS first_day,
-                          MAX(day)             AS last_day
-                   FROM daily
-                   GROUP BY id, meter, currency
-                   HAVING SUM(hours) > 0
-                   ORDER BY cost DESC
-                   LIMIT {MAX_ROWS + 1}
-                 )
-            {tagged}
-            """,
-            limit=MAX_ROWS + 1,
-        )
+        staged = _stage_daily(r, hourly)
+        if staged:
+            # The three answers below are each a small reduction of that grain, which `_stage_daily`
+            # computed once; each used to rebuild it from `src` on its own.
+            rows = r.rows(
+                f"""
+                WITH meters AS (
+                  SELECT id, meter, currency,
+                         MAX(name)            AS name,
+                         MAX(service)         AS service,
+                         MAX(subscription)    AS subscription,
+                         MAX(resource_group)  AS resource_group,
+                         MAX(region)          AS region,
+                         SUM(hours)           AS hours,
+                         SUM(cost)            AS cost,
+                         MAX(hours)           AS peak_day_hours,
+                         COUNT(*)             AS days_billed,
+                         MIN(day)             AS first_day,
+                         MAX(day)             AS last_day
+                  FROM {STAGED_DAILY}
+                  GROUP BY id, meter, currency
+                  HAVING SUM(hours) > 0
+                  ORDER BY cost DESC
+                  LIMIT {MAX_ROWS + 1}
+                )
+                {tagged}
+                """,
+                limit=MAX_ROWS + 1,
+            )
+            daily = r.rows(
+                f"SELECT day, currency, SUM(hours) AS hours, SUM(cost) AS cost "
+                f"FROM {STAGED_DAILY} GROUP BY day, currency ORDER BY day",
+                limit=800,
+            )
+            # Counted before fetched: over the cap the cells are dropped, so reading 150,000 of
+            # them only to discard them was a third of the tab's time.
+            n_cells = r.rows(f"SELECT count(*) AS n FROM {STAGED_DAILY} WHERE hours > 0", limit=2)
+            over = int(n_cells[0]["n"]) > MAX_DAILY_CELLS
+            cells = [] if over else r.rows(
+                f"SELECT id, meter, currency, day, hours, cost FROM {STAGED_DAILY} WHERE hours > 0",
+                limit=MAX_DAILY_CELLS + 1,
+            )
+        else:
+            over = False
+            rows = r.rows(
+                f"""
+                WITH src AS ({hourly}),
+                     daily AS (
+                       SELECT id, meter, currency, day,
+                              SUM(hours) AS hours, SUM(cost) AS cost,
+                              MAX(name) AS name, MAX(service) AS service,
+                              MAX(subscription) AS subscription,
+                              MAX(resource_group) AS resource_group, MAX(region) AS region
+                       FROM src GROUP BY id, meter, currency, day
+                     ),
+                     meters AS (
+                       SELECT id, meter, currency,
+                              MAX(name)            AS name,
+                              MAX(service)         AS service,
+                              MAX(subscription)    AS subscription,
+                              MAX(resource_group)  AS resource_group,
+                              MAX(region)          AS region,
+                              SUM(hours)           AS hours,
+                              SUM(cost)            AS cost,
+                              MAX(hours)           AS peak_day_hours,
+                              COUNT(*)             AS days_billed,
+                              MIN(day)             AS first_day,
+                              MAX(day)             AS last_day
+                       FROM daily
+                       GROUP BY id, meter, currency
+                       HAVING SUM(hours) > 0
+                       ORDER BY cost DESC
+                       LIMIT {MAX_ROWS + 1}
+                     )
+                {tagged}
+                """,
+                limit=MAX_ROWS + 1,
+            )
 
-        # The estate day by day. Two series in one pass: what the hour-billed part of the
-        # estate cost, and how many hours it ran — their ratio is the effective rate, and it
-        # moving is the signal that something was resized rather than merely left on.
-        daily = r.rows(
-            f"""
-            WITH src AS ({hourly})
-            SELECT day, currency, SUM(hours) AS hours, SUM(cost) AS cost
-            FROM src GROUP BY day, currency ORDER BY day
-            """,
-            limit=800,
-        )
+            # The estate day by day. Two series in one pass: what the hour-billed part of the
+            # estate cost, and how many hours it ran — their ratio is the effective rate, and it
+            # moving is the signal that something was resized rather than merely left on.
+            daily = r.rows(
+                f"""
+                WITH src AS ({hourly})
+                SELECT day, currency, SUM(hours) AS hours, SUM(cost) AS cost
+                FROM src GROUP BY day, currency ORDER BY day
+                """,
+                limit=800,
+            )
 
-        # The same series, but per meter, so a filter can rebuild the charts from the rows it
-        # kept. Fetched as a second pass rather than derived from the one above because the
-        # estate totals must stay exact even when this is dropped for size.
-        cells = r.rows(
-            f"""
-            WITH src AS ({hourly})
-            SELECT id, meter, currency, day, SUM(hours) AS hours, SUM(cost) AS cost
-            FROM src GROUP BY id, meter, currency, day
-            HAVING SUM(hours) > 0
-            """,
-            limit=MAX_DAILY_CELLS + 1,
-        )
+            # The same series, but per meter, so a filter can rebuild the charts from the rows it
+            # kept. Fetched as a second pass rather than derived from the one above because the
+            # estate totals must stay exact even when this is dropped for size.
+            cells = r.rows(
+                f"""
+                WITH src AS ({hourly})
+                SELECT id, meter, currency, day, SUM(hours) AS hours, SUM(cost) AS cost
+                FROM src GROUP BY id, meter, currency, day
+                HAVING SUM(hours) > 0
+                """,
+                limit=MAX_DAILY_CELLS + 1,
+            )
 
     # A later currency filter cannot restore rows omitted by the database fetch cap.
     truncated = len(rows) > MAX_ROWS
-    cells_truncated = len(cells) > MAX_DAILY_CELLS
+    cells_truncated = over or len(cells) > MAX_DAILY_CELLS
     if cells_truncated:
         cells = []
     if mixed:
