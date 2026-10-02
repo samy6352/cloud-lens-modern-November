@@ -400,17 +400,53 @@ larger SKU and downsize after backfill.
 | S3 Two-line installer | ☑ done (live) | 30 Sep 18:25 | 30 Sep 20:45 | **Live installs into `rg-cloudlens-v3-test` (Central India, small, `-LocalSignIn`) from a clean worktree:** run 1 **18 min 27 s** to a working stack, but exited on a publish `504` while the B1 build (8 min) went on to succeed, and its log-printed password was unreachable (no console log) → fixed (`a4459bd`): publish follows the Kudu record to status 4/3; the installer makes the admin password locally and deploys only its PBKDF2 hash. Run 2 (rerun) **12 min 38 s**, exit 0: every role `already-present`, storage/app/DB reused, 504 followed to "succeeded", sign-in verified. Run 3 **15 min 47 s**, exit 0, with the operator-export step (`19e1a39`): existing export updated in place with its eTag, admin kept. New `infra/install.ps1` (pwsh 7 / Cloud Shell): checks → `-Scope` (subscription, or management group with every descendant subscription via paged `…/descendants`) → registers missing hosting providers + `Microsoft.CostManagement(Exports)` in every monitored subscription → `deploy.ps1` with `-Size` profile (small D2ds_v5/64 GB/B1, medium D2ds_v5/128 GB/B2, large E4ds_v5/256 GB/B2), managed exports on → creates the paused exports as the operator → URL + `/v2/admin/setup`; `-LocalSignIn [-ResetLocalPassword]`, `-EntraClientId`, `-WhatIf`, `-Source <zip>` (distribution still open). Supporting: Bicep `managedExports`; `-CostScopeManagementGroup`; Cloud Shell path/python fixes; 5-min bootstrap recheck while blocked. Tests: `tests/test_install.py` (18, fake `az`, parameter contracts pinned to both real scripts), MG cost-access, deploy follow-through, operator-adoption end to end. |
 | S4 React UI foundation | ◐ foundation done | 30 Sep 01:00 | 30 Sep 02:05 | `ui/` → `web/v2`, served at `/v2` (`app/web_v2.py`). Shell (5 workspaces + Admin), ⌘K (cmdk), month/scope in URL, theme/density/lakh-crore, skeletons, Motion. **Overview** + **Billing** (virtualised TanStack Table) on live API; **All resources** added 30 Sep (server-paged/sorted, search, change + currency filters; `DataTable` gained a controlled server-sort mode; `npm run test:v2` 18/18 incl. axe on Resources); **1 Oct: the rest of Explore** — Anomalies, Cost by Application / Tags, Hourly Billing (Uptime), History — on the existing `/api` (no server changes; initial JS **175 KB gz**, each screen a lazy chunk of 2–3 KB; `npm run test:v2` **36/36** incl. axe on all four; History's populated comparison is covered with mocked archive endpoints because no archive is configured locally, Anomalies was only seen empty on the demo estate; `DataTable` scroll area takes keyboard focus when no header sorts); Tags and Uptime payloads are heavy (7.8 MB / 26–44 s first call locally, filtered in the browser as classic does) and are cached 5 min client-side; other 13 screens hand off to classic via `/?tab=`. Initial JS **177 KB gz** (budget 200). Tests: `tests/test_web_v2.py` 8 ✓, Vitest 9 ✓, `npm run test:v2` **14/14** (incl. axe WCAG 2.2 AA light+dark, no CSP errors). Packaging builds UI when npm exists. Full suite after S4: **2178 passed / 12 failed / 10 skipped** — every failure is in the baseline list, none new. Remaining: Ravi review of screenshots; migrate further screens. |
 | S5 In-DB load spike | ☑ done — **no-go** (ADR-6) | 30 Sep 23:40 | 1 Oct 14:09 | On the D2ds_v5 copy `cloudlens-pg-5f6eh-r1` (the original server is stuck; handover 1 Oct §3). 5.8M-row synthetic month: in-DB 456 s / 284 s / 257 s at 1 / 3 / 6 sessions vs Python 938 s (2.1–3.7×), **but `azure_storage` 1.10 drops the sign of decimals in (−1, 0): 319,818 rows wrong, BilledCost +0.35%**; the 13 real months (37,242 rows) identical both ways and equal to `costs`. Python byte-mover stays. Harness `…\Microsoft Scout\cloud-lens-v3-s5`. |
-| S6 Verify & hand over | ☐ not started | | | |
+| S6 Verify & hand over | ◐ local evidence recorded; broader/live gates not complete | 2 Oct afternoon | | Final endpoint audit, local preview and broad gate outcomes below; full Python/classic browser gates are not green. Fresh Azure reinstall, explicit cleanup/distribution approval and real delegated SSO remain pending. |
 
 **Baseline tests:** 2169 passed / 13 failed / 10 skipped (pre-existing failures: test_datastore_safety::…unknown_plus_usd…,
 test_environment_rollup, test_focus_day_repair ×3, test_focus_incremental::…changed_nothing…, test_overview,
 test_postgres ×2, test_read_only_mode::…caches_but_no_ingest_workers, test_savings_frontend::…theme_contrast,
 test_summary_pending, test_visuals) · **After S2:** 2263 passed / 13 failed (same set; test_budget_reading replaces
 theme_contrast since S1) / 10 skipped · **After S3 code (`4f57bfc`):** 2266 / 13 (same set) / 10 · **After S2+S3 live
-fixes:** 2268 / 13 (same set) / 10 · **Final tests:** _ ·
+fixes:** 2268 / 13 (same set) / 10 · **2 Oct broad gate before auth-isolation fix:** 2289 passed / 27 failed / 10 errors / 2 skipped / 10 deselected (58 min 22 s; test-lock intervention, below; **not green**) · **Follow-up targeted:** 104 passed ·
 **Install wall-clock:** 12 min 38 s rerun, 15 min 47 s with operator exports; first run 18 min 27 s to a working stack
 (+ manual follow of the build, since fixed) · **Backfill wall-clock (13 months, 1 subscription):** 3 h 32 min from the
-first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test RG deleted:** _
+first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test RG deleted:** no, explicit cleanup/reinstall decision pending
+
+### 2 October continuation (supplements the historical S1/S4/S6 rows)
+
+- **S1 sign-in warm-up:** startup export-list warm (`7e62962`); eight live-Azure paths warmed serially in the
+  viewer's session on password login/Entra callback (`45b129b`, `8c341af`, `13ca1d3`). Opportunities retains the
+  900-second cache under R8; Refresh bypasses it. Actual delegated SSO remains unverified: local and test app
+  `/auth/login` both currently return to password sign-in. Callback success/refusal behaviour is covered separately.
+- **S1 classic Resources:** normal caller moved to 20-row server pagination, preserving the unpaged API.
+  Search/change/currency filters and cost/change sorting span all matches; page-only facets/counts are labelled.
+  Same real estate: **29,488 bytes; 0.474 / 0.333 s forced application-cache miss; 0.016 / 0.012 s warm**.
+  The old unpaged response is still 15.3 MB and uncached; it is no longer the normal classic UI request.
+- **S1 isolated timing:** Uptime **20.049 / 14.566 s uncached, 0.434 / 0.389 s warm** (autovacuum active);
+  Tags **15.096 / 10.343 s uncached, 0.622 / 0.576 s warm** (no competing queries).
+  Source generation 10, rebuild clear. Application cache bypass, not a flushed disk-buffer experiment.
+  The <1-second cold / <300-ms warm goal is **not met** for these screens.
+- **S6 endpoint audit:** `tools/bench-tabs-v3-final.json`: 47 endpoints, all HTTP 200; four second calls >2 s
+  (legacy unpaged Resources, alerts, Uptime, anomalies). Other misses and timing caveats are in
+  `HANDOVER-2026-10-02.md` section 7. `tools/bench-tabs-latest.json` remains the pre-existing uncommitted artefact.
+- **S4 local preview:** build current; initial JS 175.38 KB gzip (<200); unit 9/9 and preview smoke 36/36.
+  Four current preview screenshots captured in the session files for Ravi's visual acceptance; further screen
+  migration stays in the roadmap, with no premature `/v2` switch-over.
+- **S6 classic browser gate:** 15/31. The four failures in changed suites reproduce identically on original
+  `4a4b2dc` assets/tests; reasons and evidence are in the handover.
+- **S6 full Python gate:** 2289 passed / 27 failed / 10 errors / 2 skipped / 10 deselected, 58 min 22 s.
+  Not a clean gate: an unchanged billing fixture omits `Tags`, additional rollup/schema failures remain untriaged,
+  and only a verified blocked test-schema publication statement was cancelled after its held-reader lock stalled
+  the run. The directly coupled auth timeout was fixed by disabling live warm-ups in the isolated TestClient auth
+  script; the warm has separate coverage. Follow-up auth/frontend/warming/billing gate **104 passed, 28.83 s**.
+  Do not extrapolate this focused result into a green full suite.
+- **Azure readback, no mutation:** both original and restored PostgreSQL are Ready; test app already targets
+  `cloudlens-pg-5f6eh-r1`, and its readiness returns 200. The old stuck-server/PGHOST-switch decisions are obsolete.
+  Test RG/export/spike deletion, local probe deletion, fresh reinstall, external publication/distribution and
+  actual SSO sign-in remain specifically approval- or user-interaction-gated.
+- **Persistence:** commits `8352be5`, `455e700`, `7ac0c6f`, `bcae0b7`, followed by this documentation commit,
+  pushed only to the local-folder `origin/v3`; no external GitHub publication. Local server restarted for current
+  static hashes; readiness is ready and generation-10 rollup remains clear (no rebuild).
 
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
