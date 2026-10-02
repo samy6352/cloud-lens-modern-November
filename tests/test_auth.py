@@ -21,6 +21,8 @@ TMP = Path(tempfile.mkdtemp())
 # so a real Entra configuration in .env must not leak into this suite.
 os.environ["AUTH_SECRET"] = "test-secret-not-used-anywhere-real"
 os.environ["AUTH_API_TOKENS"] = "ci:token-for-scripts-abcdef"
+# TestClient waits for response background work; sign-in warming has its own isolated tests.
+os.environ["CLOUDLENS_WARM_LIVE_TABS"] = "false"
 os.environ.setdefault("PROJECT_ENDPOINT", "https://example.invalid/api/projects/test")
 for name in ("AUTH_DISABLED", "AUTH_PASSWORD", "AUTH_USERS", "AUTH_CLIENT_ID",
              "AUTH_TENANT_ID", "AUTH_CLIENT_SECRET", "AUTH_ALLOW_LOCAL", "AUTH_ADMINS"):
