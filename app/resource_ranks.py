@@ -13,7 +13,7 @@ resources only (0.25 s for fifty).
 
 What it is
 ----------
-Five tables, rebuilt together from the *published* `resource_presence`:
+Tables, rebuilt together from the *published* `resource_presence`:
 
     resource_rank_ids     one integer `rkey` per identity the tab groups by:
                           (lower(trim(ResourceId)), lower(SubAccountId), currency)
@@ -22,6 +22,9 @@ Five tables, rebuilt together from the *published* `resource_presence`:
                           and the rkey it folds to -- so a page can go back to presence
                           through its ResourceId index, and a narrowed reader can join
                           to integers without re-normalising every row
+    resource_rank_tag_exceptions
+                          raw ids that split or merge ranking identities; always considered
+                          by Tags so signed costs cannot invalidate its candidate cutoff
     resource_rank_daily   (ChargePeriodStart, rkey, BilledCost), the integer fact
     resource_rank_periods the periods ranked, each by its exact bounds (lo, mid, hi):
                           prior is (lo, mid], current is (mid, hi]
@@ -65,8 +68,9 @@ RAW = "resource_rank_raw"
 DAILY = "resource_rank_daily"
 PERIODS = "resource_rank_periods"
 TOTALS = "resource_rank_totals"
+TAG_EXCEPTIONS = "resource_rank_tag_exceptions"
 TABLE = "resource_ranks"
-TABLES = (SUBS, IDS, RAW, DAILY, PERIODS, TABLE, TOTALS)
+TABLES = (SUBS, IDS, RAW, DAILY, PERIODS, TABLE, TOTALS, TAG_EXCEPTIONS)
 STAMP_KEY = "resource_ranks_generation"  # listed in jobs.SERVING_STAMP_KEYS
 PERIOD = "ChargePeriodStart"
 
@@ -153,6 +157,21 @@ def current(con: Any, fresh: frozenset[str] | set[str]) -> bool:
 
 
 # ------------------------------------------------------------------ build
+def tag_exceptions_sql(raw: str) -> str:
+    """Raw ids whose Tags group is not one-to-one with a ranked identity.
+
+    These must be considered independently of rank: credits can make one raw
+    spelling exceed its merged ranking, and several subscriptions can share a raw id.
+    """
+    return f"""WITH split AS (
+                 SELECT rkey FROM {raw} GROUP BY rkey HAVING count(*) > 1
+               ), merged AS (
+                 SELECT raw FROM {raw} GROUP BY raw HAVING min(rkey) <> max(rkey)
+               )
+               SELECT raw FROM {raw} JOIN split USING (rkey)
+               UNION SELECT raw FROM merged"""
+
+
 def build_sql(schema: str, source: str, periods: list[tuple[str, dt.date, dt.date, dt.date]],
               suffix: str = "_next") -> list[str]:
     """The statements that build every table as `<name><suffix>`, CTAS throughout."""
@@ -186,6 +205,7 @@ def build_sql(schema: str, source: str, periods: list[tuple[str, dt.date, dt.dat
         f"""CREATE TABLE {n[RAW]} AS
             SELECT r.raw, r.raw_sub, r.raw_cur, i.rkey, i.skey, i.currency
             FROM _rr_raw r JOIN {n[IDS]} i USING (id, sub, currency)""",
+        f"CREATE TABLE {n[TAG_EXCEPTIONS]} AS {tag_exceptions_sql(n[RAW])}",
         f"""CREATE TABLE {n[DAILY]} AS
             SELECT p."{PERIOD}", m.rkey, m.skey, m.currency, sum(p."BilledCost") AS cost
             FROM {source} p JOIN {n[RAW]} m

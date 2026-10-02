@@ -228,6 +228,24 @@ def test_a_failed_ranked_read_falls_back_to_the_full_query(estate, monkeypatch):
     _same(new, tags.cost_by_tag(None, days=30))
 
 
+@pytest.mark.parametrize("indexed", [False, True])
+def test_failed_candidate_sql_does_not_poison_fallback(estate, monkeypatch, indexed):
+    from app import read_indexes, tags
+    from app.warehouse import Reader
+
+    monkeypatch.setattr(read_indexes, "ENABLED", indexed)
+    original_rows = Reader.rows
+
+    def broken(self, sql, *args, **kwargs):
+        if "SELECT rkey, cost FROM resource_ranks" in sql:
+            return original_rows(self, "SELECT broken FROM missing_candidate_table")
+        return original_rows(self, sql, *args, **kwargs)
+
+    monkeypatch.setattr(Reader, "rows", broken)
+    new = tags.cost_by_tag()
+    _same(new, _original(monkeypatch))
+
+
 def test_a_stale_ranking_is_never_used(estate, monkeypatch):
     from app import resource_ranks, tags
 
@@ -235,3 +253,43 @@ def test_a_stale_ranking_is_never_used(estate, monkeypatch):
     with estate.reader(usage=("tags",)) as r:
         assert getattr(r, "ranks", None) is None
     assert tags.cost_by_tag(None, days=30)["resources"], "the full query still answers"
+
+
+@pytest.mark.parametrize("kind", ["signed-spelling", "shared-subscriptions", "currency-spelling"])
+@pytest.mark.parametrize("stored_exceptions", [False, True])
+def test_split_and_merged_ranks_cannot_hide_a_top_raw_group(
+        postgres_warehouse, monkeypatch, kind, stored_exceptions):
+    from app import resource_ranks, tags
+    from app.warehouse import COLUMNS, insert_rows
+
+    wh = postgres_warehouse
+    records = [_row(HI.isoformat(), f"/ordinary-{i}", cost=500 - 20 * i)
+               for i in range(8)]
+    if kind == "signed-spelling":
+        records += [_row(HI.isoformat(), "/Hidden", cost=1000, tags='{"owner":"x"}'),
+                    _row(HI.isoformat(), " /HIDDEN ", cost=-1000)]
+        expected = "/Hidden"
+    elif kind == "shared-subscriptions":
+        records += [_row(HI.isoformat(), "/shared", sub=sub, cost=300,
+                         tags='{"owner":"x"}') for sub in ("sub-a", "sub-b")]
+        expected = "/shared"
+    else:
+        records += [_row(HI.isoformat(), "/currency", currency="usd", cost=2000,
+                         tags='{"owner":"x"}'),
+                    _row(HI.isoformat(), "/currency", currency="USD", cost=-2000)]
+        expected = "/currency"
+    with wh.connect() as con:
+        insert_rows(con, [[record.get(c) for c in COLUMNS] for record in records])
+    wh.refresh_rollup(strict=True)
+    if not stored_exceptions:
+        with wh.connect() as con:
+            con.execute(f"DROP TABLE {resource_ranks.TAG_EXCEPTIONS}")
+    monkeypatch.setattr(tags, "MAX_RESOURCES", 3)
+    monkeypatch.setattr(tags, "CANDIDATE_MARGIN", 0)
+    new = tags.cost_by_tag()
+    assert expected in {r["id"] for r in new["resources"]}
+    _same(new, _original(monkeypatch))
+    if kind == "shared-subscriptions":
+        item = next(row for row in new["resources"] if row["id"] == "/shared")
+        assert item["subscription"] == "Name sub-b"
+        assert item["subscription_id"] == ""

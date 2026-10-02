@@ -34,6 +34,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import Any
 
 log = logging.getLogger("cloudlens.tags")
@@ -158,7 +159,7 @@ def merge_live_keys(payload: dict[str, Any], live: list[dict[str, Any]]) -> dict
 
 def _ranked_candidates(r: Any, hi: Any, days: int, code: str | None
                        ) -> tuple[list[str], float | None] | None:
-    """Raw ResourceIds of the highest-cost resources, from the stored rankings, or None.
+    """Highest-ranked raw ResourceIds plus every grouping exception, or None.
 
     The full ranking of two million resources, to publish the top 8,000, was 20 of this tab's
     34 seconds. `resource_ranks` already holds every resource's cost per rolling window, in
@@ -206,6 +207,16 @@ def _ranked_candidates(r: Any, hi: Any, days: int, code: str | None
     raw = [row["raw"] for row in r.rows(
         f"SELECT raw FROM {resource_ranks.RAW} WHERE rkey = ANY(?)", limit=None,
         params=[[row["rkey"] for row in ranked]])]
+    # A ranking identity may split into several raw groups (including currency
+    # spellings), or a raw id may merge ranks from several subscriptions. Signed
+    # costs then invalidate the simple cutoff bound. Include every such exception,
+    # regardless of rank; only one-to-one identities remain outside the candidates.
+    available = r.rows("SELECT to_regclass(?) AS relation", limit=1,
+                       params=[resource_ranks.TAG_EXCEPTIONS])
+    exceptions = r.rows(
+        f"SELECT raw FROM {resource_ranks.TAG_EXCEPTIONS}" if available[0]["relation"] else
+        resource_ranks.tag_exceptions_sql(resource_ranks.RAW), limit=None)
+    raw = list(dict.fromkeys([*raw, *(row["raw"] for row in exceptions)]))
     cutoff = float(ranked[-1]["cost"]) if len(ranked) >= wanted else None
     return raw, cutoff
 
@@ -270,7 +281,8 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
             candidates = None
             if not display_currency and named == "resource_presence":
                 try:
-                    candidates = _ranked_candidates(r, hi, days, currency if mixed else None)
+                    with getattr(r, "transaction", nullcontext)():
+                        candidates = _ranked_candidates(r, hi, days, currency if mixed else None)
                 except Exception as exc:  # noqa: BLE001 - the full query still answers
                     log.warning("cost_by_tag: ranked candidates failed (%s); using the full query",
                                 str(exc)[:300])
@@ -278,9 +290,9 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
                 raw, cutoff = candidates
                 part = f"""
                   SELECT {identity}
-                    MAX(COALESCE(name_text, ''))                              AS subscription,
+                    ARRAY_AGG(DISTINCT "SubAccountId")                        AS name_subs,
                     {grouped}
-                  FROM {named} LEFT JOIN names ON name_sub = "SubAccountId"
+                  FROM {named}
                   WHERE {display_window} AND %s
                   GROUP BY 1, 6"""
                 by_id = part % '"ResourceId" = ANY(?)'
@@ -289,7 +301,7 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
                 by_name = part % "(\"ResourceId\" IS NULL OR trim(\"ResourceId\") = '')"
                 ranked = r.rows(
                     f"""
-                    WITH names AS (
+                    WITH names AS MATERIALIZED (
                       SELECT "SubAccountId" AS name_sub, MAX("SubAccountName") AS name_text
                       FROM {agg} WHERE {display_window} GROUP BY 1
                     ), part AS (
@@ -299,16 +311,23 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
                     ), top AS (
                       SELECT * FROM part ORDER BY cost DESC, id, currency LIMIT {MAX_RESOURCES + 1}
                     )
-                    SELECT top.*, tg.tags, NOT tg.unknown AS tags_available FROM top
+                    SELECT top.id, top.name, top.service,
+                           COALESCE(nm.subscription, '') AS subscription,
+                           top.resource_group, top.currency, top.cost, top.subscription_id,
+                           tg.tags, NOT tg.unknown AS tags_available FROM top
+                    LEFT JOIN LATERAL (
+                      SELECT MAX(name_text) AS subscription FROM names
+                      WHERE name_sub = ANY(top.name_subs)
+                    ) nm ON TRUE
                     {lateral}
                     ORDER BY cost DESC, id, currency
                     """,
                     limit=MAX_RESOURCES + 1, params=[raw],
                 )
                 # Accepted only when nothing left out of the candidates could have ranked inside
-                # the answer: the cut-off is the lowest cost among the candidates, and a resource's
-                # cost in one raw spelling never exceeds its ranked (merged) cost. `cutoff` None
-                # means every ranked resource was a candidate.
+                # the answer: every split/merged identity was explicitly included, so
+                # each omitted raw group's cost equals its own ranking's cost.
+                # `cutoff` None means every ranked resource was a candidate.
                 if cutoff is None or (len(ranked) > MAX_RESOURCES
                                       and float(ranked[MAX_RESOURCES]["cost"]) > cutoff):
                     rows = ranked
@@ -388,11 +407,13 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
     # Aggregate per subscription before applying a row cap so a mixed unit cannot look single.
     with warehouse.reader(scope=scope) as r:
         native = r.rows(
-            f"""SELECT "SubAccountId" AS subscription_id,
-                       STRING_AGG(DISTINCT COALESCE(NULLIF(UPPER(TRIM("BillingCurrency")), ''), 'unknown'), ',')
+            f"""SELECT subscription_id,
+                       STRING_AGG(DISTINCT COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'unknown'), ',')
                          AS currencies
-                FROM {getattr(r, "agg", "costs")} WHERE {window}
-                GROUP BY "SubAccountId" """,
+                FROM (
+                  SELECT DISTINCT "SubAccountId" AS subscription_id, "BillingCurrency" AS currency
+                  FROM {getattr(r, "agg", "costs")} WHERE {window}
+                ) native_codes GROUP BY subscription_id """,
             limit=MAX_RESOURCES + 1,
         )
     native_currencies = {
