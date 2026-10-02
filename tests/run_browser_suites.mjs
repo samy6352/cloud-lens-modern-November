@@ -98,8 +98,8 @@ function verdict(result) {
   if (result && typeof result === "object") {
     const failures = Array.isArray(result.failures) ? result.failures : [];
     const errors = Array.isArray(result.errors) ? result.errors : [];
-    if (result.failure) {
-      return { ok: false, reasons: [`${result.phase ? `[${result.phase}] ` : ""}${result.failure}`, ...failures] };
+    if (result.failure || result.failed) {
+      return { ok: false, reasons: [`${result.phase ? `[${result.phase}] ` : ""}${result.failure || result.failed}`, ...failures, ...errors] };
     }
     if (failures.length || errors.length) return { ok: false, reasons: [...failures, ...errors] };
   }
@@ -149,14 +149,18 @@ async function main() {
       let outcome;
       try {
         const suite = await loadSuite(name);
-        const result = await Promise.race([
-          suite(page, {}),
-          new Promise((_, reject) => setTimeout(
-            () => reject(new Error(`suite exceeded ${SUITE_TIMEOUT_MS} ms`)), SUITE_TIMEOUT_MS)),
-        ]);
+        let timer;
+        let result;
+        try {
+          result = await Promise.race([
+            suite(page, {}),
+            new Promise((_, reject) => { timer = setTimeout(
+              () => reject(new Error(`suite exceeded ${SUITE_TIMEOUT_MS} ms`)), SUITE_TIMEOUT_MS); }),
+          ]);
+        } finally { clearTimeout(timer); }
         outcome = verdict(result);
       } catch (error) {
-        outcome = { ok: false, reasons: [String(error && error.message || error).split("\n")[0]] };
+        outcome = { ok: false, reasons: [String(error && error.message || error)] };
       }
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       results.push({ name, ...outcome, seconds });

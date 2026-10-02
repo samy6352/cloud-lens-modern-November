@@ -19,8 +19,11 @@ async (page) => {
     if (await test.locator("#railMini").getAttribute("aria-pressed") === "true") {
       await test.locator("#railMini").click();
     }
-    await test.waitForFunction(() => document.querySelector(".sidebar").getBoundingClientRect().width > 190);
-    const labels = ["Overview", "Billing", "Savings", "Monitor", "Governance", "Reports"];
+    await test.waitForFunction(() => {
+      const scale = Number(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale"));
+      return Math.abs(document.querySelector(".sidebar").getBoundingClientRect().width - 200 * scale) < 1;
+    });
+    const labels = ["Overview", "Billing", "All resources", "Savings", "Monitor", "Governance", "Reports"];
     assert(JSON.stringify(await test.locator("[data-main-section] .rail-name").allTextContents())
       === JSON.stringify(labels), "All primary labels are retained");
     assert(await test.locator(".rail-icon-frame .rail-icon").count() === labels.length, "All icons are framed");
@@ -30,7 +33,8 @@ async (page) => {
       rows: [...document.querySelectorAll(".rail-item")].map(el => el.getBoundingClientRect().height),
       labelsFit: [...document.querySelectorAll(".rail-item .rail-name")].every(el => el.scrollWidth <= el.clientWidth),
     }));
-    assert(density.width <= 200.5 && density.rows.every(height => height >= 39.5 && height <= 40.5)
+    const scale = await test.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")));
+    assert(Math.abs(density.width - 200 * scale) < 1 && density.rows.every(height => height >= 39.5 && height <= 40.5)
       && density.labelsFit, `Compact sidebar retains readable labels: ${JSON.stringify(density)}`);
     await test.locator("#primary-overview").focus();
     await test.keyboard.press("ArrowDown");

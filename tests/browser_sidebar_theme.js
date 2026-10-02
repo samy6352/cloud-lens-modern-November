@@ -13,7 +13,7 @@ async (page) => {
     const response = await context.request.get("http://127.0.0.1:8021/assets/app.css");
     assert(response.ok(), "Local sidebar stylesheet is available");
     const css = await response.body();
-    await context.route(origin + "/assets/app.css", route => route.fulfill({ body: css, contentType: "text/css" }));
+    await context.route(/\/assets\/(?:v\/[^/]+\/)?app\.css$/, route => route.fulfill({ body: css, contentType: "text/css" }));
     await test.goto(origin);
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
     await test.locator("#accountTrigger").waitFor({ state: "visible" });
@@ -21,7 +21,15 @@ async (page) => {
     for (let cycle = 0; cycle < 4; cycle++) {
       await test.locator("#themeBtn").click();
       await test.locator("#accountTrigger").click();
-      await test.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await test.locator("#signout").waitFor({ state: "visible" });
+      await test.waitForFunction(() => {
+        const swatch = document.createElement("span");
+        swatch.style.backgroundColor = "var(--rail-surface)";
+        document.body.append(swatch);
+        const expected = getComputedStyle(swatch).backgroundColor;
+        swatch.remove();
+        return getComputedStyle(document.querySelector(".account-popover")).backgroundColor === expected;
+      });
       const palette = await test.evaluate(() => {
         const root = getComputedStyle(document.documentElement);
         const luminance = token => {

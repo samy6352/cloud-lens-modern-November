@@ -67,10 +67,10 @@ async (page) => {
     const names = ["app.css", "app.js", "dashboard.js", "dashboard-navigation.js", "dashboard-spend.js", "dashboard-optimize.js", "dashboard-monitor.js",
       "dashboard-reports.js", "dashboard-billing.js", "dashboard-evidence.js", "dashboard-updates.js"];
     for (const name of names) {
-      const response = await page.request.get(`http://127.0.0.1:8100/assets/${name}`);
+      const response = await page.request.get(new URL(`/assets/${name}`, page.url()).href);
       if (!response.ok()) throw new Error(`Local compact source missing: ${name}`);
       const body = await response.body();
-      await context.route(`**/assets/${name}`, route => route.fulfill({
+      await context.route(new RegExp(`/assets/(?:v/[^/]+/)?${name.replaceAll(".", "\\.")}$`), route => route.fulfill({
         body, contentType: name.endsWith(".css") ? "text/css" : "text/javascript",
       }));
     }

@@ -26,7 +26,7 @@ async (page) => {
     const response = await page.request.get("http://127.0.0.1:8021/assets/app.css");
     if (!response.ok()) throw new Error("Local stylesheet unavailable.");
     const css = await response.body();
-    await context.route("**/assets/app.css", route => route.fulfill({ body: css, contentType: "text/css" }));
+    await context.route(/\/assets\/(?:v\/[^/]+\/)?app\.css$/, route => route.fulfill({ body: css, contentType: "text/css" }));
     await test.goto(origin);
     await ready();
     for (const theme of ["light", "dark", "vivid"]) {
@@ -41,9 +41,12 @@ async (page) => {
           const title = el.querySelector("h2"), picker = el.querySelector(".ar-picker");
           const a = title.getBoundingClientRect(), b = picker.getBoundingClientRect();
           return { title: title.textContent, sameRow: Math.abs((a.top + a.bottom - b.top - b.bottom) / 2) < 2,
+            accessibleTitle: getComputedStyle(title.parentElement).display !== "none",
+            titleIsScreenReaderOnly: title.parentElement.getBoundingClientRect().width <= 1,
             areaLabels: el.querySelectorAll(".ar-label").length };
         });
-        if (header.title !== "Overview" || header.areaLabels || (width > 1100 && !header.sameRow)
+        if (header.title !== "Overview" || !header.accessibleTitle || header.areaLabels
+          || (width > 1100 && !header.sameRow && !header.titleIsScreenReaderOnly)
           || await test.locator("#tabBody .ar-picker").count()) {
           throw new Error(`Overview header layout differs from Billing: ${JSON.stringify(header)}`);
         }

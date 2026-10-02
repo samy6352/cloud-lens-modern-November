@@ -7,16 +7,16 @@ async (page) => {
   try {
     const responses = {};
     for (const [key, path] of [["html", "/"], ["css", "/assets/app.css"], ["source", "/assets/app.js"]]) {
-      const response = await page.request.get("http://localhost:8100" + path);
+      const response = await page.request.get(new URL(path, page.url()).href);
       if (!response.ok()) throw new Error(`Local source unavailable: ${path}`);
       responses[key] = await response.text();
     }
     const html = responses.html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<link\b[^>]*>/gi, "").replace("</head>", `<style>${responses.css}</style></head>`);
-    const illustration = await page.request.get("http://localhost:8100/assets/account-illustration.png");
+    const illustration = await page.request.get(new URL("/assets/account-illustration.png", page.url()).href);
     assert(illustration.ok(), "Account illustration is served locally");
     const image = await illustration.body();
-    await context.route("**/*", route => route.request().url().endsWith("/assets/account-illustration.png")
+    await context.route("**/*", route => new URL(route.request().url()).pathname.endsWith("/account-illustration.png")
       ? route.fulfill({ contentType: "image/png", body: image })
       : route.fulfill({ contentType: "text/html", body: html }));
     await test.goto("http://account-fixture.invalid/");
@@ -33,10 +33,10 @@ async (page) => {
         `let identity; ${load}; return loadIdentity;`)($, async () => window.fixture, () => {}, () => {}, () => true, () => {});
       window.placeAccount = new Function("$", `${place}; return placeAccount;`)($);
       new Function("$", `${wire}; wireAccount();`)($);
-      window.logoutCalls = []; window.loginTarget = "";
-      new Function("$", "fetch", "location", signout)($, async (url, options) => {
+      window.logoutCalls = []; window.loginTarget = ""; window.warmerStops = 0;
+      new Function("$", "fetch", "location", "cacheWarmer", signout)($, async (url, options) => {
         window.logoutCalls.push({ url, method: options.method });
-      }, { replace: path => { window.loginTarget = path; } });
+      }, { replace: path => { window.loginTarget = path; } }, { stop: () => window.warmerStops++ });
       $("tabs").innerHTML = ["Overview", "Billing", "Savings", "Monitor", "Governance", "Reports"]
         .map(name => `<button class="rail-item" role="tab">${name}</button>`).join("");
       $("tabBody").innerHTML = "<h2>Fixture data</h2>";
@@ -117,6 +117,7 @@ async (page) => {
     assert(await test.evaluate(() => window.logoutCalls.length === 1
       && window.logoutCalls[0].url === "/api/auth/logout" && window.logoutCalls[0].method === "POST"),
     "Existing logout handler is retained");
+    assert(await test.evaluate(() => window.warmerStops === 1), "Logout stops background cache warming");
     assert(await test.evaluate(() => localStorage.getItem("costScope") === null), "Logout clears remembered scope");
     assert(await test.locator("#signout").count() === 1 && await test.locator("#who").count() === 1,
       "Only one account and sign-out control exist");

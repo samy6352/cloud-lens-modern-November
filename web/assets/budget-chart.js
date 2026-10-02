@@ -21,7 +21,10 @@ export async function loadBudgetTrend(host, budget, {
   get, currency = "", drawBudgetChart, esc, options = {}, isCurrent = () => true,
 }) {
   if (!host) return false;
-  const draw = () => drawBudgetChart(host, budget, options);
+  const draw = () => {
+    host.replaceChildren();
+    return drawBudgetChart(host, budget, options);
+  };
   if (budget.trend || budget.filter_exact === false || budget.trend_note) {
     draw();
     return true;

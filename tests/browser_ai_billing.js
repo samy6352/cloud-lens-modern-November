@@ -1,5 +1,5 @@
 async (page) => {
-  const origin = "http://localhost:8100";
+  const origin = new URL(page.url()).origin;
   const context = await page.context().browser().newContext({
     storageState: await page.context().storageState(),
     viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce",
@@ -111,14 +111,10 @@ async (page) => {
     }
     await test.setViewportSize({ width: 1440, height: 1000 });
     await test.locator('[data-ai-mode="services"]').click();
-    await test.locator("#tabBody").screenshot({
-      path: "C:\\Users\\raviverma\\.scout\\browser-output\\853b0ecb-79b5-41e0-b147-44cc4fa82ff4\\ai-billing-preview.png",
-      animations: "disabled",
-    });
     check(errors.length === 0, errors.join("; "));
     return { passed, apiReads: reads.length, errors, liveWrites: 0 };
   } catch (error) {
-    return { failed: error.message, passed, reads, errors,
+    return { failure: error.message, passed, reads, errors,
       text: (await test.locator("#tabBody").innerText()).slice(0,1200),
       hidden: await test.locator("#aiResults").evaluate(e => [...e.querySelectorAll("[hidden]")].map(n=>({tag:n.tagName,id:n.id,class:n.className}))),
       html: (await test.locator("#aiResults").innerHTML()).slice(0,1800) };

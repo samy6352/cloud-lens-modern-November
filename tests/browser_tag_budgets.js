@@ -4,7 +4,7 @@ async (page) => {
   const context=await page.context().browser().newContext({
     storageState:await page.context().storageState(),viewport:{width:1440,height:1000},reducedMotion:"reduce",
   });
-  const test=await context.newPage(), errors=[], reads=[];
+  const test=await context.newPage(), errors=[], reads=[], trendReads=[];
   test.setDefaultTimeout(15000);
   let passed=0, phase="opening", hold=null, release;
   const check=(ok,label)=>{if(!ok)throw new Error(label);passed++;};
@@ -42,10 +42,20 @@ async (page) => {
     }
   };
   try {
+    const chartSource=await (await context.request.get("http://127.0.0.1:8021/assets/budget-chart.js")).body();
+    await context.route(/\/assets\/(?:v\/[^/]+\/)?budget-chart\.js$/,route=>
+      route.fulfill({body:chartSource,contentType:"text/javascript"}));
     await context.addInitScript(()=>{localStorage.setItem("costFilters","{}");localStorage.setItem("costPeriodMonth",'""');});
     await context.route("**/api/dashboard/tags?**",route=>route.fulfill({json:tags}));
     await context.route("**/api/budgets**",async route=>{
       if(route.request().method()!=="GET")throw new Error("No budget writes are permitted.");
+      const url=new URL(route.request().url());
+      if(url.pathname==="/api/budgets/trend"){
+        trendReads.push(url.href);
+        const budget=payload.budgets.find(row=>row.name===url.searchParams.get("name"));
+        return route.fulfill({json:{trend:budget?.trend??null,
+          trend_note:budget?.trend?"":"No comparable daily history is available."}});
+      }
       reads.push(route.request().url());
       if(hold)await hold;
       return route.fulfill({json:payload});
@@ -56,7 +66,10 @@ async (page) => {
     await test.locator("#tagBudgets .budget").first().waitFor();
     check(await test.locator("#tagBudgets .budget").count()===3,"key-only selection shows budgets for all its values");
     await charts();
-    check(await test.locator("#tagBudgets canvas").count()===3,"matching budgets draw charts without a second click");
+    await test.waitForFunction(()=>document.querySelectorAll("#tagBudgets canvas").length===3);
+    check(await test.locator("#tagBudgets canvas").count()===3,"matching budgets draw exactly one chart each without a second click");
+    check(trendReads.length===1&&new URL(trendReads[0]).searchParams.get("name")==="Dev budget",
+      "Only missing budget history is fetched lazily, using its exact identity");
     check(!/[?&](days|period_month|service)=/.test(reads[0]),"budget graphs retain the budget's full period and scope");
     phase="value and key narrowing";
     await selectValue("Env","prod");

@@ -1,7 +1,7 @@
 async (page) => {
   const context = await page.context().browser().newContext();
   const test = await context.newPage();
-  const base = "http://127.0.0.1:8100/assets/";
+  const base = new URL("/assets/", page.url()).href;
   const sources = {};
   for (const name of ["dashboard-evidence.js", "dashboard-explore.js", "dashboard-state.js"]) {
     const response = await context.request.get(base + name);

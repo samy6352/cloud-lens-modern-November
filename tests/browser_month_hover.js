@@ -79,11 +79,24 @@ async (page) => {
     await hover(await pointFor(0, 1, true));
     for (const dataset of [1, 2, 1, 0]) await hover(await pointFor(dataset, 1), false);
     await hover(await pointFor(0, 1, true));
+    assert(await test.locator("#cl-tooltip").evaluate(el => getComputedStyle(el).pointerEvents === "none"),
+      "Short chart hints do not steal clicks from the plotted segments");
+    await test.evaluate(() => {
+      window.chart.data.datasets[0].label = "Compute and Web capacity details ".repeat(100);
+      window.chart.update("none");
+    });
+    await hover(await pointFor(0, 1, true));
+    assert(await test.locator("#cl-tooltip").evaluate(el => el.scrollHeight > el.clientHeight
+      && getComputedStyle(el).pointerEvents === "auto"), "Overflowing hints remain scrollable and hoverable");
     await test.locator("#cl-tooltip").hover();
     await test.waitForTimeout(250);
     assert(await test.locator("#cl-tooltip").isVisible(), "Tooltip remains readable while hovered");
     await test.keyboard.press("Escape");
     assert(await test.locator("#cl-tooltip").isHidden(), "Escape dismisses the hovered tooltip");
+    await test.evaluate(() => {
+      window.chart.data.datasets[0].label = "Compute & Web";
+      window.chart.update("none");
+    });
     await test.mouse.move(410, 200);
     await hover(await pointFor(1, 2));
     await test.mouse.move(410, 200);

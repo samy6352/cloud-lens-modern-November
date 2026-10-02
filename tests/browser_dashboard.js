@@ -46,10 +46,15 @@ async (page) => {
     export const allSubscriptions = () => [{id:'11111111-1111-4111-8111-111111111111',name:'Demo'},
       {id:'22222222-2222-4222-8222-222222222222',name:'Second subscription'}];
     export const scopeIds = () => window.testScope || ['11111111-1111-4111-8111-111111111111'];
+    export const selectSubscriptions = ids => { window.testScope = ids; };
     export const whoAmI = async () => ({user:{admin:window.testAdmin !== false},authenticated:true});
     export const onScopeChange = fn => window.addEventListener('cl:test-refresh',fn);
     export const askAgent = () => {};
-    export const drawChart = () => {};
+    export const drawChart = async (host, spec) => {
+      if (typeof host === 'string') host=document.getElementById(host);
+      if (host) { host.dataset.drawn='true'; host.dataset.chartSpec=JSON.stringify(spec); }
+      return null;
+    };
     export const refreshHeader = () => {};
     export const setGlanceSpark = () => {};
   `;
@@ -57,7 +62,7 @@ async (page) => {
     "app.js": appStub,
     "analysis.js": "export const close=()=>{},invalidate=()=>{},isOpen=()=>false,openAnalysis=()=>{},setAnalysisContext=()=>{},wireAnalysis=()=>{};",
     "bot.js": "export const mountBot=()=>{},setBotState=()=>{};",
-    "filters.js": "export const activeFilterCount=()=>0,clearAllFilters=()=>{},filterQuery=()=>window.testFilters||[],loadFilters=()=>{},setFilterCurrency=()=>{},wireFilters=()=>{};",
+    "filters.js": "export const activeFilterCount=()=>0,applyFilter=()=>{},filterHasValue=()=>false,clearAllFilters=()=>{},filterQuery=()=>window.testFilters||[],loadFilters=()=>{},setFilterCurrency=()=>{},wireFilters=()=>{};",
   };
   test.on("pageerror", e => errors.push(e.message));
   await context.route("**/*", async route => {
@@ -343,17 +348,20 @@ async (page) => {
     check("actions remain available without Local data", await test.locator("#statusActions").isVisible());
     await test.evaluate(() => { document.getElementById("dataState").hidden = false; });
     await test.setViewportSize({ width: 1440, height: 1000 });
+    await test.locator("#overviewPatterns > summary").click();
     await test.locator("#spendHeatmap").scrollIntoViewIfNeeded();
-    await calendarStarted;
+    await Promise.race([calendarStarted, new Promise((_, reject) => setTimeout(
+      () => reject(Error("Visible Spend patterns did not request its heatmap module")), 5000))]);
     await goto("resources");
     await test.locator("#tabBody [data-table]").waitFor();
     releaseCalendar();
     await test.waitForTimeout(150);
     await goto("overview");
-    await test.locator("#tabBody #spendHeatmap .heat-cell[title]").first().waitFor();
+    await test.locator("#tabBody #spendHeatmap .heat-cell:not(.heat-none)").first().waitFor();
     check("a delayed heatmap import survives cached navigation", await test.locator("#tabBody #spendHeatmap h3").textContent() === "Daily pattern");
-    check("four days of data are visible", await test.locator("#tabBody #spendHeatmap .heat-cell[title]").count() === 4);
-    check("UTC billing dates stay on their weekday in India", (await test.locator("#tabBody .heat-cell[title]").first().getAttribute("title")).includes("Tuesday"));
+    check("four days of data are visible", await test.locator("#tabBody #spendHeatmap .heat-cell:not(.heat-none)").count() === 4);
+    check("UTC billing dates stay on their weekday in India", (await test.locator("#tabBody .heat-cell:not(.heat-none)").first().getAttribute("data-tooltip")
+      || await test.locator("#tabBody .heat-cell:not(.heat-none)").first().getAttribute("title")).includes("Tuesday"));
     const shortWindows = await test.evaluate(async () => {
       const { drawCalendarHeatmap } = await import("/assets/calendarheat.js");
       const host = document.createElement("div");
@@ -392,6 +400,9 @@ async (page) => {
             return {
               title: title.textContent, width: innerWidth, theme: document.documentElement.dataset.theme,
               height: el.getBoundingClientRect().height, titleSize: parseFloat(getComputedStyle(title).fontSize),
+              expectedTitleSize: parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--t-base")),
+              titleAccessible: getComputedStyle(title.parentElement).display !== "none",
+              titleIsScreenReaderOnly: title.parentElement.getBoundingClientRect().width <= 1,
               borderless: parseFloat(style.borderTopWidth) === 0 && parseFloat(selected.borderTopWidth) === 0,
               noNestedPanel: style.backgroundColor === "rgba(0, 0, 0, 0)" && parseFloat(style.borderRadius) === 0,
               sharedSurface: getComputedStyle(el).backgroundColor === getComputedStyle(document.getElementById("statusRow")).backgroundColor,
@@ -402,9 +413,11 @@ async (page) => {
             };
           });
           check(`integrated ${section} header ${theme}/${width}`, header.borderless && header.noNestedPanel
-            && header.sharedSurface && Math.abs(header.titleSize - 14) < .1 && header.underline && !header.overflow
+            && header.sharedSurface && Math.abs(header.titleSize - header.expectedTitleSize) < .1
+            && header.titleAccessible && header.underline && !header.overflow
             && header.buttonHeight >= 39 && header.buttonHeight <= 41
-            && header.height <= (width > 620 ? 54 : 80) && (width <= 620 || header.sameRow));
+            && header.height <= (width > 620 ? 54 : 80)
+            && (width <= 620 || header.sameRow || header.titleIsScreenReaderOnly));
           unifiedHeaders.push(header);
         }
       }
@@ -442,7 +455,7 @@ async (page) => {
     await test.locator(".wf-go").first().click();
     await test.waitForFunction(() => document.querySelector(".wf-result").textContent.includes("Fixture comparison"));
     await goto("resources");
-    await test.locator("[data-table]").waitFor();
+    await test.locator("#resourceResults [data-table]").waitFor();
     const pollsAfterLeave = requests.filter(x => x.includes("/savings/progress")).length;
     await test.waitForTimeout(1500);
     check("Savings stops polling off-tab", requests.filter(x => x.includes("/savings/progress")).length === pollsAfterLeave);
@@ -451,10 +464,10 @@ async (page) => {
       document.querySelector(".wf-drill") === window.liveDrill &&
       document.querySelector(".wf-result").textContent.includes("Fixture comparison")));
     await goto("resources");
-    await test.locator('th[data-col="3"]').click();
-    await test.waitForFunction(() => document.querySelector('th[data-col="3"]')?.getAttribute("aria-sort") === "ascending");
-    await test.locator('[data-page="next"]').click();
-    await test.waitForFunction(() => document.querySelector(".pager-count")?.textContent.startsWith("21"));
+    await test.locator('#resourceResults th[data-col="3"]').click();
+    await test.waitForFunction(() => document.querySelector('#resourceResults th[data-col="3"]')?.getAttribute("aria-sort") === "ascending");
+    await test.locator('#resourceResults [data-page="next"]').click();
+    await test.waitForFunction(() => document.querySelector("#resourceResults .pager-count")?.textContent.startsWith("21"));
     const selectedName = await test.locator("#tabBody .resource-name > :first-child").first().textContent();
     const requestsBeforeDetails = requests.length;
     await test.locator("#tabBody [data-row-detail]").first().focus();
@@ -471,17 +484,17 @@ async (page) => {
     check("clicking ordinary row content collapses details", await test.locator("#tabBody .row-detail").count() === 0);
     await rowCell.click();
     await test.locator("#tabBody .row-detail details summary").first().click();
-    const before = await test.locator("[data-table]").getAttribute("data-table");
-    await test.evaluate(() => { window.resourceNode = document.querySelector("[data-table]"); });
+    const before = await test.locator("#resourceResults [data-table]").getAttribute("data-table");
+    await test.evaluate(() => { window.resourceNode = document.querySelector("#resourceResults [data-table]"); });
     const resourcesBeforeReturn = requests.filter(url => url.startsWith("/api/dashboard/resources")).length;
     await test.evaluate(() => { window.realNow = Date.now; Date.now = () => window.realNow() + 86400000; });
     await goto("overview");
     await goto("resources");
     check("day-old tab snapshots do not refetch", requests.filter(url => url.startsWith("/api/dashboard/resources")).length === resourcesBeforeReturn);
     await test.evaluate(() => { Date.now = window.realNow; delete window.realNow; });
-    check("cached navigation reuses real DOM", await test.evaluate(() => window.resourceNode === document.querySelector("[data-table]")));
-    check("cached navigation retains page and sort", (await test.locator(".pager-count").textContent()).includes("21") &&
-      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "ascending");
+    check("cached navigation reuses real DOM", await test.evaluate(() => window.resourceNode === document.querySelector("#resourceResults [data-table]")));
+    check("cached navigation retains page and sort", (await test.locator("#resourceResults .pager-count").textContent()).includes("21") &&
+      await test.locator('#resourceResults th[data-col="3"]').getAttribute("aria-sort") === "ascending");
     const cachedDetail = await test.locator("#tabBody .row-detail").evaluate(element => ({
       text: element.innerText, content: element.textContent, hidden: element.querySelector("section")?.hidden,
       bounds: element.getBoundingClientRect().toJSON(),
@@ -491,9 +504,9 @@ async (page) => {
     await test.locator("#refreshViews").click();
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
     check("Refresh views fetches new results", requests.filter(url => url.startsWith("/api/dashboard/resources")).length === resourcesBeforeReturn + 1);
-    check("refresh uses stable table identity", await test.locator("[data-table]").getAttribute("data-table") === before);
-    check("refresh retains page and sort", (await test.locator(".pager-count").textContent()).includes("21") &&
-      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "ascending");
+    check("refresh uses stable table identity", await test.locator("#resourceResults [data-table]").getAttribute("data-table") === before);
+    check("refresh retains page and sort", (await test.locator("#resourceResults .pager-count").textContent()).includes("21") &&
+      await test.locator('#resourceResults th[data-col="3"]').getAttribute("aria-sort") === "ascending");
     check("refresh retains expanded row identity", (await test.locator("#tabBody .row-detail").innerText()).includes(selectedName));
     check("refresh retains nested detail expansion", await test.locator("#tabBody .row-detail details").first().evaluate(el => el.open));
     await test.locator("#resourceSearch").fill("resource-7");
@@ -501,7 +514,7 @@ async (page) => {
     await test.evaluate(() => { window.testScope = ["b"]; window.dispatchEvent(new Event("cl:test-refresh")); });
     await test.waitForTimeout(200);
     check("changed scope does not leak table query", await test.locator("#resourceSearch").inputValue() === "");
-    check("changed scope changes table key", await test.locator("[data-table]").getAttribute("data-table") !== before);
+    check("changed scope changes table key", await test.locator("#resourceResults [data-table]").getAttribute("data-table") !== before);
     check("changed scope does not inherit row expansion", await test.locator("#tabBody .row-detail").count() === 0);
     for (const change of ["period", "currency", "filter"]) {
       await test.locator("#resourceSearch").fill("resource-7");
@@ -515,7 +528,7 @@ async (page) => {
       await test.waitForTimeout(160);
       check(`changed ${change} does not leak table query`, await test.locator("#resourceSearch").inputValue() === "");
     }
-    await test.evaluate(() => { window.retainedResources = document.querySelector("[data-table]"); });
+    await test.evaluate(() => { window.retainedResources = document.querySelector("#resourceResults [data-table]"); });
     const retainedResourceRequests = requests.filter(url => url.startsWith("/api/dashboard/resources")).length;
     await goto("savings");
     await test.waitForFunction(() => document.querySelector("#svRefresh") && !document.querySelector("#svRefresh").disabled, { timeout: 10000 });
@@ -564,7 +577,7 @@ async (page) => {
     }
     await goto("resources");
     check("more than eight visited tabs retain their original DOM", await test.evaluate(() =>
-      window.retainedResources === document.querySelector("[data-table]")));
+      window.retainedResources === document.querySelector("#resourceResults [data-table]")));
     check("more than eight visited tabs retain results without refetching",
       requests.filter(url => url.startsWith("/api/dashboard/resources")).length === retainedResourceRequests);
     const timings = await test.evaluate(() => window.timings);
@@ -722,7 +735,9 @@ async (page) => {
     billingLegacy = false;
     await test.locator("#billRefresh").click();
     await test.waitForFunction(() => document.querySelector("#billSpent .bill-value")?.textContent.includes("100.00")
-      && document.querySelector("#billRefresh").disabled);
+      && document.querySelector("#billPotential .bill-loading-note"));
+    check("completed statements stay usable while optional savings signals are pending",
+      await test.locator("#billRefresh").isEnabled());
     await goto("resources");
     holdBillingRefresh = null;
     releaseBillingRefresh();
@@ -814,8 +829,8 @@ async (page) => {
     await test.locator("#budgetFind").waitFor();
     check("budget retry recovers with retained search", await test.locator("#budgetFind").inputValue() === "Production");
     check("Tags and Budgets produce no browser exceptions", errors.length === 0);
-    const billingSections = ["Billing summary", "Hourly Billing", "Applications & Tags", "Budgets"];
-    check("Billing owns four subsections without Resources", JSON.stringify(await test.locator("#viewActions [data-subsection]").allTextContents())
+    const billingSections = ["Billing summary", "Hourly Billing", "Applications & Tags", "History", "Budgets"];
+    check("Billing owns five subsections, including History, without Resources", JSON.stringify(await test.locator("#viewActions [data-subsection]").allTextContents())
       === JSON.stringify(billingSections));
     check("nested view keeps Billing selected on the left",
       await test.locator('#tabs [data-main-section="billing"]').getAttribute("aria-selected") === "true");
@@ -851,8 +866,8 @@ async (page) => {
     check("unauthorized cross-link does not load a hidden view", requests.length === beforeInvalid
       && (await test.locator("#toasts").textContent()).includes("not available"));
     await test.setViewportSize({ width: 390, height: 844 });
-    await test.waitForFunction(() => document.getElementById("tabs").getAttribute("aria-orientation") === "horizontal");
-    check("mobile primary navigation is horizontal", await test.locator("#tabs").getAttribute("aria-orientation") === "horizontal");
+    await test.waitForFunction(() => document.querySelector("#tabs [role=tablist]")?.getAttribute("aria-orientation") === "horizontal");
+    check("mobile primary navigation is horizontal", await test.locator("#tabs [role=tablist]").getAttribute("aria-orientation") === "horizontal");
     await test.locator('#tabs [data-main-section="billing"]').click();
     await test.locator('#viewActions [data-subsection="billing"]').click();
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
@@ -918,7 +933,7 @@ async (page) => {
       timings: timings.map(({ tab, cached, feedback_ms, total_ms, api_ms, render_ms, module_ms }) =>
       ({ tab, cached, feedback_ms, total_ms, api_ms, render_ms, module_ms })), requests: requests.length };
   } catch (err) {
-    return { failure: err.message, errors, failures, requests,
+    return { failure: `${err.stack || err.message}\n${test.isClosed() ? "" : (await test.locator("#tabBody").innerText()).slice(0, 1000)}`, errors, failures, requests,
       body: test.isClosed() ? "closed" : (await test.locator("body").innerText()).slice(0, 3000) };
   } finally {
     releaseCalendar();

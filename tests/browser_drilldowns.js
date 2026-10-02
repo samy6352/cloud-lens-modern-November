@@ -1,7 +1,7 @@
 async (page) => {
   const origin = page.url().match(/^https?:\/\/[^/]+/)?.[0];
   if (!origin) throw new Error("Open CloudLens before drilldown checks.");
-  const param = (url, name) => decodeURIComponent(url.match(new RegExp(`[?&]${name}=([^&]*)`))?.[1] || "");
+  const param = (url, name) => new URL(url, origin).searchParams.get(name) || "";
   const context = await page.context().browser().newContext({
     storageState: await page.context().storageState(), viewport: { width: 1366, height: 900 },
     reducedMotion: "reduce",
@@ -98,8 +98,8 @@ async (page) => {
     phase = "forecast";
     await tiles.nth(2).focus(); await test.keyboard.press("Space");
     await test.locator("dialog[open]").waitFor();
-    check("forecast opens the exact supplied estimate and source", /1,337/.test(await test.locator("dialog").innerText())
-      && (await test.locator("dialog").innerText()).includes("Azure Cost Management"));
+    check("forecast opens the exact supplied estimate and source", /1,337/.test(await test.locator("dialog.forecast-dialog[open]").innerText())
+      && (await test.locator("dialog.forecast-dialog[open]").innerText()).includes("Azure Cost Management"));
     await test.keyboard.press("Escape");
     check("closing forecast returns focus to its tile", await tiles.nth(2).evaluate(node => document.activeElement === node));
     phase = "month comparison and destination tabs";
