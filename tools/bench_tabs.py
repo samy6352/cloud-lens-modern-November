@@ -13,6 +13,9 @@ Usage:
     python tools/bench_tabs.py                 # every tab
     python tools/bench_tabs.py spend           # one group
     python tools/bench_tabs.py /api/overview   # explicit paths
+
+Set BENCH_OUTPUT to save a separate report without replacing the latest artefact.
+Set BENCH_SETTLE_SECONDS to wait for sign-in background warming before timing.
 """
 from __future__ import annotations
 
@@ -126,6 +129,8 @@ with httpx.Client(base_url=BASE, timeout=600.0, follow_redirects=False) as c:
         print(r.text[:400])
         raise SystemExit(1)
 
+    time.sleep(float(os.environ.get("BENCH_SETTLE_SECONDS", "0")))
+
     subs = c.get("/api/subscriptions").json().get("subscriptions") or []
     largest = subs[0]["id"] if subs else ""
 
@@ -170,6 +175,6 @@ with httpx.Client(base_url=BASE, timeout=600.0, follow_redirects=False) as c:
         print("\nworst warm:")
         for r in worst:
             print(f"  {r['warm']:>7.2f}s  {r['path']}")
-    out = ROOT / "tools" / "bench-tabs-latest.json"
+    out = pathlib.Path(os.environ.get("BENCH_OUTPUT", ROOT / "tools" / "bench-tabs-latest.json"))
     out.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(f"\nwritten: {out}")

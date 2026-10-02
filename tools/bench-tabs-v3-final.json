@@ -1,0 +1,331 @@
+[
+  {
+    "path": "/api/auth/me",
+    "cold": 0.002,
+    "warm": 0.001,
+    "status": 200,
+    "bytes": 209
+  },
+  {
+    "path": "/api/health",
+    "cold": 0.003,
+    "warm": 0.002,
+    "status": 200,
+    "bytes": 287
+  },
+  {
+    "path": "/api/subscriptions",
+    "cold": 0.31,
+    "warm": 0.326,
+    "status": 200,
+    "bytes": 9990
+  },
+  {
+    "path": "/api/onboarding",
+    "cold": 0.004,
+    "warm": 0.004,
+    "status": 200,
+    "bytes": 224
+  },
+  {
+    "path": "/api/warehouse",
+    "cold": 0.746,
+    "warm": 0.719,
+    "status": 200,
+    "bytes": 758
+  },
+  {
+    "path": "/api/currency",
+    "cold": 0.002,
+    "warm": 0.003,
+    "status": 200,
+    "bytes": 392
+  },
+  {
+    "path": "/api/reporting-period",
+    "cold": 0.096,
+    "warm": 0.088,
+    "status": 200,
+    "bytes": 442
+  },
+  {
+    "path": "/api/dashboard/sections",
+    "cold": 0.411,
+    "warm": 0.008,
+    "status": 200,
+    "bytes": 1663
+  },
+  {
+    "path": "/api/filters?days=30",
+    "cold": 0.01,
+    "warm": 0.009,
+    "status": 200,
+    "bytes": 41751
+  },
+  {
+    "path": "/api/capabilities",
+    "cold": 2.395,
+    "warm": 0.006,
+    "status": 200,
+    "bytes": 17228
+  },
+  {
+    "path": "/api/overview",
+    "cold": 0.006,
+    "warm": 0.006,
+    "status": 200,
+    "bytes": 536
+  },
+  {
+    "path": "/api/dashboard/executive?days=30",
+    "cold": 0.009,
+    "warm": 0.01,
+    "status": 200,
+    "bytes": 17019
+  },
+  {
+    "path": "/api/dashboard/billing?days=30",
+    "cold": 0.34,
+    "warm": 0.018,
+    "status": 200,
+    "bytes": 384949
+  },
+  {
+    "path": "/api/dashboard/billing/opportunities?days=30",
+    "cold": 5.789,
+    "warm": 0.013,
+    "status": 200,
+    "bytes": 21135
+  },
+  {
+    "path": "/api/dashboard/uptime?days=30",
+    "cold": 0.171,
+    "warm": 2.162,
+    "status": 200,
+    "bytes": 5794667
+  },
+  {
+    "path": "/api/dashboard/tags?days=30",
+    "cold": 0.253,
+    "warm": 0.262,
+    "status": 200,
+    "bytes": 8035618
+  },
+  {
+    "path": "/api/budgets?days=30",
+    "cold": 2.084,
+    "warm": 0.012,
+    "status": 200,
+    "bytes": 291
+  },
+  {
+    "path": "/api/dashboard/resources?days=30",
+    "cold": 10.566,
+    "warm": 8.715,
+    "status": 200,
+    "bytes": 15336752
+  },
+  {
+    "path": "/api/dashboard/resources?days=30&page=1&page_size=100",
+    "cold": 0.656,
+    "warm": 0.025,
+    "status": 200,
+    "bytes": 144604
+  },
+  {
+    "path": "/api/dashboard/resources?days=30&page=200&page_size=100&sort=delta",
+    "cold": 2.046,
+    "warm": 0.068,
+    "status": 200,
+    "bytes": 235533
+  },
+  {
+    "path": "/api/dashboard/aks?days=30",
+    "cold": 3.955,
+    "warm": 0.009,
+    "status": 200,
+    "bytes": 75559
+  },
+  {
+    "path": "/api/dashboard/ai-billing?days=30",
+    "cold": 0.124,
+    "warm": 0.126,
+    "status": 200,
+    "bytes": 103239
+  },
+  {
+    "path": "/api/dashboard/anomalies?days=30",
+    "cold": 2.233,
+    "warm": 2.125,
+    "status": 200,
+    "bytes": 4655
+  },
+  {
+    "path": "/api/dashboard/change-analysis?days=30&scope=4e9813b8-a62c-4fc4-9c2e-6202d43c362c",
+    "cold": 1.023,
+    "warm": 0.923,
+    "status": 200,
+    "bytes": 640
+  },
+  {
+    "path": "/api/dashboard/performance?days=30&scope=4e9813b8-a62c-4fc4-9c2e-6202d43c362c",
+    "cold": 0.859,
+    "warm": 1.096,
+    "status": 200,
+    "bytes": 706
+  },
+  {
+    "path": "/api/dashboard/azure-updates",
+    "cold": 1.702,
+    "warm": 0.013,
+    "status": 200,
+    "bytes": 175725
+  },
+  {
+    "path": "/api/dashboard/service-health?scope=4e9813b8-a62c-4fc4-9c2e-6202d43c362c",
+    "cold": 0.907,
+    "warm": 0.005,
+    "status": 200,
+    "bytes": 585
+  },
+  {
+    "path": "/api/anomalies/alerts",
+    "cold": 3.874,
+    "warm": 2.939,
+    "status": 200,
+    "bytes": 1675
+  },
+  {
+    "path": "/api/dashboard/savings?days=30",
+    "cold": 0.016,
+    "warm": 0.012,
+    "status": 200,
+    "bytes": 38985
+  },
+  {
+    "path": "/api/dashboard/savings/progress?days=30",
+    "cold": 1.933,
+    "warm": 0.01,
+    "status": 200,
+    "bytes": 10672
+  },
+  {
+    "path": "/api/dashboard/recommendations?days=30",
+    "cold": 0.009,
+    "warm": 0.009,
+    "status": 200,
+    "bytes": 660
+  },
+  {
+    "path": "/api/dashboard/waste?days=30",
+    "cold": 0.008,
+    "warm": 0.007,
+    "status": 200,
+    "bytes": 27226
+  },
+  {
+    "path": "/api/dashboard/shutdown?days=30",
+    "cold": 2.663,
+    "warm": 0.008,
+    "status": 200,
+    "bytes": 254
+  },
+  {
+    "path": "/api/dashboard/commitments?days=30",
+    "cold": 22.51,
+    "warm": 0.02,
+    "status": 200,
+    "bytes": 61752
+  },
+  {
+    "path": "/api/dashboard/rightsizing?days=30",
+    "cold": 0.013,
+    "warm": 0.013,
+    "status": 200,
+    "bytes": 2372
+  },
+  {
+    "path": "/api/dashboard/hybrid-benefit?days=30",
+    "cold": 5.956,
+    "warm": 0.03,
+    "status": 200,
+    "bytes": 758
+  },
+  {
+    "path": "/api/dashboard/rates?days=30",
+    "cold": 0.054,
+    "warm": 0.015,
+    "status": 200,
+    "bytes": 17121
+  },
+  {
+    "path": "/api/dashboard/advisor?days=30",
+    "cold": 0.023,
+    "warm": 0.022,
+    "status": 200,
+    "bytes": 8712
+  },
+  {
+    "path": "/api/dashboard/governance?days=30",
+    "cold": 0.014,
+    "warm": 0.013,
+    "status": 200,
+    "bytes": 28541
+  },
+  {
+    "path": "/api/dashboard/esu?days=30",
+    "cold": 0.01,
+    "warm": 0.01,
+    "status": 200,
+    "bytes": 496
+  },
+  {
+    "path": "/api/dashboard/health",
+    "cold": 5.169,
+    "warm": 0.015,
+    "status": 200,
+    "bytes": 8520
+  },
+  {
+    "path": "/api/dashboard/audit?days=30",
+    "cold": 0.016,
+    "warm": 0.014,
+    "status": 200,
+    "bytes": 21521
+  },
+  {
+    "path": "/api/report/options?days=30",
+    "cold": 0.494,
+    "warm": 0.399,
+    "status": 200,
+    "bytes": 388
+  },
+  {
+    "path": "/api/archive?limit=200",
+    "cold": 0.004,
+    "warm": 0.002,
+    "status": 200,
+    "bytes": 124
+  },
+  {
+    "path": "/api/cost-data/subscriptions",
+    "cold": 0.002,
+    "warm": 0.002,
+    "status": 200,
+    "bytes": 296
+  },
+  {
+    "path": "/api/schedules",
+    "cold": 93.273,
+    "warm": 0.016,
+    "status": 200,
+    "bytes": 34254
+  },
+  {
+    "path": "/api/insights",
+    "cold": 11.289,
+    "warm": 0.026,
+    "status": 200,
+    "bytes": 1073
+  }
+]
