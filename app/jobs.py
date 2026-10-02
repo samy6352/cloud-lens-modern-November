@@ -23,7 +23,9 @@ ROLLUP_TABLES_KEY = "data_rollup_tables"
 ROLLUP_DIRTY_KEY = "data_rollup_dirty"
 ROLLUP_LAYOUT_KEY = "data_rollup_layout"
 # Stamps of serving tables built from published derived data (see `resource_counts`).
-SERVING_STAMP_KEYS = ["resource_counts_generation", "resource_ranks_generation"]
+SERVING_STAMP_KEYS = [
+    "resource_counts_generation", "resource_ranks_generation", "tab_serving_generation",
+]
 ROLLUP_LAYOUT_VERSION = "1"
 # What a generation stamp written before `ROLLUP_TABLES_KEY` existed covered. A
 # stamp carries no roster of its own, and the two tables below are the only ones
@@ -188,6 +190,12 @@ def invalidate_rollup(con: Any) -> None:
         [ROLLUP_GENERATION_KEY],
     )
     _write_dirty(con, source, -1, None)
+    _clear_serving(con)
+
+
+def _clear_serving(con: Any) -> None:
+    con.execute("DELETE FROM meta WHERE key IN ("
+                + ", ".join("?" for _ in SERVING_STAMP_KEYS) + ")", SERVING_STAMP_KEYS)
 
 
 def _ready(con: Any, source: int, ready: int) -> bool:
@@ -247,6 +255,7 @@ def unstamp(con: Any, tables: Sequence[str]) -> None:
     exactly the tables missing from it, so this is sufficient on both sides.
     """
     drop = set(tables)
+    _clear_serving(con)
     stamped = _stamped_tables(con)
     if not drop & stamped:
         return

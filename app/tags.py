@@ -224,7 +224,7 @@ def _ranked_candidates(r: Any, hi: Any, days: int, code: str | None
 def cost_by_tag(scope: list[str] | None = None, days: int = 30,
                 currency: str | None = None) -> dict[str, Any]:
     """Every tagged resource in the window, with its cost, its tag keys and its daily spend."""
-    from . import reporting, resource_tags
+    from . import reporting
 
     days = reporting.period_days(days)
     if scope is not None and not scope:
@@ -232,6 +232,17 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
     from .warehouse import warehouse
 
     with warehouse.reader(scope=scope, currency=currency, usage=("tags",)) as r:
+        from . import tab_serving
+
+        served = tab_serving.read(r, "tags", days)
+        return served if served is not None else _build(r, days, currency)
+
+
+def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
+    """Exact SQL reductions on one reader, shared with the serving publisher."""
+    from . import reporting, resource_tags
+
+    with nullcontext(r):
         # Money per resource from the per-resource summary when it can price this
         # connection, tags looked up for just the resources returned. Scanning `costs`
         # for both timed out on a 16.9M-row estate: `Tags` is most of every row's bytes.
@@ -405,14 +416,14 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
 
     # Budget amounts are native billing units, never the dashboard's converted currency.
     # Aggregate per subscription before applying a row cap so a mixed unit cannot look single.
-    with warehouse.reader(scope=scope) as r:
+    with nullcontext(r):
         native = r.rows(
             f"""SELECT subscription_id,
                        STRING_AGG(DISTINCT COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'unknown'), ',')
                          AS currencies
                 FROM (
                   SELECT DISTINCT "SubAccountId" AS subscription_id, "BillingCurrency" AS currency
-                  FROM {getattr(r, "agg", "costs")} WHERE {window}
+                  FROM {getattr(r, "native_agg", getattr(r, "agg", "costs"))} WHERE {window}
                 ) native_codes GROUP BY subscription_id """,
             limit=MAX_RESOURCES + 1,
         )

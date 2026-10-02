@@ -101,7 +101,11 @@ class _Cursor:
         # `bind` tells the translator whether psycopg will be scanning this
         # statement for placeholder markers. It only does so when parameters are
         # passed, and escaping `%` when it will not corrupts the statement.
-        self._cursor.execute(to_postgres(sql, bind=params is not None), params or None)
+        # Temp scope/month views may be introduced after an unqualified statement
+        # was prepared on this pooled session. PostgreSQL need not re-resolve that
+        # name merely because a new shadow exists on the unchanged search path.
+        self._cursor.execute(to_postgres(sql, bind=params is not None), params or None,
+                             prepare=False)
         return self
 
     def fetchall(self):

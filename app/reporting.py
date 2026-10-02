@@ -40,6 +40,10 @@ def selected_month() -> str | None:
     return _month.get()
 
 
+def comparison_selected() -> bool:
+    return _history.get()
+
+
 @contextmanager
 def select(month: str | None) -> Iterator[None]:
     token = _month.set(validate_month(month))

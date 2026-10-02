@@ -49,6 +49,7 @@ from . import (
     schema_v2,
     spot_rates,
     store,
+    tab_serving,
     usage_signals,
 )
 from .sqldialect import SHIM_SCHEMA, strip_literals
@@ -485,9 +486,11 @@ class Reader:
                  bill_indexed: bool = False, res_ordered: bool = False,
                  usage: dict[str, str] | None = None,
                  counts: str | None = None, ranks: str | None = None,
-                 scoped: bool = False, narrowed: bool = False) -> None:
+                 scoped: bool = False, narrowed: bool = False,
+                 tab_served: bool = False, native_agg: str | None = None) -> None:
         self._con = con
         self.agg = aggregate
+        self.native_agg = native_agg or aggregate
         self.res = counted
         self.named = named
         # What `billing.build` should read. Unlike the three above it is not always a
@@ -511,6 +514,7 @@ class Reader:
         self.ranks = ranks
         self.scoped = scoped
         self.narrowed = narrowed
+        self.tab_served = tab_served
         # Opt-in summaries (see `USAGE_MODULES`). Each names a relation that answers
         # this connection exactly -- the stored table when it can, the same grain over
         # the scoped `costs` view when it cannot -- or is absent when not requested.
@@ -774,6 +778,11 @@ class Warehouse:
         except Exception as exc:  # noqa: BLE001
             log.warning("warehouse: could not refresh %s (%s); Resources ranks on the fly",
                         resource_ranks.TABLE, str(exc)[:300])
+        try:
+            tab_serving.refresh(self)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("warehouse: could not refresh %s (%s); tabs use exact queries",
+                        tab_serving.TABLE, str(exc)[:300])
 
     async def refresh_rollup_async(self, window: tuple[Any, Any] | None = None) -> None:
         """`refresh_rollup` off the event loop — it aggregates the whole detail table."""
@@ -1010,6 +1019,7 @@ class Warehouse:
         from . import reporting
 
         period_filter = reporting.view_predicate() if read_only else ""
+        con.native_where = ""
         if not scope and rate is None and not filters and not period_filter:
             if include_commitments:
                 self._shadow_auxiliary_rollup(con, "", None, None, commitment_benefits)
@@ -1048,6 +1058,7 @@ class Warehouse:
             where = f"{where} AND {narrowed}" if where else f"WHERE {narrowed}"
         if period_filter:
             where = f"{where} AND {period_filter}" if where else f"WHERE {period_filter}"
+        con.native_where = where
 
         fx_source = None
         if rate is not None:
@@ -1325,6 +1336,8 @@ class Warehouse:
                     [budget_ms])
             aggregate, counted, named, billing = self._derived_sources(
                 con, scope, currency, filters)
+            native_agg = (self._native_currency_source(con, filters)
+                          if "tags" in usage and currency is not None else None)
             counts = (resource_counts.TABLE
                       if (not scope and not filters and self._display_rate(currency) is None
                           and resource_counts.current(con, getattr(con, "fresh_tables", ())))
@@ -1351,9 +1364,25 @@ class Warehouse:
                     res_ordered=presence.TABLE in indexed,
                     usage={name: USAGE_MODULES[name].TABLE for name in usage},
                     counts=counts, ranks=ranks, scoped=bool(scope),
-                    narrowed=bool(filters) or self._display_rate(currency) is not None)
+                    narrowed=bool(filters) or self._display_rate(currency) is not None,
+                    tab_served=(tab_serving.ENABLED and scope is None and not filters
+                                and currency is None
+                                and tab_serving.REQUIRED.issubset(
+                                    getattr(con, "fresh_tables", ()))),
+                    native_agg=native_agg)
         finally:
             con.close()
+
+    def _native_currency_source(self, con: Any, filters: dict[str, list[str]] | None) -> str:
+        """Native budget units on the same scoped session as converted tag spend."""
+        where = getattr(con, "native_where", "")
+        if rollup.TABLE in getattr(con, "fresh_tables", ()) and rollup.serves_filters(filters):
+            source = f'"{self._rollup_schema}".{rollup.TABLE}'
+            where = environment.stored_where(where)
+        else:
+            source = self._pg_table
+        return (f'(SELECT "SubAccountId", "BillingCurrency", "ChargePeriodStart" '
+                f'FROM {source} {where}) AS native_costs')
 
     def relations(self, con: Any, scope: list[str] | None = None,
                   currency: str | None = None,

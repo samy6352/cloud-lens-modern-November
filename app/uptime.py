@@ -95,11 +95,24 @@ def _stage_daily(r: Any, hourly: str) -> bool:
 def hourly_cost(scope: list[str] | None = None, days: int = 30,
                 currency: str | None = None) -> dict[str, Any]:
     """Billed hours, derived rates and estimated billed coverage for the window."""
-    from . import reporting, resource_tags
+    from . import reporting
     from .warehouse import warehouse
 
     days = reporting.period_days(days)
+    if scope is not None and not scope:
+        return _empty(days)
     with warehouse.reader(scope=scope, currency=currency, usage=("hourly", "tags")) as r:
+        from . import tab_serving
+
+        served = tab_serving.read(r, "uptime", days)
+        return served if served is not None else _build(r, days)
+
+
+def _build(r: Any, days: int) -> dict[str, Any]:
+    """Exact SQL reductions and response shaping, also used by the serving publisher."""
+    from . import reporting, resource_tags
+
+    with nullcontext(r):
         # Each relation below is the precomputed summary when it can answer this
         # connection exactly and the same grain over the scoped `costs` view when it
         # cannot, so the SQL is identical either way; only the speed differs. Reading
@@ -169,9 +182,10 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
             tagged = ("SELECT meters.*, tg.tags FROM meters "
                       + resource_tags.lateral_sql(tag_source, "meters.id", "meters.currency",
                                                   start, str(hi)[:10])
-                      + " ORDER BY meters.cost DESC")
+                      + " ORDER BY meters.cost DESC, meters.id, meters.meter, meters.currency")
         else:
-            tagged = "SELECT meters.*, NULL AS tags FROM meters ORDER BY meters.cost DESC"
+            tagged = ("SELECT meters.*, NULL AS tags FROM meters "
+                      "ORDER BY meters.cost DESC, meters.id, meters.meter, meters.currency")
 
         # One row per resource, meter and day is the grain everything else is built from: the
         # peak day gives the instance count, and the day list gives the weekday profile.
@@ -192,7 +206,7 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
                   FROM {STAGED_DAILY}
                   GROUP BY id, meter, currency
                   HAVING SUM(hours) > 0
-                  ORDER BY cost DESC
+                  ORDER BY cost DESC, id, meter, currency
                   LIMIT {MAX_ROWS + 1}
                 )
                 {tagged}
@@ -258,7 +272,7 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
                        FROM daily
                        GROUP BY id, meter, currency
                        HAVING SUM(hours) > 0
-                       ORDER BY cost DESC
+                       ORDER BY cost DESC, id, meter, currency
                        LIMIT {MAX_ROWS + 1}
                      )
                 {tagged}
