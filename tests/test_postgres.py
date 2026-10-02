@@ -115,6 +115,8 @@ def test_rows_written_by_copy_come_back_intact(wh):
                           _row("bbb", "2026-01-06", 5.5)])
 
     assert wh.row_count() == 2
+    assert wh.summary()["summary_pending"]
+    wh.refresh_rollup(strict=True)
     summary = wh.summary()
     assert summary["rows"] == 2
     assert summary["total_cost"] == pytest.approx(15.5)
@@ -201,6 +203,8 @@ def test_duplicate_spellings_preserve_charges_pending_authoritative_reingest(wh,
     # The repair runs at construction, so build a second warehouse over the same schema.
     again = reboot()
     assert again.row_count() == 2
+    assert again.summary()["summary_pending"]
+    again.refresh_rollup(strict=True)
     summary = again.summary()
     assert summary["total_cost"] == pytest.approx(20.0)
     assert summary["reconciliation_required"]

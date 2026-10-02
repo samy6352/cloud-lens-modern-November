@@ -29,7 +29,10 @@ REQUIRES = re.compile(r"^#\s*cloudlens-test:\s*requires-(\w+)\s*$", re.M)
 # checks the machine -- the latter reads the developer's own warehouse and passes for
 # them alone. `COST_` is still scrubbed for the settings that remain (COST_CLIENT_TYPE,
 # COST_QUERY_TIMEOUT_MS); the storage variables it used to cover are gone.
-SCRUB_PREFIXES = ("AUTH_", "COST_", "PG", "ARCHIVE_", "PROJECT_", "MODEL_", "CLOUDLENS_DEMO_")
+SCRUB_PREFIXES = ("AUTH_", "COST_", "PG", "ARCHIVE_", "PROJECT_", "MODEL_", "CLOUDLENS_")
+TEST_CONTROLS = {
+    "CLOUDLENS_PG_TEST", "CLOUDLENS_PG_USER", "CLOUDLENS_PG_DB", "CLOUDLENS_AZURE_TEST",
+}
 
 # These older pytest modules predate the postgres marker. Their fixtures own schemas.
 POSTGRES_MODULES = {"test_postgres.py", "test_query_guard.py", "test_rollup.py"}
@@ -48,11 +51,13 @@ def pytest_configure(config: pytest.Config) -> None:
     isolated = pytest.MonkeyPatch()
     workspace = Path(tempfile.mkdtemp(
         prefix="session_", dir=config.cache.mkdir("workspaces")))
-    isolated.setenv("CLOUDLENS_ENV_FILE", str(workspace / "absent.env"))
     isolated.setenv("AUTH_DATA_DIR", str(workspace / "auth"))
     for name in tuple(os.environ):
-        if name.startswith("PG") and name not in {"PGPASSWORD", "PGPORT", "PGSSLMODE"}:
+        if ((name.startswith("PG") and name not in {
+                "PGPASSWORD", "PGPORT", "PGSSLMODE", "PGOPTIONS", "PG_STATEMENT_TIMEOUT"})
+                or (name.startswith("CLOUDLENS_") and name not in TEST_CONTROLS)):
             isolated.delenv(name)
+    isolated.setenv("CLOUDLENS_ENV_FILE", str(workspace / "absent.env"))
     config.add_cleanup(lambda: shutil.rmtree(workspace, ignore_errors=True))
     config.add_cleanup(isolated.undo)
 
@@ -151,7 +156,7 @@ class ScriptItem(pytest.Item):
 
     def _environment(self, workspace: Path) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items()
-               if not k.startswith(SCRUB_PREFIXES)}
+               if not k.startswith(SCRUB_PREFIXES) or k in TEST_CONTROLS}
         env["PYTHONIOENCODING"] = "utf-8"
         # Unbuffered, so a test that is killed on timeout still shows what it printed.
         env["PYTHONUNBUFFERED"] = "1"
@@ -231,6 +236,8 @@ def _storage_environment(config: pytest.Config, workspace: Path) -> dict[str, st
         env["PGPASSWORD"] = os.environ["PGPASSWORD"]
     if os.getenv("PGSSLMODE"):
         env["PGSSLMODE"] = os.environ["PGSSLMODE"]
+    env["PGOPTIONS"] = os.getenv("PGOPTIONS", "-c statement_timeout=30000")
+    env["PG_STATEMENT_TIMEOUT"] = os.getenv("PG_STATEMENT_TIMEOUT", "30s")
 
     _record_schema(config, schema)
     return env
@@ -266,7 +273,7 @@ def _assert_test_database_isolated(env: dict[str, str]) -> None:
             host=env["PGHOST"], port=env["PGPORT"], dbname=env["PGDATABASE"],
             user=env["PGUSER"], password=store._password(), sslmode=store.sslmode,
             connect_timeout=20, autocommit=True,
-            options="-c default_transaction_read_only=on",
+            options="-c default_transaction_read_only=on -c statement_timeout=30000",
         ) as connection:
             shared = connection.execute(
                 "SELECT n.nspname, c.relname FROM pg_class c "

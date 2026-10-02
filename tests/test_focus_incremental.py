@@ -507,8 +507,9 @@ def _mark_derived_current(memory):
     case the skip must *not* apply to.
     """
     from app import jobs
+    from app.warehouse import DERIVED_MODULES
 
-    with jobs.coherent_rollup(memory, ["costs_rollup", "resource_presence", "billing_rollup"]):
+    with jobs.coherent_rollup(memory, [module.TABLE for module in DERIVED_MODULES]):
         pass
 
 

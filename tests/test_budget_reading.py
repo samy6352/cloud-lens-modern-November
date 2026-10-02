@@ -145,7 +145,12 @@ class BudgetReads(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["filter_exact"])
         self.assertEqual(result["tag_filter"], [["env", ["prod"]]])
         self.assertTrue(result["trend"]["filtered_exactly"])
-        self.assertEqual(query.call_args.args[:3], ("sub-a", "2026-09-01", "2026-09-29"))
+        from datetime import UTC, datetime
+
+        today = datetime.now(UTC).date()
+        self.assertEqual(query.call_args.args[:3],
+                         ("sub-a", today.replace(day=1).isoformat(),
+                          today.isoformat()))
         self.assertEqual(query.call_args.kwargs["tags"], [("env", ["prod"])])
 
     async def test_single_budget_trend_rejects_out_of_scope_subscription(self):

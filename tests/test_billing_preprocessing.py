@@ -41,6 +41,7 @@ def source(postgres_warehouse):
                 "PricingModel": ["OnDemand", "Spot", "Reservation", "SavingsPlan",
                                  "custom", None][i % 6],
                 "BenefitId": ["benefit", "", None][i % 3],
+                "Tags": ['{"env":"prod"}', '{"env":"dev"}', "", None][i % 4],
             }
             for j, name in enumerate(sorted(numeric)):
                 values[name] = [None, -8.5, 0.0, 3.125, 16.25,

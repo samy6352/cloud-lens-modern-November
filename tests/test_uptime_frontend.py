@@ -217,7 +217,7 @@ import {createTabs} from "./web/assets/dashboard-spend.js";
 const nodes=new Map();
 // The panel finds its chart hosts and its links through the DOM after writing innerHTML, so the
 // stub has to answer those two selectors rather than returning nothing for everything.
-const charts=[{dataset:{chart:"0"}}];
+const charts=[{dataset:{chart:"0"},innerHTML:"",replaceChildren(){this.innerHTML="";}}];
 const links=[];
 const node=id=>{
   if(!nodes.has(id))nodes.set(id,{id,outerHTML:"",value:"",innerHTML:"",remove(){},

@@ -557,8 +557,8 @@ check("a finished refresh updates the date on the button",
 # changes once a day, overnight. So it reloads itself.
 _main = open(os.path.join(HERE, "app", "main.py"), encoding="utf-8").read()
 check("the server hands over the parsed filter for that link",
-      'b["filter_exact"] = exact' in _main
-      and 'b["tag_filter"] = [[k, v] for k, v in tags or []] if exact else []' in _main)
+      'budget["filter_exact"] = exact' in _main
+      and 'budget["tag_filter"] = [[key, values] for key, values in tags or []] if exact else []' in _main)
 check("the warehouse reloads itself on a schedule",
       "async def _daily_refresh" in _main)
 check("started with the app and stopped with it",
@@ -860,22 +860,22 @@ check("it reads the warehouse, not a live Resource Graph scan — same speed gua
       "from .warehouse import warehouse" in res and "_arg(" not in res)
 check("the tab has a named ceiling rather than an unbounded response, like tags' own",
       "MAX_RESOURCES" in res)
-inventory = next(node for node in ast.walk(ast.parse(res))
-                 if isinstance(node, ast.FunctionDef) and node.name == "inventory")
-resource_queries = [
-    node for node in ast.walk(inventory)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    and isinstance(node.func.value, ast.Name) and node.func.value.id == "r" and node.func.attr == "rows"
-]
-resource_sql = ast.get_source_segment(res, resource_queries[0].args[0]) if resource_queries else ""
+from datetime import date
+from types import SimpleNamespace
+
+from app.resources import _detail_sql
+
+resource_sql = _detail_sql(
+    SimpleNamespace(agg="costs_rollup", named="resource_presence", tags="resource_tags"),
+    date(2026, 9, 2), "DATE '2026-08-03'", "DATE '2026-07-04'", limit=10)
 check("cost and its prior-period figure come from one pass over the rows, not two queries",
-      len(resource_queries) == 1 and resource_sql.count("FROM costs") == 1
-      and re.search(r'SUM\(CASE WHEN \{period\} THEN "BilledCost" ELSE 0 END\)\s+AS cost', resource_sql)
-      and re.search(r'SUM\(CASE WHEN \{previous\} THEN "BilledCost" ELSE 0 END\)\s+AS prior_cost', resource_sql))
+      resource_sql.count("FROM resource_presence") == 1
+      and 'SUM(CASE WHEN "ChargePeriodStart" > DATE \'2026-08-03\' THEN "BilledCost" ELSE 0 END) AS service_cost' in resource_sql
+      and 'SUM(CASE WHEN "ChargePeriodStart" > DATE \'2026-07-04\' AND "ChargePeriodStart" <= DATE \'2026-08-03\' THEN "BilledCost" ELSE 0 END) AS service_prior_cost' in resource_sql
+      and "SUM(service_cost) AS cost, SUM(service_prior_cost) AS prior_cost" in resource_sql)
 check("first/last seen are bounded to the same combined window, not a full-history scan",
-      '"ChargePeriodStart" > {prev} AND "ChargePeriodStart" <= DATE' in res
-      and 'FROM costs WHERE {combined}' in res
-      and 'MIN("ChargePeriodStart")' in res and 'MAX("ChargePeriodStart")' in res)
+      'FROM resource_presence WHERE "ChargePeriodStart" > DATE \'2026-07-04\' AND "ChargePeriodStart" <= DATE \'2026-09-02\'' in resource_sql
+      and 'MIN("ChargePeriodStart")' in resource_sql and 'MAX("ChargePeriodStart")' in resource_sql)
 check("the cost-area label reuses the taxonomy every other tab already uses",
       "from .dashboard import _group_for_family" in res)
 check("tags are parsed with the one parser every other tab trusts, not a second implementation",
@@ -905,7 +905,7 @@ check("the renderer is dispatched from the tab switch, not left unreachable",
       'resources: ["resources", "renderResources"]' in dash
       and "await tabs[renderer](mine, tab)" in dash)
 check("it is cached like every other analysis tab, not refetched on every tab switch",
-      'cached(key("resources")' in dash)
+      'cached(key(`resources:${query}`)' in read("dashboard-resources.js"))
 # A net-total footer for this column was tried and dropped: summed across the whole, unfiltered
 # estate it mixes organic drift with whatever got decommissioned or onboarded mid-window into
 # one number that means nothing coherent, unlike changeCol's own total elsewhere on a narrower,

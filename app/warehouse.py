@@ -542,6 +542,12 @@ class Reader:
         else:
             self._con.execute(sql)
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """A savepoint when a reader is already inside a certified transaction."""
+        with self._con.raw.transaction():
+            yield
+
 
 # Whether a *new* `costs` is created partitioned by month. Off by default, and
 # deliberately not a migration: `CREATE TABLE IF NOT EXISTS ... PARTITION BY` is

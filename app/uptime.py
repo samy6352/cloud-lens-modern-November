@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import nullcontext
 from typing import Any
 
 log = logging.getLogger("cloudlens.uptime")
@@ -70,21 +71,23 @@ def _stage_daily(r: Any, hourly: str) -> bool:
     execute = getattr(r, "execute", None)
     if not callable(execute):
         return False
+    transaction = getattr(r, "transaction", nullcontext)
     try:
-        for name in (STAGED_SRC, STAGED_DAILY):
-            execute(f"DROP TABLE IF EXISTS {name}")
-        execute(f"CREATE TEMP TABLE {STAGED_SRC} AS {hourly}")
-        execute(
-            f"""
-            CREATE TEMP TABLE {STAGED_DAILY} AS
-            SELECT id, meter, currency, day,
-                   SUM(hours) AS hours, SUM(cost) AS cost,
-                   MAX(name) AS name, MAX(service) AS service,
-                   MAX(subscription) AS subscription,
-                   MAX(resource_group) AS resource_group, MAX(region) AS region
-            FROM {STAGED_SRC} GROUP BY id, meter, currency, day
-            """)
-        execute(f"DROP TABLE {STAGED_SRC}")
+        with transaction():
+            for name in (STAGED_SRC, STAGED_DAILY):
+                execute(f"DROP TABLE IF EXISTS {name}")
+            execute(f"CREATE TEMP TABLE {STAGED_SRC} AS {hourly}")
+            execute(
+                f"""
+                CREATE TEMP TABLE {STAGED_DAILY} AS
+                SELECT id, meter, currency, day,
+                       SUM(hours) AS hours, SUM(cost) AS cost,
+                       MAX(name) AS name, MAX(service) AS service,
+                       MAX(subscription) AS subscription,
+                       MAX(resource_group) AS resource_group, MAX(region) AS region
+                FROM {STAGED_SRC} GROUP BY id, meter, currency, day
+                """)
+            execute(f"DROP TABLE {STAGED_SRC}")
         return True
     except Exception as exc:  # noqa: BLE001 - the original queries still answer
         log.warning("hourly_cost: staging failed (%s); using the original queries", str(exc)[:300])

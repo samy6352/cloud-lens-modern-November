@@ -1,6 +1,6 @@
 """FOCUS repairs changed days, with monthly rankings refreshed from those updated summaries."""
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -60,23 +60,25 @@ def _pending(wh):
 
 
 def _untouched_days(wh, excluded):
-    from app import billing_serving, derived
+    from app import derived
     from app.warehouse import DERIVED_MODULES
 
     result = {}
     with wh.connect(read_only=True) as con:
         for module in DERIVED_MODULES:
             table = derived.active_table(con, wh._rollup_schema, module)
-            dates = excluded
-            period = '"ChargePeriodStart"'
-            if module is billing_serving:
-                dates = sorted({day.replace(day=1) for day in excluded})
-                period = 'date_trunc(\'month\', "ChargePeriodStart")::date'
+            windows = [(day, day + timedelta(days=1)) for day in excluded]
+            expand = getattr(module, "build_windows", lambda windows: windows)
+            windows = expand(windows)
+            period = f'"{module.PERIOD}"'
+            untouched = " AND ".join(
+                f"NOT ({period} >= ? AND {period} < ?)" for _ in windows)
             result[module.TABLE] = con.execute(
                 f'SELECT tableoid::oid, ctid::text, xmin::text, to_jsonb(t)::text '
                 f'FROM "{wh._rollup_schema}".{table} t '
-                f'WHERE {period} NOT IN ({",".join("?" for _ in dates)}) '
-                'ORDER BY tableoid, ctid', list(dates)).fetchall()
+                f'WHERE {untouched} '
+                'ORDER BY tableoid, ctid',
+                [edge for window in windows for edge in window]).fetchall()
     return result
 
 

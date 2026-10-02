@@ -79,6 +79,38 @@ def test_unit():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_deployment_flags_are_isolated_and_database_timeout_survives(project):
+    write_test(project, "test_unit.py", """
+import os
+assert not os.getenv("CLOUDLENS_DERIVED_LAYOUT")
+assert not os.getenv("CLOUDLENS_ENV_ROLLUP")
+assert not os.getenv("CLOUDLENS_READ_INDEXES")
+assert os.environ["PGOPTIONS"] == "-c statement_timeout=25000"
+assert os.environ["PG_STATEMENT_TIMEOUT"] == "25s"
+def test_unit():
+    assert True
+""")
+    result = run_pytest(project, environment={
+        "CLOUDLENS_DERIVED_LAYOUT": "monthly", "CLOUDLENS_ENV_ROLLUP": "true",
+        "CLOUDLENS_READ_INDEXES": "true", "PGOPTIONS": "-c statement_timeout=25000",
+        "PG_STATEMENT_TIMEOUT": "25s",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_isolated_storage_environment_keeps_timeout_and_pins_test_database(monkeypatch):
+    monkeypatch.setenv("CLOUDLENS_PG_TEST", "localhost")
+    monkeypatch.setenv("CLOUDLENS_PG_USER", "tester")
+    monkeypatch.delenv("CLOUDLENS_PG_DB", raising=False)
+    monkeypatch.setenv("PGDATABASE", "production-must-not-leak")
+    monkeypatch.setenv("PGOPTIONS", "-c statement_timeout=25000")
+    monkeypatch.setenv("PG_STATEMENT_TIMEOUT", "25s")
+    env = collector._storage_environment(SimpleNamespace(), ROOT / "timeout_fixture")
+    assert env["PGDATABASE"] == "postgres"
+    assert env["PGOPTIONS"] == "-c statement_timeout=25000"
+    assert env["PG_STATEMENT_TIMEOUT"] == "25s"
+
+
 def test_script_is_not_imported_and_can_explicitly_run_offline(project):
     write_test(project, "test_script.py", """
 # cloudlens-test: requires-offline
@@ -298,7 +330,8 @@ def test_database_guard_is_read_only_and_refuses_shared_relations(monkeypatch, s
     assert calls[0]["host"] == "fixture.invalid"
     assert calls[0]["dbname"] == "fixture_database"
     assert calls[0]["port"] == "6432"
-    assert calls[0]["options"] == "-c default_transaction_read_only=on"
+    assert calls[0]["options"] == (
+        "-c default_transaction_read_only=on -c statement_timeout=30000")
 
 
 def test_rejected_database_is_never_imported_or_registered_for_drop(monkeypatch, tmp_path):

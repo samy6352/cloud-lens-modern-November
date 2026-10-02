@@ -70,7 +70,7 @@ assert.match(budgetCard(base,0), /https:\/\/portal.azure.com\/one/);
 let elements = {}, listDetails = [], buttons = [], jumps = [], tagButtons = [], charts = [];
 const element = (props={}) => Object.defineProperties({dataset:{},classList:{toggle(){},add(){},remove(){}},
   setAttribute(){}, focus(){this.focused=true;}, scrollIntoView(){}, addEventListener(){},
-  isConnected:true}, Object.getOwnPropertyDescriptors(props));
+  replaceChildren(){this.innerHTML="";}, isConnected:true}, Object.getOwnPropertyDescriptors(props));
 const list = element({
   _html:"",
   set innerHTML(html) {

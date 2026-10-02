@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import logging
 import sys
 from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
@@ -31,6 +32,7 @@ def test_warehouse_summary_returns_pending_after_an_exists_probe(monkeypatch):
     namespace = {
         "Any": Any,
         "json": json,
+        "log": logging.getLogger("warehouse-summary-test"),
         "rollup": SimpleNamespace(TABLE="costs_rollup",
                                   charges_sql=lambda _table: "count(*)"),
         "canonical_sub_id": lambda value: value,

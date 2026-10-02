@@ -42,7 +42,7 @@ def _estate():
                              # Ties on purpose: every fifth meter costs the same each day.
                              cost=2.0 if i % 5 == 0 else round(0.5 + (i % 7) * 0.31, 2),
                              currency="EUR" if i % 9 == 0 else "USD",
-                             tags='{"app": "a%d"}' % (i % 3) if i % 2 else None))
+                             tags=f'{{"app": "a{i % 3}"}}' if i % 2 else None))
             if i % 4 == 0:  # a second hourly meter on the same resource
                 rows.append(_row(day, rid, "Licence", hours=24.0, cost=0.4,
                                  currency="EUR" if i % 9 == 0 else "USD"))
@@ -202,8 +202,11 @@ def test_daily_cells_under_the_cap_are_fetched(estate, staged):
     assert staged[-1] is True and not new["daily_dropped"] and new["daily"]
 
 
-def test_staging_that_fails_falls_back_to_the_original_queries(estate, monkeypatch):
-    from app import uptime
+@pytest.mark.parametrize("indexed", [False, True])
+def test_staging_that_fails_falls_back_to_the_original_queries(estate, monkeypatch, indexed):
+    from app import read_indexes, uptime
+
+    monkeypatch.setattr(read_indexes, "ENABLED", indexed)
 
     real = uptime._stage_daily
 
