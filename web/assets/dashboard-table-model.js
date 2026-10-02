@@ -31,6 +31,7 @@ function compareValues(left, right, direction) {
 }
 
 export function tableRows(state) {
+  if (state.server) return state.rows;
   const cacheKey = JSON.stringify([state.query, state.sort, state.dir]);
   if (state.viewCache?.key === cacheKey) return state.viewCache.rows;
   let rows = state.rows;
@@ -50,6 +51,32 @@ export function tableRows(state) {
   }
   state.viewCache = { key: cacheKey, rows };
   return rows;
+}
+
+export function changeTablePage(state, direction) {
+  if (state.server) {
+    state.server.onChange({ page: state.page + (direction === "next" ? 2 : 0) });
+    return false;
+  }
+  state.page += direction === "next" ? 1 : -1;
+  return true;
+}
+
+export function sortTable(state, col) {
+  if (state.server) {
+    state.server.onChange({ page: 1, sort: state.columns[col].serverSort,
+      descending: state.sort === col ? state.dir === 1 : true });
+    return false;
+  }
+  // A new numeric column starts largest-first; selecting it again reverses the order.
+  if (state.sort === col) state.dir = -state.dir;
+  else {
+    state.sort = col;
+    state.dir = state.columns[col].num ? -1 : 1;
+  }
+  state.page = 0;
+  state.viewCache = null;
+  return true;
 }
 
 export function tableRowKeys(rows) {

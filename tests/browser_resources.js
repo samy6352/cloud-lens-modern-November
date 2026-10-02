@@ -8,6 +8,7 @@ async (page, { assetOrigin } = {}) => {
   const test = await context.newPage();
   const errors = [], layouts = [];
   let requests = 0, mode = "normal", passed = 0;
+  const requestURLs = [];
   test.on("pageerror", error => errors.push(error.message));
   const check = (ok, message) => { if (!ok) throw new Error(message); passed++; };
   const rows = Array.from({ length: 45 }, (_, index) => ({
@@ -43,10 +44,36 @@ async (page, { assetOrigin } = {}) => {
         }));
       }
     }
-    await context.route("**/api/dashboard/resources?**", route => {
+    await context.route("**/api/dashboard/resources?**", async route => {
       requests++;
-      return route.fulfill({ json: { resources: mode === "empty" ? [] : rows,
-        days: 60, as_of: "2026-09-07", total_cost: 999999999, truncated: mode === "partial", mixed_currency: true } });
+      const params = new URL(route.request().url()).searchParams;
+      requestURLs.push(Object.fromEntries(params));
+      check(params.get("page") && params.get("page_size") === "20", "Every Resources request must be bounded");
+      const changeOf = row => !row.prior_cost ? "no-baseline" : Math.abs(row.delta) < 0.01 ? "unchanged" : row.delta > 0 ? "increased" : "decreased";
+      let matches = mode === "empty" ? [] : rows.filter(row =>
+        (!params.get("q") || row.id.toLowerCase().includes(params.get("q").toLowerCase())) &&
+        (!params.get("billing_currency") || row.currency.toLowerCase() === params.get("billing_currency").toLowerCase()) &&
+        (!params.get("change") || changeOf(row) === params.get("change")));
+      const field = { cost: "cost", prior: "prior_cost", delta: "delta" }[params.get("sort")];
+      check(Boolean(field), "Only backend-supported sorts are requested");
+      matches.sort((a, b) => (a[field] - b[field]) * (params.get("order") === "asc" ? 1 : -1) || a.id.localeCompare(b.id));
+      const costs = {}, counts = {};
+      for (const row of matches) {
+        costs[row.currency] = (costs[row.currency] || 0) + row.cost;
+        counts[row.currency] = (counts[row.currency] || 0) + 1;
+      }
+      const pageNumber = Number(params.get("page"));
+      const payload = { resources: matches.slice((pageNumber - 1) * 20, pageNumber * 20),
+        page: pageNumber, page_size: 20, pages: Math.ceil(matches.length / 20), total: matches.length,
+        total_cost_by_currency: costs, resources_by_currency: counts,
+        days: Number(params.get("days")) || 30, as_of: "2026-09-07", total_cost: 999999999,
+        truncated: mode === "partial", mixed_currency: Object.keys(counts).length > 1 };
+      if (params.get("q") === "vm-1") await new Promise(resolve => setTimeout(resolve, 700));
+      await route.fulfill({ json: payload }).catch(() => {});
+    });
+    const settled = () => test.waitForFunction(() => {
+      const root = document.querySelector("#resourceExplorer");
+      return root && root.getAttribute("aria-busy") !== "true" && !document.querySelector("#resourceRequestStatus")?.textContent;
     });
     await open();
     check(await test.locator("#viewActions [data-subsection]").count() === 0, "Resources must not have a duplicate single subtab");
@@ -56,14 +83,31 @@ async (page, { assetOrigin } = {}) => {
     check(!(await test.locator("#resourceSummary").textContent()).includes("999,999,999"), "Do not display a mixed-currency backend sum");
     check(await test.locator("#resourceResults tbody > tr[data-explore-row]").count() === 20, "Resource table is paged");
     check(!await test.evaluate(() => window.badResource === true) && await test.locator("#resourceResults img").count() === 0, "Resource names must be escaped");
+    check(requestURLs.at(-1).page === "1" && requestURLs.at(-1).sort === "cost" &&
+      requestURLs.at(-1).order === "desc", "Initial page is server sorted by descending cost");
     await test.locator('#resourceResults th[data-col="3"]').click();
+    await test.waitForFunction(() => document.querySelector('#resourceResults th[data-col="3"]')?.getAttribute("aria-sort") === "ascending");
+    check(!await test.evaluate(() => window.badResource === true) && await test.locator("#resourceResults img").count() === 0,
+      "Escaped hostile names stay safe after sorting onto their page");
     await test.locator('#resourceResults [data-page="next"]').click();
+    await test.waitForFunction(() => document.querySelector("#resourceResults .pager-count")?.textContent.startsWith("21"));
+    check(requestURLs.at(-1).page === "2" && requestURLs.at(-1).order === "asc", "Next page uses server paging and preserves sort");
+    check((await test.locator("#resourceSummary .kpi .v").first().textContent()) === "45", "Count is all matching records, not this page");
+    check((await test.locator("#resourceSummary .kpi").nth(2).textContent()).includes("on this page only"), "Page-only group counts are labelled");
     const expected = await test.locator(".resource-name > :first-child").first().textContent();
     await test.locator("#resourceResults [data-row-detail]").first().focus();
     await test.keyboard.press("Enter");
     check((await test.locator("#resourceResults .row-detail").textContent()).includes(expected), "Details must match the sorted paged row");
-    await test.locator("#resourceSearch").fill("Explorer Owner");
-    await test.waitForFunction(() => document.querySelector("#resourceResultCount").textContent.startsWith("22 of"));
+    await test.locator('#resourceResults th[data-col="4"]').click();
+    await test.waitForFunction(() => document.querySelector("#resourceResults .pager-count")?.textContent.startsWith("1"));
+    check(requestURLs.at(-1).sort === "delta" && requestURLs.at(-1).page === "1" &&
+      requestURLs.at(-1).order === "desc", "Changing sort from another page resets the server page");
+    const searched = test.waitForResponse(response => response.url().includes("/api/dashboard/resources?") &&
+      new URL(response.url()).searchParams.get("q") === "vm-");
+    await test.locator("#resourceSearch").fill("vm-");
+    await searched;
+    await settled();
+    check(requestURLs.at(-1).q === "vm-" && requestURLs.at(-1).page === "1", "Search is server-side and resets pagination");
     check((await test.locator("#resourceResults .pager-count").textContent()).startsWith("1"), "Filtering resets pagination");
     const beforeNavigation = requests;
     await test.locator('#tabs [data-main-section="billing"]').click();
@@ -77,17 +121,40 @@ async (page, { assetOrigin } = {}) => {
     }), "Billing tooltip must not cover the Resources tab");
     await test.locator('#tabs [data-main-section="resources"]').click();
     await ready();
-    check(await test.locator("#resourceSearch").inputValue() === "Explorer Owner", "Cached navigation preserves resource filters");
-    check(requests === beforeNavigation, "Local filtering and cached navigation do not refetch data");
+    check(await test.locator("#resourceSearch").inputValue() === "vm-", "Cached navigation preserves resource filters");
+    check(requests === beforeNavigation, "Cached navigation does not refetch completed pages");
     await test.locator("#resourceClear").click();
+    await settled();
     await test.locator('[data-resource-filter="currency"]').selectOption("value:eur");
+    await test.waitForFunction(() => document.querySelector("#resourceSummary .resource-total") &&
+      document.querySelectorAll("#resourceSummary .resource-total").length === 1);
     check(await test.locator("#resourceSummary .resource-total").count() === 1, "Currency filter updates summaries");
+    check(requestURLs.at(-1).billing_currency === "eur" && requestURLs.at(-1).page === "1", "Currency is a server filter");
     await test.locator('[data-resource-filter="change"]').selectOption("no-baseline");
+    await test.waitForFunction(() => document.querySelector("#resourceResultCount").textContent.startsWith("8 matching"));
     check((await test.locator("#resourceResults tbody").textContent()).includes("No prior spend"), "Zero prior cost is not labelled as a newly created resource");
     await test.locator("#resourceSearch").fill("cannot match any resource");
     await test.getByRole("heading", { name: "No matching resources" }).waitFor();
     await test.locator("#resourceClear").click();
     check(await test.locator("#resourceSearch").evaluate(element => element === document.activeElement), "Clear filters retains keyboard flow");
+    await settled();
+    const beforeLocal = requests;
+    await test.locator('[data-resource-filter="tags"]').selectOption("recorded");
+    check(requests === beforeLocal, "Explicitly page-local tag evidence does not fetch the estate");
+    check((await test.locator("#resourceResultCount").textContent()).startsWith("45 matching"), "Page-local tags never rewrite matching totals");
+    await test.locator('[data-resource-filter="tags"]').selectOption("");
+    await test.locator("#resourceSearch").fill("vm-1");
+    await test.waitForFunction(() => document.querySelector("#resourceRequestStatus").textContent.includes("Loading"));
+    await test.locator("#resourceSearch").fill("vm-44");
+    await test.waitForFunction(() => document.querySelector("#resourceResultCount").textContent.startsWith("1 matching"));
+    await test.waitForTimeout(800);
+    check((await test.locator("#resourceResults tbody").textContent()).includes("vm-44") &&
+      (await test.locator("#resourceResultCount").textContent()).startsWith("1 matching"), "Superseded delayed search cannot replace the latest response");
+    await test.locator('[data-days="7"]').click();
+    await ready();
+    await test.locator("#resourceExplorer").waitFor();
+    check(requestURLs.at(-1).days === "7" && requestURLs.at(-1).page === "1" && !requestURLs.at(-1).q,
+      "Global period changes request an independent first page with reset local filters");
     for (const theme of ["light", "dark", "vivid"]) {
       await test.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
       for (const width of [1600, 1200, 800, 390]) {

@@ -5,9 +5,11 @@ async (page, { assetOrigin = "http://127.0.0.1:18439" } = {}) => {
   const errors = [], reads = [], writes = [];
   test.on("pageerror", error => errors.push(error.message));
   let usdReads = 0, overviewReads = 0, firstRelease, lateRelease;
+  let resourcePhase = "initial";
+  const resourceURLs = new Set();
   const oldStamp = "2026-09-14T10:00:00Z", newStamp = "2026-09-14T11:00:00Z";
   const rows = (version, currency, cost) => Array.from({ length: 45 }, (_, index) => ({
-    id: `/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-${index}`,
+    id: `/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/keep-vm-${index}`,
     name: `keep-${version}-${index}`, resource_group: "rg", subscription: "Alpha",
     subscription_id: "sub-a", service: "Virtual Machines", area: "Compute", region: "eastus",
     currency, cost: cost + index, prior_cost: 1, tags: [],
@@ -17,6 +19,19 @@ async (page, { assetOrigin = "http://127.0.0.1:18439" } = {}) => {
     "X-CloudLens-Source-Generation": stamp, "X-CloudLens-Stale": String(stale),
     "X-CloudLens-Revalidating": String(stale),
   });
+  const resourcePayload = (url, version, currency, cost) => {
+    const params = url.searchParams;
+    const page = Number(params.get("page")), pageSize = Number(params.get("page_size"));
+    const matches = rows(version, currency, cost).filter(row =>
+      row.id.toLowerCase().includes((params.get("q") || "").toLowerCase()));
+    const direction = params.get("order") === "asc" ? 1 : -1;
+    const value = row => params.get("sort") === "delta" ? row.cost - row.prior_cost : row.cost;
+    matches.sort((a, b) => (value(a) - value(b)) * direction);
+    return { resources: matches.slice((page - 1) * pageSize, page * pageSize), days: 30,
+      page, page_size: pageSize, pages: Math.ceil(matches.length / pageSize), total: matches.length,
+      total_cost_by_currency: matches.length ? { [currency]: matches.reduce((sum, row) => sum + row.cost, 0) } : {},
+      resources_by_currency: matches.length ? { [currency]: matches.length } : {} };
+  };
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (path.startsWith("/api/")) {
@@ -45,16 +60,27 @@ async (page, { assetOrigin = "http://127.0.0.1:18439" } = {}) => {
       if (path === "/api/dashboard/resources") {
         const currency = url.searchParams.get("currency") || "USD";
         if (currency === "EUR") return route.fulfill({
-          json: { resources: rows("eur", "EUR", 300), days: 30 }, headers: headers(false, newStamp),
+          json: resourcePayload(url, "eur", "EUR", 300), headers: headers(false, newStamp),
         });
-        const count = ++usdReads;
-        if (count === 2 || count === 4) {
-          await new Promise(resolve => { if (count === 2) firstRelease = resolve; else lateRelease = resolve; });
-          return route.fulfill({ json: { resources: rows(count === 2 ? "v2" : "late", "USD", 2000), days: 30 },
+        usdReads++;
+        url.searchParams.sort();
+        const signature = url.pathname + url.search;
+        const repeated = resourceURLs.has(signature);
+        resourceURLs.add(signature);
+        if ((resourcePhase === "initial" && repeated) || resourcePhase === "late") {
+          const initial = resourcePhase === "initial";
+          await new Promise(resolve => {
+            if (initial) firstRelease = () => { resourcePhase = "fresh"; resolve(); };
+            else lateRelease = resolve;
+          });
+          return route.fulfill({ json: resourcePayload(url, initial ? "v2" : "late", "USD", 2000),
             headers: headers(false, newStamp) }).catch(() => {});
         }
-        return route.fulfill({ json: { resources: rows(count === 1 ? "v1" : "v2", "USD", 10), days: 30 },
-          headers: headers(true, oldStamp) });
+        const stale = resourcePhase !== "fresh";
+        const version = resourcePhase === "initial" ? "v1" : "v2";
+        if (resourcePhase === "refresh") resourcePhase = "late";
+        return route.fulfill({ json: resourcePayload(url, version, "USD", 10),
+          headers: headers(stale, stale ? oldStamp : newStamp) });
       }
       const data = path === "/api/dashboard/sections"
         ? { sections: [{ id: "compute", label: "Compute", cost: 100 }], total: 100, currency: "USD" }
@@ -85,9 +111,16 @@ async (page, { assetOrigin = "http://127.0.0.1:18439" } = {}) => {
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
     await test.locator('#tabs [data-main-section="resources"]').click();
     await test.locator("#resourceExplorer").waitFor();
+    const searched = test.waitForResponse(response => response.url().includes("/api/dashboard/resources?") &&
+      new URL(response.url()).searchParams.get("q") === "keep");
     await test.locator("#resourceSearch").fill("keep");
+    await searched;
+    await test.waitForFunction(() => document.querySelector("#resourceExplorer")?.getAttribute("aria-busy") !== "true"
+      && document.querySelector("#resourceSearch")?.value === "keep");
     await test.locator('#resourceResults th[data-col="3"]').click();
+    await test.waitForFunction(() => document.querySelector('#resourceResults th[data-col="3"]')?.getAttribute("aria-sort") === "ascending");
     await test.locator('#resourceResults th[data-col="3"]').click();
+    await test.waitForFunction(() => document.querySelector('#resourceResults th[data-col="3"]')?.getAttribute("aria-sort") === "descending");
     await test.waitForFunction(() => document.querySelector("#viewFreshness")?.textContent.includes("Updating"));
     await waitForPoll(() => firstRelease);
     await test.evaluate(() => {
@@ -108,6 +141,7 @@ async (page, { assetOrigin = "http://127.0.0.1:18439" } = {}) => {
       && document.querySelector("#glance")?.children[0].textContent.includes("200"));
     check((await test.locator("#glance").textContent()).includes("partial"),
       "Fresh header preserves the partial Savings coverage warning");
+    resourcePhase = "refresh";
     await test.locator("#refreshViews").click();
     await waitForPoll(() => lateRelease);
     await test.locator("#currency").selectOption("EUR");

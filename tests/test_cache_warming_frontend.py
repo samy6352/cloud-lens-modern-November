@@ -16,7 +16,7 @@ const origin="https://cloudlens.example";
 const urls=["/api/dashboard/sections?scope=s1&days=30",
   "/api/dashboard/executive?scope=s1&currency=USD&period_month=2026-08&rg=a%2Cb",
   "/api/dashboard/billing?month=2026-08&scope=s1",
-  "/api/dashboard/resources?days=7&scope=s1", "/api/filters?scope=s1"];
+  "/api/dashboard/resources?days=7&scope=s1&page=2&page_size=20&sort=delta&order=asc&q=vm&billing_currency=EUR&change=increased", "/api/filters?scope=s1"];
 const response=(generation="1", extra={})=>({status:200,headers:new Headers({
   "X-CloudLens-Source":"warehouse","X-CloudLens-Source-Generation":generation,
   "X-CloudLens-Stale":"false","X-CloudLens-Revalidating":"false", ...extra,

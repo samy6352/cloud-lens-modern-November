@@ -19,7 +19,7 @@ import { beginNavigation, finishNavigation, measurePhase, navigationFeedback, re
 import { portalLinkMarkup, portalTargets, rowDetailsMarkup } from "./dashboard-explore.js";
 import { periodParams, ROLLING_DAYS, validMonth, wireMonthCalendar, wireReportingPeriod } from "./reporting-period.js";
 import { PRIMARY_SECTIONS, groupedNavigation, keyboardDestination, railGroupFor, sectionDestination, sectionFor, sectionViews } from "./dashboard-navigation.js";
-import { outlierThreshold, tableRowKeys, tableRows as view } from "./dashboard-table-model.js";
+import { changeTablePage, outlierThreshold, sortTable, tableRowKeys, tableRows as view } from "./dashboard-table-model.js";
 import { createModuleLoader } from "./dashboard-module-loader.js";
 import { wireTabSearch } from "./dashboard-search.js";
 import { hasSectionSpend, sectionCostLabel } from "./dashboard-currencies.js";
@@ -1130,9 +1130,11 @@ function table(title, rows, columns, note, opts = {}) {
   const id = `t-${stableKey(`${key(current)}|${identity}`)}`;
   const previous = TABLES.get(id) || TABLE_STATE.get(id);
   const pageSize = opts.pageSize ?? 10;
+  const server = opts.server;
   TABLES.set(id, {
-    rows, columns, pageSize, page: opts.resetPage ? 0 : previous?.page ?? 0,
-    sort: previous?.sort ?? null, dir: previous?.dir ?? 1, title,
+    rows, columns, pageSize, page: server ? server.page - 1 : opts.resetPage ? 0 : previous?.page ?? 0,
+    sort: server ? columns.findIndex(c => c.serverSort === server.sort) : previous?.sort ?? null,
+    dir: server ? (server.descending ? -1 : 1) : previous?.dir ?? 1, title, server,
     explore: opts.explore !== false,
     expanded: new Set(previous?.expanded || []),
     rowKeys: tableRowKeys(rows),
@@ -1144,7 +1146,7 @@ function table(title, rows, columns, note, opts = {}) {
     outlier: opts.highlightOutliers === false ? null : outlierThreshold(rows, columns),
   });
   const state = TABLES.get(id);
-  state.page = Math.min(state.page, Math.max(0, Math.ceil(view(state).length / pageSize) - 1));
+  if (!server) state.page = Math.min(state.page, Math.max(0, Math.ceil(view(state).length / pageSize) - 1));
   // A retained query must remain editable after a refresh reduces the row count.
   const searchable = opts.search !== false && (rows.length > pageSize || state.query);
   const boxed = opts.scroll !== false;
@@ -1174,7 +1176,7 @@ function totalMarkup(id) {
   if (!cells.length) return "";
   const rows = view(t);
   return `<div class="tfoot">
-      <span class="tfoot-k">${rows.length} ${rows.length === 1 ? "row" : "rows"}</span>
+      <span class="tfoot-k">${t.server ? `${t.server.total} matching rows` : `${rows.length} ${rows.length === 1 ? "row" : "rows"}`}</span>
       ${cells
         .map(
           (c) =>
@@ -1209,7 +1211,7 @@ function tableMarkup(id) {
   const t = TABLES.get(id);
   const head = t.columns
     .map((c, i) => {
-      const sortable = c.sort !== false;
+      const sortable = t.server ? Boolean(c.serverSort) : c.sort !== false;
       const cls = [c.num ? "num" : "", sortable ? "sortable" : "",
                    t.sort === i ? (t.dir === 1 ? "sort-asc" : "sort-desc") : ""]
         .filter(Boolean).join(" ");
@@ -1219,7 +1221,7 @@ function tableMarkup(id) {
     })
     .join("") + (t.explore ? '<th scope="col" class="row-actions">Explore</th>' : "");
 
-  const start = t.page * t.pageSize;
+  const start = t.server ? 0 : t.page * t.pageSize;
   const rows = view(t);
   const body = rows
     .slice(start, start + t.pageSize)
@@ -1287,9 +1289,8 @@ function toggleRowDetail(section, id, rowKey) {
 
 function pagerMarkup(id) {
   const t = TABLES.get(id);
-  // Counted over what is actually being shown, so a search that narrows 400 rows to 3 says
-  // "1–3 of 3" rather than paging through 397 rows it is no longer displaying.
-  const shown = view(t).length;
+  // Server totals span all pages; local totals cover only rows matching the table search.
+  const shown = t.server ? t.server.total : view(t).length;
   if (shown <= t.pageSize) return "";
   const pages = Math.ceil(shown / t.pageSize);
   const from = t.page * t.pageSize + 1;
@@ -1357,8 +1358,7 @@ function wireTables(root) {
       if (!btn) return;
       const t = TABLES.get(id);
       if (!t) return;
-      t.page += btn.dataset.page === "next" ? 1 : -1;
-      redraw();
+      if (!btn.disabled && changeTablePage(t, btn.dataset.page)) redraw();
     });
     section.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" && e.key !== " ") return;
@@ -1373,16 +1373,7 @@ function wireTables(root) {
 function sortBy(id, col, redraw) {
   const t = TABLES.get(id);
   if (!t) return;
-  // Same column toggles direction; a new column starts descending for numbers (the largest
-  // cost is what someone is looking for) and ascending for text.
-  if (t.sort === col) t.dir = -t.dir;
-  else {
-    t.sort = col;
-    t.dir = t.columns[col].num ? -1 : 1;
-  }
-  t.page = 0;
-  t.viewCache = null;
-  redraw();
+  if (sortTable(t, col)) redraw();
 }
 
 /** A share-of-total bar, so a table of numbers reads as proportions at a glance. */

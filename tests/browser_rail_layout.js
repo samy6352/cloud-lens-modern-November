@@ -23,7 +23,12 @@ async (page) => {
       localStorage.setItem("railMini","false");
       localStorage.setItem("railGroupedOpen",'["spend"]');
     });
-    await context.route("**/api/dashboard/resources?**", route => route.fulfill({json:{days:30,resources:[]}}));
+    await context.route("**/api/dashboard/resources?**", route => {
+      const params = new URL(route.request().url()).searchParams;
+      return route.fulfill({json:{days:30,resources:[],page:Number(params.get("page")),
+        page_size:Number(params.get("page_size")),pages:0,total:0,
+        total_cost_by_currency:{},resources_by_currency:{}}});
+    });
     await test.goto(origin); await ready();
     check(await test.locator("[data-main-section]").count() === 7,"current navigation retains all seven primary sections");
     check(await test.locator("#railLayout path").getAttribute("d") === "M5 4v12M10 4v12M15 4v12","current layout uses three vertical lines");

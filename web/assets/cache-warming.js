@@ -6,6 +6,7 @@ const PATHS = new Set([
 const PARAMS = new Set([
   "days", "scope", "currency", "month", "period_month",
   "rg", "service", "region", "charge", "pricing", "env",
+  "page", "page_size", "sort", "order", "q", "billing_currency", "change",
 ]);
 const SECRET = /(?:bearer\s|eyJ[\w-]+\.[\w-]+\.[\w-]+|(?:token|password|secret|sig|cookie|session|authorization)\s*[=:])/i;
 

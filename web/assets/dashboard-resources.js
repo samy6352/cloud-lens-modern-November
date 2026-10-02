@@ -20,9 +20,13 @@ export function resourceFacets(rows, field) {
 
 export function resourceChange(row) {
   if (!Number.isFinite(row.cost) || !Number.isFinite(row.prior_cost)) return "unavailable";
-  if (row.prior_cost === 0) return "no-baseline";
-  const delta = row.cost - row.prior_cost;
-  return Math.abs(delta) < 0.01 ? "unchanged" : delta > 0 ? "increased" : "decreased";
+  const cents = value => {
+    const [mantissa, exponent = "0"] = String(Math.abs(value)).split("e");
+    return Math.sign(value) * Math.round(Number(`${mantissa}e${Number(exponent) + 2}`));
+  };
+  const cost = cents(row.cost), prior = cents(row.prior_cost);
+  if (prior === 0) return "no-baseline";
+  return cost === prior ? "unchanged" : cost > prior ? "increased" : "decreased";
 }
 
 export function filterResources(rows, filters = {}) {
@@ -53,6 +57,27 @@ export function resourceSummary(rows) {
 export function createTabs(ctx) {
   const { $, cached, esc, get, key, kpiRow, moneyHtml, portalLinkMarkup, qs, setContent, table, wireTables } = ctx;
   let filters = emptyFilters(), timer = null, pending = false, repaint = null;
+  let page = 1, sort = "cost", descending = true, revision = 0, controller = null, currentToken = null;
+  const invalidate = () => { revision++; controller?.abort(); };
+  const reload = (resetPage = false) => {
+    clearTimeout(timer);
+    if (resetPage) page = 1;
+    pending = true;
+    invalidate();
+    const root = $("resourceExplorer");
+    root?.setAttribute("aria-busy", "true");
+    const status = root?.querySelector("#resourceRequestStatus");
+    if (status) status.textContent = "Loading matching resources…";
+    const token = currentToken;
+    const update = renderResources(token);
+    const expectedRevision = revision;
+    update.catch(error => {
+      if (token !== ctx.loadToken || expectedRevision !== revision || error?.name === "AbortError") return;
+      const status = $("resourceExplorer")?.querySelector("#resourceRequestStatus");
+      if (status) status.textContent = "Resources could not be updated. Displayed rows belong to the previous request. Change filters or use Refresh views to retry.";
+      $("resourceExplorer")?.setAttribute("aria-busy", "false");
+    });
+  };
   const amount = (value, currency) => {
     if (!Number.isFinite(value)) return '<span class="muted">Unavailable</span>';
     return currency === "UNKNOWN"
@@ -64,7 +89,7 @@ export function createTabs(ctx) {
   ).join("") || '<span class="muted">No matches</span>';
   const select = (field, label, options) => {
     if (filters[field] && !options.some(option => option.value === filters[field])) {
-      options = [...options, { value: filters[field], label: `${filters[field].replace(/^value:/, "")} (not in this load)` }];
+      options = [...options, { value: filters[field], label: `${filters[field].replace(/^value:/, "")} (not in these results)` }];
     }
     return `<label>${esc(label)}
     <select data-resource-filter="${field}" aria-label="${esc(label)}">
@@ -81,9 +106,33 @@ export function createTabs(ctx) {
     : `<span class="resource-secondary">${absent()}</span>`;
 
   async function renderResources(token) {
-    const data = await cached(key("resources"), () => get(`/api/dashboard/resources${qs()}`, { timeout: 45000 }));
-    if (token !== ctx.loadToken) return;
-    if (!data || !Array.isArray(data.resources)) throw new Error("Resource data is unavailable or incomplete. Refresh to retry.");
+    currentToken = token;
+    invalidate();
+    const requestRevision = revision;
+    controller = new AbortController();
+    const signal = controller.signal;
+    const params = new URLSearchParams(qs().replace(/^\?/, ""));
+    const request = { page, page_size: 20, sort, order: descending ? "desc" : "asc",
+      q: filters.query.trim(), billing_currency: filters.currency.replace(/^value:/, ""), change: filters.change };
+    for (const [name, value] of Object.entries(request)) params.set(name, value);
+    const query = `?${params}`;
+    const read = () => cached(key(`resources:${query}`), () =>
+      get(`/api/dashboard/resources${query}`, { timeout: 45000, signal }));
+    let data;
+    try { data = await read(); }
+    catch (error) {
+      // A rapid return to the same page may encounter its cancelled cached promise.
+      if (error?.name !== "AbortError" || signal.aborted || requestRevision !== revision) throw error;
+      data = await read();
+    }
+    if (token !== ctx.loadToken || requestRevision !== revision || signal.aborted) return;
+    if (!data || !Array.isArray(data.resources) || !Number.isInteger(data.total) ||
+        !Number.isInteger(data.page) || !Number.isInteger(data.pages)) {
+      throw new Error("Resource data is unavailable or incomplete. Refresh to retry.");
+    }
+    pending = false;
+    controller = null;
+    if (data.pages && page > data.pages) { page = data.pages; reload(); return; }
     const rows = data.resources;
     const period = periodName(data.days || ctx.days, ctx.periodMonth);
     const fixed = values => values.map(([value, label]) => ({ value, label }));
@@ -93,19 +142,25 @@ export function createTabs(ctx) {
       <section class="portal-workbench" aria-label="Resource summary and filters">
       <div class="resource-context"><span>Cost-backed resources</span><span>${esc(period)}</span>
         ${data.as_of ? `<span>Data through ${esc(data.as_of)}</span>` : ""}</div>
-      ${data.truncated ? `<p class="banner warn" role="status">Partial results: ${rows.length.toLocaleString()} resource cost records loaded. Narrow the subscription or global filters to see the rest.</p>` : ""}
-      ${resourceSummary(rows).costs.length > 1 ? '<p class="resource-notice">Multiple currencies: totals stay separate. Select a billing currency to compare resource costs.</p>' : ""}
+      ${data.truncated ? `<p class="banner warn" role="status">Partial results: matching counts and costs cover only the backend's capped results. Narrow the subscription or global filters to see the rest.</p>` : ""}
+      ${data.mixed_currency ? '<p class="resource-notice">Multiple currencies: totals stay separate. Select a billing currency to compare resource costs.</p>' : ""}
       <div class="resource-summary" id="resourceSummary"></div>
       <div class="resource-toolbar" role="search" aria-label="Find resources">
         <label class="resource-search">Search resources<input type="search" id="resourceSearch"
-          aria-label="Search resources" placeholder="Name, group, subscription, ID or tag"
+          aria-label="Search resources" placeholder="Resource ID, name or resource group in ID"
           maxlength="200" value="${esc(filters.query)}"></label>
-        ${select("service", "Service", resourceFacets(rows, "service"))}
+        ${select("service", "Service (this page)", resourceFacets(rows, "service"))}
         ${select("change", "Cost change", fixed([["increased", "Increased"], ["decreased", "Decreased"],
-          ["unchanged", "Unchanged"], ["no-baseline", "No prior spend"], ["unavailable", "Unknown"]]))}
-        ${select("tags", "Tag evidence", fixed([["recorded", "Tags recorded"], ["missing", "No tags recorded"]]))}
-        ${select("currency", "Billing currency", resourceFacets(rows, "currency"))}
+          ["unchanged", "Unchanged"], ["no-baseline", "No prior spend"]]))}
+        ${select("tags", "Tag evidence (this page)", fixed([["recorded", "Tags recorded"], ["missing", "No tags recorded"]]))}
+        ${select("currency", "Billing currency", Object.keys(data.resources_by_currency || {}).map(currency =>
+          ({ value: facetKey(currency), label: currency.toUpperCase() })))}
       </div>
+      <p class="resource-notice">Search matches the resource ID (including names and groups within it), not tags or subscription display names.
+        Service and tag evidence controls narrow only this page; matching counts and costs are unchanged.
+        Use the global Service filter to filter services across all resources.
+        Period cost and Change headers sort all matches; other columns are not sortable.</p>
+      <p id="resourceRequestStatus" role="status" aria-live="polite"></p>
       <div class="resource-result-bar"><span id="resourceResultCount" role="status" aria-live="polite"></span>
         <button type="button" class="ghost" id="resourceClear">Clear filters</button></div>
       </section>
@@ -127,18 +182,22 @@ export function createTabs(ctx) {
       return `<span class="delta ${delta > 0 ? "up" : "down"}">${delta > 0 ? "+" : "-"}${amount(Math.abs(delta), currencyOf(row))}</span>
         ${secondary(Number.isFinite(row.change_pct) ? `${row.change_pct > 0 ? "+" : ""}${row.change_pct}% vs prior` : "vs prior period")}`;
     };
-    repaint = (resetPage = false) => {
-      pending = false;
+    repaint = () => {
       if (!root.isConnected) return;
-      const filtered = filterResources(rows, filters), summary = resourceSummary(filtered);
-      const totalMarkup = costTotals(summary.costs);
+      const filtered = filterResources(rows, { service: filters.service, tags: filters.tags });
+      const summary = resourceSummary(filtered);
+      const totals = Object.entries(data.total_cost_by_currency || {}).map(([currency, value]) =>
+        ({ currency: currency.toUpperCase(), amount: value }));
+      const totalMarkup = totals.length ? costTotals(totals) : '<span class="muted">Unavailable</span>';
       setContent(root.querySelector("#resourceSummary"), kpiRow([
-        { label: "Resources", value: summary.resources.toLocaleString(), sub: data.truncated ? "in partial results" : "matching this view" },
-        { label: "Period cost", value: totalMarkup, sub: "resource-attributed cost" },
-        { label: "Resource groups", value: summary.groups.toLocaleString(), sub: "across selected subscriptions" },
-        { label: "Services", value: summary.services.toLocaleString(), sub: "in the matching resources" },
+        { label: "Resource cost records", value: data.total.toLocaleString(), sub: data.truncated ? "matching capped results; per currency" : "all matches; one record per currency" },
+        { label: "Matching period cost", value: totalMarkup, sub: data.truncated ? "matching capped results" : "all matching resource-attributed cost" },
+        { label: "Resource groups", value: summary.groups.toLocaleString(), sub: "on this page only" },
+        { label: "Services", value: summary.services.toLocaleString(), sub: "on this page only" },
       ]));
-      root.querySelector("#resourceResultCount").textContent = `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} resource cost records`;
+      root.querySelector("#resourceResultCount").textContent =
+        `${data.total.toLocaleString()} matching resource cost records · Page ${data.pages ? page : 0} of ${data.pages}` +
+        ` · ${filtered.length} of ${rows.length} page rows shown`;
       root.querySelector("#resourceClear").disabled = !Object.values(filters).some(Boolean);
       const results = root.querySelector("#resourceResults");
       setContent(results, filtered.length ? table("Resource explorer", filtered, [
@@ -149,30 +208,48 @@ export function createTabs(ctx) {
           cell: row => `<span class="resource-primary" title="${esc(row.resource_group || "")}">${row.resource_group ? esc(row.resource_group) : absent()}</span>${secondary(row.region)}` },
         { label: "Subscription", value: row => row.subscription || row.subscription_id || "",
           cell: row => `<span class="resource-primary" title="${esc(row.subscription || row.subscription_id || "")}">${row.subscription || row.subscription_id ? esc(row.subscription || row.subscription_id) : absent()}</span>` },
-        { label: "Period cost", num: true, value: row => row.cost, cell: row => amount(row.cost, currencyOf(row)),
+        { label: "Period cost", num: true, serverSort: "cost", value: row => row.cost, cell: row => amount(row.cost, currencyOf(row)),
           total: () => totalMarkup },
-        { label: "Change", num: true, value: row => Number.isFinite(row.cost) && Number.isFinite(row.prior_cost) ? row.cost - row.prior_cost : null,
+        { label: "Change", num: true, serverSort: "delta", value: row => Number.isFinite(row.cost) && Number.isFinite(row.prior_cost) ? row.cost - row.prior_cost : null,
           cell: costChange },
         { label: "Tags", value: row => Array.isArray(row.tags) ? row.tags.length : 0,
           cell: row => Array.isArray(row.tags) && row.tags.length ? `<span class="resource-tag-count">${row.tags.length} ${row.tags.length === 1 ? "tag" : "tags"}</span>`
             : absent("No tags recorded") },
-      ], null, { key: "resource-explorer", pageSize: 20, search: false, scroll: false, resetPage })
-        : `<section class="card resource-empty"><h3>${rows.length ? "No matching resources" : "No resource cost records"}</h3>
-          <p class="muted">${rows.length ? "Change or clear the resource filters to broaden the results." :
+      ], null, { key: "resource-explorer", pageSize: 20, search: false, scroll: false, highlightOutliers: false,
+        server: { page, total: data.total, sort, descending, onChange: next => {
+          page = next.page;
+          if (next.sort) { sort = next.sort; descending = next.descending; }
+          reload();
+        } } })
+        : `<section class="card resource-empty"><h3>${data.total ? "No matching rows on this page" : Object.values(filters).some(Boolean) ? "No matching resources" : "No resource cost records"}</h3>
+          <p class="muted">${data.total || Object.values(filters).some(Boolean) ? "Change or clear the resource filters to broaden the results." :
             "No resource-attributed cost records were found for the selected scope and periods. Review the global filters or load cost data."}</p></section>`);
+      if (!filtered.length && data.pages > 1) {
+        results.insertAdjacentHTML("beforeend", `<div class="pager"><span class="pager-count">Page ${page} of ${data.pages}</span>
+          <span class="pager-btns"><button type="button" data-resource-page="-1"${page === 1 ? " disabled" : ""}>Previous</button>
+          <button type="button" data-resource-page="1"${page >= data.pages ? " disabled" : ""}>Next</button></span></div>`);
+        for (const button of results.querySelectorAll("[data-resource-page]")) button.onclick = () => {
+          page += Number(button.dataset.resourcePage); reload();
+        };
+      }
       wireTables(results);
     };
     root.querySelector("#resourceSearch").oninput = event => {
       filters.query = event.target.value;
+      page = 1;
       clearTimeout(timer);
       pending = true;
-      timer = setTimeout(() => repaint(true), 120);
+      invalidate();
+      timer = setTimeout(() => reload(true), 250);
     };
     for (const control of root.querySelectorAll("[data-resource-filter]")) {
       control.onchange = () => {
         clearTimeout(timer);
         filters[control.dataset.resourceFilter] = control.value;
-        repaint(true);
+        if (["service", "tags"].includes(control.dataset.resourceFilter)) {
+          if (pending) reload(true);
+          else repaint();
+        } else reload(true);
       };
     }
     root.querySelector("#resourceClear").onclick = () => {
@@ -180,12 +257,13 @@ export function createTabs(ctx) {
       filters = emptyFilters();
       root.querySelector("#resourceSearch").value = "";
       for (const control of root.querySelectorAll("[data-resource-filter]")) control.value = "";
-      repaint(true);
+      reload(true);
       root.querySelector("#resourceSearch").focus();
     };
     repaint();
     // Restore once both the controls and the shared table's expanded rows exist.
     restoreInteractions(root, interactions);
   }
-  return { renderResources, stop: () => clearTimeout(timer), resume: () => { if (pending) repaint?.(true); } };
+  return { renderResources, stop: () => { clearTimeout(timer); invalidate(); },
+    resume: token => { currentToken = token; if (pending) reload(); } };
 }

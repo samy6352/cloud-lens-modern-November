@@ -124,7 +124,11 @@ async (page) => {
       await recommendationGate;
       data = { narrative: "Start with the idle VM." };
     }
-    else if (url.pathname.endsWith("/resources")) data = {
+    else if (url.pathname.endsWith("/resources")) {
+      const page = Number(url.searchParams.get("page"));
+      const size = Number(url.searchParams.get("page_size"));
+      if (!page || !size) throw new Error("Classic resources must use bounded pages");
+      data = {
       count: 90, currency: "USD", days: Number(url.searchParams.get("days")), total_cost: 1000,
       resource_groups: 1, regions: 1, services: 1, subscriptions: 1,
       resources: Array.from({ length: 90 }, (_, n) => ({
@@ -133,7 +137,18 @@ async (page) => {
         delta: n, change_pct: null, subscription: "Demo", region: "eastus",
         tags: [{ key: "owner", value: "Demo owner" }],
       })),
-    };
+      };
+      const field = { cost: "cost", prior: "prior_cost", delta: "delta" }[url.searchParams.get("sort")];
+      data.resources = data.resources.filter(row => !url.searchParams.get("q") ||
+        row.id.includes(url.searchParams.get("q")));
+      data.resources.sort((a, b) => ((a[field] || 0) - (b[field] || 0)) *
+        (url.searchParams.get("order") === "asc" ? 1 : -1));
+      const total = data.resources.length;
+      data.total_cost_by_currency = { USD: data.resources.reduce((sum, row) => sum + row.cost, 0) };
+      data.resources_by_currency = { USD: total };
+      data.resources = data.resources.slice((page - 1) * size, page * size);
+      Object.assign(data, { page, page_size: size, pages: Math.ceil(total / size), total });
+    }
     else if (url.pathname.endsWith("/governance")) data = {};
     else if (url.pathname.endsWith("/budgets")) data = budgetsUnavailable
       ? { budgets: [], count: 0, partial: true, error: "Could not read budgets for the selected subscriptions." }
@@ -437,7 +452,9 @@ async (page) => {
       document.querySelector(".wf-result").textContent.includes("Fixture comparison")));
     await goto("resources");
     await test.locator('th[data-col="3"]').click();
+    await test.waitForFunction(() => document.querySelector('th[data-col="3"]')?.getAttribute("aria-sort") === "ascending");
     await test.locator('[data-page="next"]').click();
+    await test.waitForFunction(() => document.querySelector(".pager-count")?.textContent.startsWith("21"));
     const selectedName = await test.locator("#tabBody .resource-name > :first-child").first().textContent();
     const requestsBeforeDetails = requests.length;
     await test.locator("#tabBody [data-row-detail]").first().focus();
@@ -464,7 +481,7 @@ async (page) => {
     await test.evaluate(() => { Date.now = window.realNow; delete window.realNow; });
     check("cached navigation reuses real DOM", await test.evaluate(() => window.resourceNode === document.querySelector("[data-table]")));
     check("cached navigation retains page and sort", (await test.locator(".pager-count").textContent()).includes("21") &&
-      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "descending");
+      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "ascending");
     const cachedDetail = await test.locator("#tabBody .row-detail").evaluate(element => ({
       text: element.innerText, content: element.textContent, hidden: element.querySelector("section")?.hidden,
       bounds: element.getBoundingClientRect().toJSON(),
@@ -476,7 +493,7 @@ async (page) => {
     check("Refresh views fetches new results", requests.filter(url => url.startsWith("/api/dashboard/resources")).length === resourcesBeforeReturn + 1);
     check("refresh uses stable table identity", await test.locator("[data-table]").getAttribute("data-table") === before);
     check("refresh retains page and sort", (await test.locator(".pager-count").textContent()).includes("21") &&
-      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "descending");
+      await test.locator('th[data-col="3"]').getAttribute("aria-sort") === "ascending");
     check("refresh retains expanded row identity", (await test.locator("#tabBody .row-detail").innerText()).includes(selectedName));
     check("refresh retains nested detail expansion", await test.locator("#tabBody .row-detail details").first().evaluate(el => el.open));
     await test.locator("#resourceSearch").fill("resource-7");

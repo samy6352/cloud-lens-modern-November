@@ -16,7 +16,16 @@ async (page) => {
   try {
     await context.route("**/api/dashboard/resources?**", route => {
       requests++;
-      return route.fulfill({ json: { resources: rows, days: 30 } });
+      const params = new URL(route.request().url()).searchParams;
+      const page = Number(params.get("page")), pageSize = Number(params.get("page_size"));
+      const matches = rows.filter(row => row.id.toLowerCase().includes((params.get("q") || "").toLowerCase()));
+      const direction = params.get("order") === "asc" ? 1 : -1;
+      const value = row => params.get("sort") === "delta" ? row.cost - row.prior_cost : row.cost;
+      matches.sort((a, b) => (value(a) - value(b)) * direction);
+      return route.fulfill({ json: { resources: matches.slice((page - 1) * pageSize, page * pageSize),
+        days: 30, page, page_size: pageSize, pages: Math.ceil(matches.length / pageSize), total: matches.length,
+        total_cost_by_currency: matches.length ? { USD: matches.reduce((sum, row) => sum + row.cost, 0) } : {},
+        resources_by_currency: matches.length ? { USD: matches.length } : {} } });
     });
     await test.goto(origin);
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true", null, { timeout: 120000 });

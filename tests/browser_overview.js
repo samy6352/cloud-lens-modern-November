@@ -39,7 +39,12 @@ async (page) => {
       executiveRequests++;
       return route.fulfill({json:data});
     });
-    await context.route("**/api/dashboard/resources?**", route => route.fulfill({json:{resources:[],days:7}}));
+    await context.route("**/api/dashboard/resources?**", route => {
+      const params = new URL(route.request().url()).searchParams;
+      return route.fulfill({json:{resources:[],days:7,page:Number(params.get("page")),
+        page_size:Number(params.get("page_size")),pages:0,total:0,
+        total_cost_by_currency:{},resources_by_currency:{}}});
+    });
     await context.route("**/api/insights?**", route => {
       analysisRequests++;
       return route.fulfill({json:{days:7,currency:"USD",findings:[],summary:{headline:"No recommendations in fixture"}}});

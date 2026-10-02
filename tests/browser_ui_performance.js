@@ -19,7 +19,17 @@ async (page) => {
   try {
     await context.route("**/api/dashboard/resources?**", route => {
       resourceRequests++;
-      return route.fulfill({ json: { resources: rows, days: 30, as_of: "2026-09-08" } });
+      const params = new URL(route.request().url()).searchParams;
+      const page = Number(params.get("page")), pageSize = Number(params.get("page_size"));
+      const matches = rows.filter(row => row.id.toLowerCase().includes((params.get("q") || "").toLowerCase()));
+      const direction = params.get("order") === "asc" ? 1 : -1;
+      const value = row => params.get("sort") === "delta" ? row.cost - row.prior_cost : row.cost;
+      matches.sort((a, b) => (value(a) - value(b)) * direction);
+      return route.fulfill({ json: { resources: matches.slice((page - 1) * pageSize, page * pageSize),
+        days: 30, as_of: "2026-09-08", page, page_size: pageSize,
+        pages: Math.ceil(matches.length / pageSize), total: matches.length,
+        total_cost_by_currency: matches.length ? { USD: matches.reduce((sum, row) => sum + row.cost, 0) } : {},
+        resources_by_currency: matches.length ? { USD: matches.length } : {} } });
     });
     await test.goto(origin);
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true", null, { timeout: 120000 });
@@ -31,16 +41,19 @@ async (page) => {
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
     const measureSearch = async query => test.evaluate(query => new Promise((resolve, reject) => {
       const input = document.querySelector("#resourceSearch");
-      const count = document.querySelector("#resourceResultCount");
+      const body = document.querySelector("#tabBody");
       const start = performance.now();
       const timeout = setTimeout(() => { observer.disconnect(); reject(new Error("Search did not repaint")); }, 10000);
       const observer = new MutationObserver(() => {
+        const count = document.querySelector("#resourceResultCount");
+        if (!count || document.querySelector("#resourceSearch")?.value !== query ||
+            document.querySelector("#resourceExplorer")?.getAttribute("aria-busy") === "true") return;
         observer.disconnect();
         clearTimeout(timeout);
         requestAnimationFrame(() => requestAnimationFrame(() =>
           resolve({ query, ms: performance.now() - start, count: count.textContent })));
       });
-      observer.observe(count, { subtree: true, childList: true, characterData: true });
+      observer.observe(body, { subtree: true, childList: true, characterData: true });
       input.focus();
       input.value = query;
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -59,7 +72,7 @@ async (page) => {
       displayedRows: document.querySelectorAll("#resourceResults tr[data-explore-row]").length,
       overflow: document.documentElement.scrollWidth > innerWidth + 1,
     }));
-    if (resourceRequests !== 1 || result.displayedRows !== 20 || result.overflow || errors.length) {
+    if (resourceRequests !== 4 || result.displayedRows !== 20 || result.overflow || errors.length) {
       throw new Error(JSON.stringify({ resourceRequests, ...result, errors }));
     }
     return { ...result, searches, resourceRequests, errors };

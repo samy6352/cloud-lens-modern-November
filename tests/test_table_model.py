@@ -120,3 +120,30 @@ assert.equal(rows[0].value,1000);
 assert.equal(tableRows(state),ordered);
 assert.equal(calls,rows.length,"cached views do not reformat cells");
 """)
+
+
+def test_server_table_preserves_page_order_and_delegates_sort_and_paging():
+    run_node(r"""
+import assert from "node:assert/strict";
+import {tableRows,sortTable,changeTablePage} from "./web/assets/dashboard-table-model.js";
+const changes=[];
+const rows=[{cost:5},{cost:30}];
+const state={rows,page:1,sort:0,dir:-1,query:"not a local search",
+  columns:[{num:true,serverSort:"cost"},{num:true,serverSort:"delta"}],
+  server:{onChange:next=>changes.push(next)}};
+assert.equal(tableRows(state),rows,"the backend owns order and filtering");
+assert.equal(changeTablePage(state,"next"),false);
+assert.deepEqual(changes.pop(),{page:3});
+assert.equal(changeTablePage(state,"prev"),false);
+assert.deepEqual(changes.pop(),{page:1});
+assert.equal(sortTable(state,0),false);
+assert.deepEqual(changes.pop(),{page:1,sort:"cost",descending:false});
+assert.equal(sortTable(state,1),false);
+assert.deepEqual(changes.pop(),{page:1,sort:"delta",descending:true});
+assert.equal(state.page,1,"do not mutate a page before its request completes");
+delete state.server;state.query="";state.sort=null;
+assert.equal(sortTable(state,0),true);
+assert.equal(state.page,0);assert.equal(state.dir,-1);
+assert.equal(sortTable(state,0),true);assert.equal(state.dir,1);
+assert.equal(changeTablePage(state,"next"),true);assert.equal(state.page,1);
+""")
