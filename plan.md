@@ -400,7 +400,7 @@ larger SKU and downsize after backfill.
 | S3 Two-line installer | ☑ done (live) | 30 Sep 18:25 | 30 Sep 20:45 | **Live installs into `rg-cloudlens-v3-test` (Central India, small, `-LocalSignIn`) from a clean worktree:** run 1 **18 min 27 s** to a working stack, but exited on a publish `504` while the B1 build (8 min) went on to succeed, and its log-printed password was unreachable (no console log) → fixed (`a4459bd`): publish follows the Kudu record to status 4/3; the installer makes the admin password locally and deploys only its PBKDF2 hash. Run 2 (rerun) **12 min 38 s**, exit 0: every role `already-present`, storage/app/DB reused, 504 followed to "succeeded", sign-in verified. Run 3 **15 min 47 s**, exit 0, with the operator-export step (`19e1a39`): existing export updated in place with its eTag, admin kept. New `infra/install.ps1` (pwsh 7 / Cloud Shell): checks → `-Scope` (subscription, or management group with every descendant subscription via paged `…/descendants`) → registers missing hosting providers + `Microsoft.CostManagement(Exports)` in every monitored subscription → `deploy.ps1` with `-Size` profile (small D2ds_v5/64 GB/B1, medium D2ds_v5/128 GB/B2, large E4ds_v5/256 GB/B2), managed exports on → creates the paused exports as the operator → URL + `/v2/admin/setup`; `-LocalSignIn [-ResetLocalPassword]`, `-EntraClientId`, `-WhatIf`, `-Source <zip>` (distribution still open). Supporting: Bicep `managedExports`; `-CostScopeManagementGroup`; Cloud Shell path/python fixes; 5-min bootstrap recheck while blocked. Tests: `tests/test_install.py` (18, fake `az`, parameter contracts pinned to both real scripts), MG cost-access, deploy follow-through, operator-adoption end to end. |
 | S4 React UI foundation | ◐ foundation done | 30 Sep 01:00 | 30 Sep 02:05 | `ui/` → `web/v2`, served at `/v2` (`app/web_v2.py`). Shell (5 workspaces + Admin), ⌘K (cmdk), month/scope in URL, theme/density/lakh-crore, skeletons, Motion. **Overview** + **Billing** (virtualised TanStack Table) on live API; **All resources** added 30 Sep (server-paged/sorted, search, change + currency filters; `DataTable` gained a controlled server-sort mode; `npm run test:v2` 18/18 incl. axe on Resources); **1 Oct: the rest of Explore** — Anomalies, Cost by Application / Tags, Hourly Billing (Uptime), History — on the existing `/api` (no server changes; initial JS **175 KB gz**, each screen a lazy chunk of 2–3 KB; `npm run test:v2` **36/36** incl. axe on all four; History's populated comparison is covered with mocked archive endpoints because no archive is configured locally, Anomalies was only seen empty on the demo estate; `DataTable` scroll area takes keyboard focus when no header sorts); Tags and Uptime payloads are heavy (7.8 MB / 26–44 s first call locally, filtered in the browser as classic does) and are cached 5 min client-side; other 13 screens hand off to classic via `/?tab=`. Initial JS **177 KB gz** (budget 200). Tests: `tests/test_web_v2.py` 8 ✓, Vitest 9 ✓, `npm run test:v2` **14/14** (incl. axe WCAG 2.2 AA light+dark, no CSP errors). Packaging builds UI when npm exists. Full suite after S4: **2178 passed / 12 failed / 10 skipped** — every failure is in the baseline list, none new. Remaining: Ravi review of screenshots; migrate further screens. |
 | S5 In-DB load spike | ☑ done — **no-go** (ADR-6) | 30 Sep 23:40 | 1 Oct 14:09 | On the D2ds_v5 copy `cloudlens-pg-5f6eh-r1` (the original server is stuck; handover 1 Oct §3). 5.8M-row synthetic month: in-DB 456 s / 284 s / 257 s at 1 / 3 / 6 sessions vs Python 938 s (2.1–3.7×), **but `azure_storage` 1.10 drops the sign of decimals in (−1, 0): 319,818 rows wrong, BilledCost +0.35%**; the 13 real months (37,242 rows) identical both ways and equal to `costs`. Python byte-mover stays. Harness `…\Microsoft Scout\cloud-lens-v3-s5`. |
-| S6 Verify & hand over | ◐ local evidence recorded; broader/live gates not complete | 2 Oct afternoon | | Final endpoint audit, local preview and broad gate outcomes below; full Python/classic browser gates are not green. Fresh Azure reinstall, explicit cleanup/distribution approval and real delegated SSO remain pending. |
+| S6 Verify & hand over | ◐ live exercise/cleanup done; quality gates remain | 2 Oct afternoon | | Fresh install 25m32.5s, live adoption race repaired in 71d6a73, default3-month queue and dashboard exercised; both test groups/exports/grants deleted. Full Python/classic browser gates, latency targets, visual acceptance and real delegated SSO remain open. |
 
 **Baseline tests:** 2169 passed / 13 failed / 10 skipped (pre-existing failures: test_datastore_safety::…unknown_plus_usd…,
 test_environment_rollup, test_focus_day_repair ×3, test_focus_incremental::…changed_nothing…, test_overview,
@@ -410,7 +410,7 @@ theme_contrast since S1) / 10 skipped · **After S3 code (`4f57bfc`):** 2266 / 1
 fixes:** 2268 / 13 (same set) / 10 · **2 Oct broad gate before auth-isolation fix:** 2289 passed / 27 failed / 10 errors / 2 skipped / 10 deselected (58 min 22 s; test-lock intervention, below; **not green**) · **Follow-up targeted:** 104 passed ·
 **Install wall-clock:** 12 min 38 s rerun, 15 min 47 s with operator exports; first run 18 min 27 s to a working stack
 (+ manual follow of the build, since fixed) · **Backfill wall-clock (13 months, 1 subscription):** 3 h 32 min from the
-first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test RG deleted:** no, explicit cleanup/reinstall decision pending
+first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test RG deleted:** yes, both original and fresh-final groups, their two owned exports and six test-app subscription grants (2 Oct, explicitly approved)
 
 ### 2 October continuation (supplements the historical S1/S4/S6 rows)
 
@@ -442,11 +442,31 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
   Do not extrapolate this focused result into a green full suite.
 - **Azure readback, no mutation:** both original and restored PostgreSQL are Ready; test app already targets
   `cloudlens-pg-5f6eh-r1`, and its readiness returns 200. The old stuck-server/PGHOST-switch decisions are obsolete.
-  Test RG/export/spike deletion, local probe deletion, fresh reinstall, external publication/distribution and
-  actual SSO sign-in remain specifically approval- or user-interaction-gated.
+  This readback was superseded by the approved evening cleanup: both temporary groups and their exports are absent.
+  Local probe deletion, external publication/distribution and actual SSO sign-in remain decision/interaction-gated.
 - **Persistence:** commits `8352be5`, `455e700`, `7ac0c6f`, `bcae0b7`, followed by this documentation commit,
   pushed only to the local-folder `origin/v3`; no external GitHub publication. Local server restarted for current
   static hashes; readiness is ready and generation-10 rollup remains clear (no rebuild).
+
+### 2 October evening live exercise and cleanup
+
+- Approved at 18:05 IST: genuinely fresh install from clean `f30a011` into `rg-cloudlens-v3-final-test`,
+  Central India/small/local sign-in. **25 min 32.5 s**, successful publish follow-through after 504;
+  <20-minute target missed. Original stack retained until the exercise worked.
+- First-run gate exposed warmed stale export discovery hiding the operator-created export. **Fix `71d6a73`**:
+  cost-data configuration requests authoritative owned definitions; normal discovery remains cached.
+  Regression no longer artificially clears the cache. Offline neighbouring gate110 passed; PostgreSQL setup27 passed.
+  Exact repaired source confirmed inside the fresh app's compressed deployed build.
+- Fresh sign-in, Setup and real Overview figures rendered; automatic adoption/default3-month setup showed
+  **1 running, 2 queued, 0 failed, no blockers**, Azure on-demand run confirmed Queued.
+  Cleanup did not wait for FOCUS delivery/import; initial dashboard used initial cost-refresh data.
+- Deleted both test RGs (`rg-cloudlens-v3-test`, `rg-cloudlens-v3-final-test`), including all three PG servers
+  and spike resources; deleted two exact owned exports and six subscription grants owned by test app identities.
+  Both groups and scoped external resources read back absent. Production/unrelated resources untouched.
+- Removed both clean install worktrees with git, old test credential/three install logs and generated password.
+  Retained redacted evidence in session files. Existing latest benchmark remains unchanged/uncommitted.
+- Live reinstall/cleanup are no longer pending. Full-suite failures, remaining latency goals, visual acceptance,
+  delegated SSO and installer distribution remain incomplete; no claim that the entire sprint is finished.
 
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
