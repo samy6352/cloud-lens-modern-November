@@ -189,6 +189,7 @@ def _finish_savings(key: tuple[Any, ...], task: asyncio.Task) -> None:
 LIVE_AZURE_TABS = (
     "/api/dashboard/recommendations", "/api/dashboard/esu", "/api/dashboard/governance",
     "/api/dashboard/rightsizing", "/api/dashboard/savings", "/api/dashboard/waste",
+    "/api/dashboard/ai-billing",
 )
 
 
