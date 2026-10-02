@@ -483,6 +483,26 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
 - See `HANDOVER-2026-10-02.md` section9 for evidence. New quality commits remain local; no Azure changes or push.
   Remaining work: latency misses, visual acceptance, real delegated SSO, installer distribution and push decision.
 
+### 3 October measured Uptime/Tags improvements
+
+- Uptime uses narrow daily staging, capped metadata reductions and bounded daily-cell counting; certified hourly
+  sources avoid redundant predicates, raw-cost fallback preserves unit validation, and savepoint safety remains.
+  Tags defers name joins until after the cap and deduplicates native currency inputs.
+- Exact signed-credit cutoff now always considers raw-id split/merge exceptions. Small optional
+  `resource_rank_tag_exceptions` publishes atomically with the next normal rankings generation; existing generation
+  uses a correct read-only exception scan (~2.9 s). No live shared rebuild was triggered.
+- Actual endpoint forced application misses: **Uptime 10.278 / 10.268 s; Tags 9.208 / 9.588 s**.
+  Snapshot hits: **Uptime 0.169 / 0.174 s; Tags 0.256 / 0.263 s**. Current measured warm target met;
+  uncached <1-second target not met. No competing queries at preflight, generation10 rollup clear.
+  This is not a flushed PostgreSQL/OS-buffer experiment.
+- Uncached same-process function comparisons: Uptime13.058 ->6.196/8.295 s, Tags10.470 ->7.972/8.137 s;
+  final real payloads exactly equal baselines. Targeted282 passed/1 existing live-Azure skip, preview36/36.
+  Earlier full quality gate was not rerun for this targeted SQL change.
+- To meet the remaining uncached goal, use generation-certified serving data rather than repeating ~576k source/
+  ~477k meter reductions per Uptime request; Tags' resource aggregation/tag lookups also remain material.
+  JSON encoding is only ~0.05-0.06 s. See handover section10 for full profile evidence and exactness boundaries.
+  Improvements committed locally, not pushed; no Azure, forced serving publication or benchmark artefact changes.
+
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
   TypeScript 7.0, TanStack Router 1.170 / Query 5.103 / Table **9.2** (v9 API: `useTable` + `tableFeatures`, not
