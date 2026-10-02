@@ -63,7 +63,9 @@ def _stage_daily(r: Any, hourly: str) -> bool:
     filtered rows into a table, which is what tells the planner how many there really are:
     estimated from the summary's statistics it expects two, and sorts long text ids to group them
     (measured 11.9 s); knowing the count it hashes (3.7 s). No ANALYZE is needed or wanted, it
-    cost more than it saved.
+    cost more than it saved. The daily grain carries only quantities and cost; the wide
+    source remains until the bounded meter ids have fetched their metadata, so discarded
+    meters never pay for metadata reductions in either aggregation.
 
     Returns False, leaving the caller on the original queries, for a reader that cannot run
     statements (the tests' fakes) or if staging fails.
@@ -81,13 +83,9 @@ def _stage_daily(r: Any, hourly: str) -> bool:
                 f"""
                 CREATE TEMP TABLE {STAGED_DAILY} AS
                 SELECT id, meter, currency, day,
-                       SUM(hours) AS hours, SUM(cost) AS cost,
-                       MAX(name) AS name, MAX(service) AS service,
-                       MAX(subscription) AS subscription,
-                       MAX(resource_group) AS resource_group, MAX(region) AS region
+                       SUM(hours) AS hours, SUM(cost) AS cost
                 FROM {STAGED_SRC} GROUP BY id, meter, currency, day
                 """)
-            execute(f"DROP TABLE {STAGED_SRC}")
         return True
     except Exception as exc:  # noqa: BLE001 - the original queries still answer
         log.warning("hourly_cost: staging failed (%s); using the original queries", str(exc)[:300])
@@ -139,6 +137,10 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
             code = currency_code.replace("'", "''")
             window += f' AND COALESCE(NULLIF("BillingCurrency", \'\'), \'unknown\') = \'{code}\''
 
+        # The opt-in summary (including its filtered shadow) already contains only
+        # hour-priced units. Rechecking the locale-sensitive regexp on every row is redundant.
+        hour_filter = "" if source != "costs" else (
+            f"""AND regexp_matches(lower(trim(COALESCE("UnitOfMeasure", ''))), '{HOUR_UNIT}')""")
         hourly = f"""
             SELECT
               COALESCE(NULLIF("ResourceId", ''), "ResourceName", '(unnamed)') AS id,
@@ -150,13 +152,15 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
               COALESCE("MeterName", '')                                       AS meter,
               COALESCE(NULLIF("BillingCurrency", ''), 'unknown')              AS currency,
               "ChargePeriodStart"                                             AS day,
-              COALESCE("PricingQuantity", 0) * COALESCE(
+              COALESCE("PricingQuantity", 0) * CASE WHEN trim("UnitOfMeasure")
+                IN ('1 Hour', '1 Hours', 'Hour', 'Hours', 'hour', 'hours', '1 hour', '1 hours')
+                THEN 1 ELSE COALESCE(
                 TRY_CAST(regexp_extract(trim("UnitOfMeasure"), '{HOUR_MULTIPLIER}') AS DOUBLE),
-                1) AS hours,
+                1) END AS hours,
               COALESCE("BilledCost", 0)                                       AS cost
             FROM {source}
             WHERE {window}
-              AND regexp_matches(lower(trim(COALESCE("UnitOfMeasure", ''))), '{HOUR_UNIT}')
+              {hour_filter}
         """
 
         # Tags for the meters actually returned, looked up per resource rather than carried
@@ -179,11 +183,6 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
                 f"""
                 WITH meters AS (
                   SELECT id, meter, currency,
-                         MAX(name)            AS name,
-                         MAX(service)         AS service,
-                         MAX(subscription)    AS subscription,
-                         MAX(resource_group)  AS resource_group,
-                         MAX(region)          AS region,
                          SUM(hours)           AS hours,
                          SUM(cost)            AS cost,
                          MAX(hours)           AS peak_day_hours,
@@ -200,6 +199,21 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
                 """,
                 limit=MAX_ROWS + 1,
             )
+            # Metadata is needed only for the bounded meters, not the hundreds of
+            # thousands discarded by the cap. ANY makes this a hashable membership
+            # filter rather than a merge join sorting the entire wide source.
+            metadata = r.rows(
+                f"""SELECT id, meter, currency,
+                           MAX(name) AS name, MAX(service) AS service,
+                           MAX(subscription) AS subscription,
+                           MAX(resource_group) AS resource_group, MAX(region) AS region
+                    FROM {STAGED_SRC} WHERE id = ANY(?)
+                    GROUP BY id, meter, currency""",
+                limit=None, params=[list({row["id"] for row in rows})])
+            by_meter = {(row["id"], row["meter"], row["currency"]): row for row in metadata}
+            for row in rows:
+                row.update(by_meter[(row["id"], row["meter"], row["currency"])])
+            r.execute(f"DROP TABLE {STAGED_SRC}")
             daily = r.rows(
                 f"SELECT day, currency, SUM(hours) AS hours, SUM(cost) AS cost "
                 f"FROM {STAGED_DAILY} GROUP BY day, currency ORDER BY day",
@@ -207,7 +221,9 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
             )
             # Counted before fetched: over the cap the cells are dropped, so reading 150,000 of
             # them only to discard them was a third of the tab's time.
-            n_cells = r.rows(f"SELECT count(*) AS n FROM {STAGED_DAILY} WHERE hours > 0", limit=2)
+            n_cells = r.rows(
+                f"SELECT count(*) AS n FROM (SELECT 1 FROM {STAGED_DAILY} WHERE hours > 0 "
+                f"LIMIT {MAX_DAILY_CELLS + 1}) AS bounded", limit=2)
             over = int(n_cells[0]["n"]) > MAX_DAILY_CELLS
             cells = [] if over else r.rows(
                 f"SELECT id, meter, currency, day, hours, cost FROM {STAGED_DAILY} WHERE hours > 0",

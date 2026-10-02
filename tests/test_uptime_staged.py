@@ -192,7 +192,8 @@ def test_daily_cells_over_the_cap_are_not_fetched_at_all(estate, monkeypatch, st
     uptime.hourly_cost(None, days=30)
     assert staged[-1] is True
     assert not any("SELECT id, meter, currency, day, hours, cost FROM" in s for s in sql_seen)
-    assert any("SELECT count(*) AS n FROM _uptime_daily" in s for s in sql_seen)
+    assert any("SELECT count(*) AS n FROM (SELECT 1 FROM _uptime_daily" in s
+               and "LIMIT 11" in s for s in sql_seen)
 
 
 def test_daily_cells_under_the_cap_are_fetched(estate, staged):
@@ -236,3 +237,68 @@ def test_the_staging_tables_do_not_outlive_the_call(estate):
         left = r.rows("SELECT count(*) AS n FROM pg_tables WHERE tablename IN ('_uptime_src', '_uptime_daily')"
                       " AND schemaname LIKE 'pg_temp%'", limit=2)
     assert left[0]["n"] == 0
+
+
+@pytest.mark.parametrize("unit,multiplier", [
+    ("Hours", 1), (" 1 Hour ", 1), ("1 HOURS", 1), ("0.5 Hours", 0.5),
+    ("10 Hours", 10), ("1/Hour", 1), ("100 hours", 100),
+])
+def test_fast_unit_multiplier_preserves_hourly_grain(postgres_warehouse, unit, multiplier):
+    from app import uptime
+    from app.warehouse import COLUMNS, insert_rows
+
+    wh = postgres_warehouse
+    record = _row(HI.isoformat(), "/unit-probe", "Duration", hours=2, unit=unit)
+    with wh.connect() as con:
+        insert_rows(con, [[record.get(c) for c in COLUMNS]])
+    wh.refresh_rollup(strict=True)
+    payload = uptime.hourly_cost()
+    assert payload["resources"][0]["hours"] == pytest.approx(2 * multiplier)
+
+
+def test_daily_cell_count_at_cap_is_not_dropped(estate, monkeypatch):
+    from app import uptime
+
+    uncapped = uptime.hourly_cost()
+    # Count every positive meter-day, not just cells retained by the meter cap.
+    with estate.reader(usage=("hourly",)) as r:
+        count = r.rows(
+            """SELECT count(*) AS n FROM (
+                 SELECT "ResourceId", "MeterName", "BillingCurrency", "ChargePeriodStart"
+                 FROM hourly_usage WHERE "ChargePeriodStart" > DATE '2026-08-29'
+                   AND "BillingCurrency" = 'USD'
+                 GROUP BY 1, 2, 3, 4 HAVING sum("PricingQuantity") > 0
+               ) cells""")[0]["n"]
+    monkeypatch.setattr(uptime, "MAX_DAILY_CELLS", count)
+    _same(uptime.hourly_cost(), uncapped)
+
+
+def test_metadata_is_reduced_only_after_the_meter_cap(postgres_warehouse, monkeypatch):
+    from app import uptime
+    from app.warehouse import COLUMNS, Reader, insert_rows
+
+    records = [_row(HI.isoformat(), "/retained", "Compute", cost=100),
+               _row("2026-09-27", "/retained", "Compute", cost=50, sub="sub-b"),
+               _row(HI.isoformat(), "/discarded", "Compute", cost=1)]
+    records[0]["ResourceName"] = "alpha"
+    records[1]["ResourceName"] = "Zulu"
+    records[1]["ResourceGroup"] = "another-group"
+    wh = postgres_warehouse
+    with wh.connect() as con:
+        insert_rows(con, [[record.get(c) for c in COLUMNS] for record in records])
+    wh.refresh_rollup(strict=True)
+    monkeypatch.setattr(uptime, "MAX_ROWS", 1)
+    seen = []
+    real = Reader.rows
+
+    def spy(self, sql, *args, **kwargs):
+        if "FROM _uptime_src WHERE id = ANY(?)" in sql:
+            seen.append(kwargs)
+        return real(self, sql, *args, **kwargs)
+
+    monkeypatch.setattr(Reader, "rows", spy)
+    new = uptime.hourly_cost()
+    _same(new, _original(monkeypatch))
+    assert seen and seen[0]["limit"] is None
+    # Includes the sentinel as well: truncation is still decided by the original cap.
+    assert set(seen[0]["params"][0]) == {"/retained", "/discarded"}
