@@ -58,7 +58,7 @@ def pipeline(durable, monkeypatch):  # noqa: F811
            "account": "offline", "container": "focus", "folder": "a", "owned": True,
            "timeframe": "MonthToDate"}
     monkeypatch.setattr(focus_sync, "discover", AsyncMock(return_value={"schedules": [row], "errors": []}))
-    monkeypatch.setattr(focus_sync, "owned", AsyncMock(side_effect=lambda scope: [copy.deepcopy(row)]))
+    monkeypatch.setattr(focus_sync, "owned", AsyncMock(side_effect=lambda scope, **kwargs: [copy.deepcopy(row)]))
     monkeypatch.setattr(focus_workflow, "manifests", AsyncMock(return_value=[]))
     monkeypatch.setattr(focus_workflow, "launch", lambda record: None)
     monkeypatch.setattr(schedules, "run_now", AsyncMock())
@@ -136,7 +136,7 @@ def test_missing_export_created_once_under_approved_workload_then_configured(pip
     p = pipeline
     p.sync.discover.return_value["schedules"] = []
     available = []
-    p.sync.owned.side_effect = lambda scope: copy.deepcopy(available)
+    p.sync.owned.side_effect = lambda scope, **kwargs: copy.deepcopy(available)
     async def provision(*args, **kwargs):
         assert kwargs["run_now"] is False
         available.append(p.row)

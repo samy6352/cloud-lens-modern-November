@@ -21,8 +21,9 @@
          ABAC-limited right to grant an export's identity Storage Blob Data Contributor.
       4. Creates one paused FOCUS export per monitored subscription, as you (infra/focus-exports.ps1):
          Cost Management lets the app's identity run an export but not create one. Then prints the
-         URL. On first start the app adopts those exports and imports the current month plus 12
-         more, newest first; subscriptions added later show the one command to run on its Setup page.
+         URL. On first start the app adopts those exports and imports the current month plus the
+         two before it, newest first. An administrator can request up to 13 months on Setup;
+         subscriptions added later show the one command to run on their Setup page.
 
     Safe to re-run: every step is idempotent and a rerun upgrades in place.
 
@@ -274,7 +275,7 @@ $deploy = [ordered]@{
     PostgresSku            = $sizing.PostgresSku
     PostgresStorageGb      = $sizing.PostgresStorageGb
     AppServicePlanSku      = $sizing.AppServicePlanSku
-    # The app creates the exports itself (S2), so the operator-side script is not run.
+    # This installer creates paused exports after deployment; skip deploy.ps1's separate export step.
     SkipFocusExports       = $true
     EnableExportManagement = $true
     ManagedExports         = $true

@@ -497,7 +497,7 @@ def test_an_export_the_app_may_not_create_is_created_by_an_operator_and_then_ado
     its own once the operator has created the export -- which it then adopts as its own, leaves
     alone (its native schedule cannot be paused either), and runs month by month.
     """
-    from app import bootstrap, cost, cost_data, schedules
+    from app import bootstrap, cost_data, focus_sync, schedules
 
     monkeypatch.setenv("WEBSITE_RESOURCE_GROUP", "rg-cl")
     monkeypatch.setenv("WEBSITE_SITE_NAME", "cloudlens-abc")
@@ -522,7 +522,8 @@ def test_an_export_the_app_may_not_create_is_created_by_an_operator_and_then_ado
         body = schedules._body("FocusCost", ACCOUNT, "focus-exports", f"focus/{sub}")
         body["properties"]["schedule"]["status"] = "Active"
         azure.arm.exports.setdefault(sub, {})[name] = {**body, "name": name, "eTag": "op1"}
-    cost.clear_cache()
+    # The startup/list cache still says no owned export; an operator write cannot invalidate it.
+    assert asyncio.run(focus_sync.owned([S1])) == []
     # The job the second pass resumed now runs, as `launch` would run it.
     asyncio.run(azure.jobs.run(job_id, lambda: azure.flow.step(job_id)))
     assert azure.arm.puts == []  # adopted, never rewritten

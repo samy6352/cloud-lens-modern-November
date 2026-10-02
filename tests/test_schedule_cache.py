@@ -127,6 +127,15 @@ def test_an_ordinary_load_does_not_bypass_the_cache(listing_probe):
     assert listing_probe["forgotten"] == [], "only the Reload button may force a fresh read"
 
 
+def test_owned_discovery_can_bypass_a_startup_snapshot(listing_probe):
+    from app import focus_sync
+
+    assert asyncio.run(focus_sync.owned(["sub-a"])) == []
+    assert listing_probe["forgotten"] == []
+    assert asyncio.run(focus_sync.owned(["sub-a"], fresh=True)) == []
+    assert listing_probe["forgotten"] == [EXPORTS]
+
+
 def test_the_endpoint_and_the_button_agree_on_the_parameter():
     """Structural: a `fresh` the browser sends and the server ignores is worse than neither."""
     from pathlib import Path

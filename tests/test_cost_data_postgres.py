@@ -54,7 +54,7 @@ def test_one_click_setup_reuses_report_persists_cadence_and_coverage(postgres_wa
            "timeframe": "MonthToDate"}
     monkeypatch.setattr(focus_sync, "discover", AsyncMock(side_effect=lambda scope:
         {"schedules": [copy.deepcopy(row)], "errors": []}))
-    monkeypatch.setattr(focus_sync, "owned", AsyncMock(side_effect=lambda scope: [copy.deepcopy(row)]))
+    monkeypatch.setattr(focus_sync, "owned", AsyncMock(side_effect=lambda scope, **kwargs: [copy.deepcopy(row)]))
     files = _report()
     class Reader:
         account, container = "offline", "focus"

@@ -69,10 +69,10 @@ async def status(scope: list[str]) -> dict[str, Any]:
     }
 
 
-async def discover(scope: list[str]) -> dict[str, Any]:
+async def discover(scope: list[str], *, fresh: bool = False) -> dict[str, Any]:
     if not scope:
         return {"schedules": [], "errors": []}
-    result = await schedules.listing(scope, owned_only=True)
+    result = await schedules.listing(scope, owned_only=True, fresh=fresh)
     selected = {sub.lower() for sub in scope}
     return {
         "schedules": [row for row in result["schedules"]
@@ -82,8 +82,8 @@ async def discover(scope: list[str]) -> dict[str, Any]:
     }
 
 
-async def owned(scope: list[str]) -> list[dict[str, Any]]:
-    result = await discover(scope)
+async def owned(scope: list[str], *, fresh: bool = False) -> list[dict[str, Any]]:
+    result = await discover(scope, fresh=fresh)
     if result.get("errors"):
         raise schedules.ScheduleError("; ".join(
             f"{e['subscription']}: {e['detail']}" for e in result["errors"]))

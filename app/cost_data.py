@@ -445,7 +445,8 @@ async def configure(record: dict, task: dict) -> None:
                   "last_through": approved["config"].get("last_through"),
                   "detail": "Configuring authorized cost-data updates."}
         await asyncio.to_thread(write, sid, config)
-    current = next(iter(await focus_sync.owned([sid])), None)
+    # The operator creates exports outside this process, after startup may have cached an empty list.
+    current = next(iter(await focus_sync.owned([sid], fresh=True)), None)
     expected = approved["export"]
     # Unattended (bootstrap.py) setups adopt this deployment's own export whenever it appears:
     # an operator creates it (the app's identity may run exports but not create them), and the
@@ -470,7 +471,7 @@ async def configure(record: dict, task: dict) -> None:
                     "lets the app's identity run an export but not create one. Run: "
                     f"{schedules.operator_command(sid)} -- setup resumes by itself within minutes. "
                     f"Azure said: {str(exc)[:160]}") from exc
-            current = next(iter(await focus_sync.owned([sid])), None)
+            current = next(iter(await focus_sync.owned([sid], fresh=True)), None)
             if not current:
                 raise ValueError("Created export cannot yet be read. Retry missing work after permissions propagate.")
         await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"], provisioned=True)
