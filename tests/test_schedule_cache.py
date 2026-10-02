@@ -277,3 +277,50 @@ def test_every_sign_in_path_starts_the_warm_up():
                __import__("re").findall(r'"(/api/dashboard/[a-z-]+)"', live)), (
         "a tab that is not snapshot-cached would be warmed for nothing")
 
+
+@pytest.mark.parametrize("successful", [True, False])
+def test_callback_warms_only_a_completed_session(monkeypatch, successful):
+    from types import SimpleNamespace
+
+    from starlette.requests import Request
+
+    import app.main as main
+
+    seen = []
+
+    async def complete(params, *, browser_binding):
+        assert params == {"code": "fixture-code", "state": "fixture-state"}
+        assert browser_binding == "fixture-binding"
+        return (SimpleNamespace(sid="fixture-sid") if successful else None,
+                "/v2/explore/resources", "" if successful else "Sign-in refused")
+
+    async def warm(token):
+        seen.append(token)
+
+    auth = SimpleNamespace(
+        sso=SimpleNamespace(enabled=True, complete=complete),
+        sessions=SimpleNamespace(secret=b"fixture-secret"),
+        cookie_kwargs=lambda secure: {"httponly": True, "secure": secure, "samesite": "lax"},
+    )
+    monkeypatch.setattr(main, "auth_service", lambda: auth)
+    monkeypatch.setattr(main, "warm_live_tabs", warm)
+    request = Request({
+        "type": "http", "method": "GET", "scheme": "https",
+        "server": ("testserver", 443), "path": "/auth/callback",
+        "query_string": b"code=fixture-code&state=fixture-state",
+        "headers": [(b"cookie", b"cloudlens_oauth=fixture-binding")],
+    })
+    response = asyncio.run(main.sso_callback(request))
+    assert response.status_code == 303
+    if successful:
+        token = main.entra_sign("fixture-sid", b"fixture-secret")
+        assert response.headers["location"] == "/v2/explore/resources"
+        assert any(f"{main.COOKIE}={token}" in cookie
+                   for cookie in response.headers.getlist("set-cookie"))
+        assert response.background is not None
+        asyncio.run(response.background())
+        assert seen == [token]
+    else:
+        assert response.headers["location"].startswith("/login?error=")
+        assert response.background is None
+        assert seen == []
