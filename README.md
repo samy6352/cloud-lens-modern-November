@@ -276,6 +276,14 @@ global: a committed cost change invalidates snapshot freshness, while the previo
 result remains available until a coherent rollup is published. Static assets use validated
 content-versioned URLs; unversioned URLs revalidate.
 
+`CLOUDLENS_TAB_SERVING` defaults to `false`. Opting in builds generation-owned Uptime
+and Tags responses from coherent published summaries during startup/normal serving refresh.
+Plan an approved build window before enabling it on a shared database. This is source serving
+data, not a viewer cache: only exact, unscoped, unfiltered, unconverted rolling 7/30/60/90-day
+views and three recent calendar months can use it. Generation/period/contract mismatches,
+scoped or converted views and comparison history retain the exact query path. Refreshing an
+endpoint never builds the serving data on demand. Disabling the flag retains the stored data.
+
 In **Reports > Cost data > Access & fixes**, inspect caller
 access or, for application admins, the background identity. The matrix distinguishes declared
 permissions, denied access, unknown evidence and actions needing approval. Storage data roles

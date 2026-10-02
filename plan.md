@@ -503,6 +503,24 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
   JSON encoding is only ~0.05-0.06 s. See handover section10 for full profile evidence and exactness boundaries.
   Improvements committed locally, not pushed; no Azure, forced serving publication or benchmark artefact changes.
 
+### 3 October opt-in tab serving
+
+- Implemented `CLOUDLENS_TAB_SERVING=true`, default false; immutable exact SQL-derived/shaped responses
+  in `tab_serving_v1`, built on one coherent generation/connection during normal serving publication.
+  Supported global/unfiltered/unconverted rolling7/30/60/90d and three recent calendar months only;
+  missing/stale/narrowed/history requests retain exact fallback. Atomic read checks source/ready/stamp/payload
+  generation, clean ledger, derived roster and semantic/cap contract. No on-demand HTTP build or TTL enlargement.
+- Normal refresh/startup wiring and serving-stamp invalidation implemented; opt-in prevents unapproved shared
+  build. Native budget currencies preserved across converted scoped Tags; pooled prepared plans disabled after
+  reproduced binding reuse across newly introduced month/scope temp shadows.
+- Isolated360k-charge scale proof: Uptime0.257-0.296s, Tags0.097-0.152s application-cache-free origin calls,
+  exact payload parity; build35.42s, physical5.56MB, fixture schema removed. NOT real-estate HTTP measurements.
+- Full Python now **2,394 passed / 2 skipped / 10 deselected**, zero failures/errors,28m56s.
+  Live source/ready10/10, dirtywindows[] at preflight, no servingstamp; no shared table build/change.
+- Committed locally, not pushed. **Pending Ravi approval:** enable/build only the new serving data on the
+  coherent shared local estate, then record real forced endpoint misses and parity. Not a full derived rebuild.
+  See handover section11 and README/config flag for precise activation/fallback contracts.
+
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
   TypeScript 7.0, TanStack Router 1.170 / Query 5.103 / Table **9.2** (v9 API: `useTable` + `tableFeatures`, not
