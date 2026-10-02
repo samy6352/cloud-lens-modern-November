@@ -511,7 +511,7 @@ def test_explicit_live_refresh_bypasses_fresh_cache_and_joins_singleflight(monke
             body = json.loads(response.body)
             assert body["revision"] == 2
             assert body["cache"]["refresh_requested"] is True
-            assert body["cache"]["max_age_seconds"] == 60
+            assert body["cache"]["max_age_seconds"] == main._BILLING_CACHE_SECONDS
         cached = await main.dashboard_billing_opportunities(request(), currency="USD")
         assert json.loads(cached.body)["cache"]["cached"] is True
         assert len(calls) == 2

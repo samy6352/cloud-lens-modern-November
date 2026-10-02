@@ -148,7 +148,9 @@ _SAVINGS_PENDING_LIMIT = 16
 _SAVINGS_SCAN_TIMEOUT_SECONDS = 180.0
 _billing_cache: OrderedDict[tuple[Any, ...], tuple[float, dict]] = OrderedDict()
 _billing_pending: dict[tuple[Any, ...], asyncio.Task] = {}
-_BILLING_CACHE_SECONDS = 60.0
+# Long enough for the sign-in warm-up to still be there when the person opens the tab; the
+# commitment data moves daily, and the page's refresh button bypasses this.
+_BILLING_CACHE_SECONDS = 900.0
 _BILLING_CACHE_LIMIT = 32
 _BILLING_PENDING_LIMIT = 16
 _BILLING_SCAN_TIMEOUT_SECONDS = 180.0
@@ -189,7 +191,7 @@ def _finish_savings(key: tuple[Any, ...], task: asyncio.Task) -> None:
 LIVE_AZURE_TABS = (
     "/api/dashboard/recommendations", "/api/dashboard/esu", "/api/dashboard/governance",
     "/api/dashboard/rightsizing", "/api/dashboard/savings", "/api/dashboard/waste",
-    "/api/dashboard/ai-billing",
+    "/api/dashboard/ai-billing", "/api/dashboard/billing/opportunities",
 )
 
 
