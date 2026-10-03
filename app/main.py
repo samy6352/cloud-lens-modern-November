@@ -758,7 +758,8 @@ def snapshot_cache_settings() -> dict[str, int]:
     return {
         "max_bytes": _positive_int_env("SNAPSHOT_MAX_BYTES", 256 * 1024 * 1024),
         "max_entries": _positive_int_env("SNAPSHOT_MAX_ENTRIES", 4096),
-        "max_payload": _positive_int_env("SNAPSHOT_MAX_PAYLOAD", 8 * 1024 * 1024),
+        # A bounded 8,000-resource Tags report can exceed 8 MiB without extra detail.
+        "max_payload": _positive_int_env("SNAPSHOT_MAX_PAYLOAD", 16 * 1024 * 1024),
         "origin_timeout": _positive_int_env("SNAPSHOT_ORIGIN_TIMEOUT", 300),
     }
 
@@ -1761,32 +1762,37 @@ async def subscriptions(request: Request) -> JSONResponse:
     user = current_user(request)
     allowed = await permitted(user)
 
-    stored = {s["id"]: s for s in await offload(warehouse.subscriptions)}
+    stored = {s["id"].lower(): s for s in await offload(warehouse.subscriptions)}
+    live_known = True
     try:
         async with as_user(user):
             live = (await cost.list_subscriptions())["subscriptions"]
-    except Exception:  # noqa: BLE001 - the warehouse alone is enough to populate the picker
+    except Exception as exc:  # noqa: BLE001 - retain historical costs with explicit unknown live access
+        log.warning("subscription picker live access unavailable (%s)", type(exc).__name__)
+        live_known = False
         live = []
 
     merged: list[dict] = []
     for s in live or stored.values():
-        row = stored.get(s["id"], {})
+        row = stored.get(s["id"].lower(), {})
         entry = {"id": s["id"], "name": s.get("name") or row.get("name"),
-                 "cost": row.get("cost"), "in_warehouse": s["id"] in stored}
+                 "cost": row.get("cost"), "in_warehouse": s["id"].lower() in stored,
+                 "azure_access": (bool(live) if live_known else None)}
         # Which directory it came from. With one tenant this is noise; with several, two
         # subscriptions can share a name and the picker becomes a guess without it.
         if s.get("tenant_name"):
             entry["tenant_name"] = s["tenant_name"]
         merged.append(entry)
     for sid, row in stored.items():
-        if not any(m["id"] == sid for m in merged):
-            merged.append({**row, "in_warehouse": True})
+        if not any(m["id"].lower() == sid for m in merged):
+            merged.append({**row, "in_warehouse": True,
+                           "azure_access": False if live_known else None})
 
     if allowed is not None:
         # Belt and braces: `live` already came back under their own token, but the warehouse
         # rows did not, and those must not widen the picker.
-        permitted_ids = set(allowed)
-        merged = [m for m in merged if m["id"] in permitted_ids]
+        permitted_ids = {sid.lower() for sid in allowed}
+        merged = [m for m in merged if m["id"].lower() in permitted_ids]
 
     merged.sort(key=lambda m: (m["cost"] is None, -(m["cost"] or 0)))
 
@@ -4557,7 +4563,7 @@ async def dashboard_commitments(request: Request, days: int = 30,
 
 @app.get("/api/dashboard/uptime")
 async def dashboard_uptime(request: Request, days: int = 30, scope: str = "",
-                           currency: str = "") -> JSONResponse:
+                           currency: str = "") -> Response:
     """Daily hour-meter billing quantities and derived rates, not monitored availability."""
     from .uptime import hourly_cost
 
@@ -4566,17 +4572,28 @@ async def dashboard_uptime(request: Request, days: int = 30, scope: str = "",
     picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
     payload = await offload(hourly_cost, picked or None,
                             days=max(1, min(days, 365)),
-                            currency=currency or None)
+                            currency=currency or None, encoded=True)
     # The tag breakdown on this tab carries the same caveat as the Tags tab: a load that cannot
     # carry tags leaves every meter looking untagged, which is a different statement from "these
     # meters have no tags" and must not be made silently.
-    payload["tags_not_loaded"] = await offload(_tags_missing_from_load)
+    tags_not_loaded = await offload(_tags_missing_from_load)
+    if isinstance(payload, str):
+        from .snapshot_cache import ParsedJSONResponse
+
+        text = payload.rstrip()
+        if not text.endswith("}"):
+            raise ValueError("Serving payload must be a JSON object.")
+        # Validate the entire annotated body, including duplicate keys, exactly once.
+        separator = "" if text[:-1].rstrip().endswith("{") else ","
+        return ParsedJSONResponse(
+            text[:-1] + separator + '"tags_not_loaded":' + json.dumps(tags_not_loaded) + "}")
+    payload["tags_not_loaded"] = tags_not_loaded
     return JSONResponse(payload)
 
 
 @app.get("/api/dashboard/tags")
 async def dashboard_tags(request: Request, days: int = 30, scope: str = "",
-                         currency: str = "") -> JSONResponse:
+                         currency: str = "", include_live: bool = True) -> Response:
     """Tagged resources with their costs and tag keys, for the Cost by Tag tab.
 
     Deliberately returns the resources rather than an answer: which resources match depends on
@@ -4595,6 +4612,15 @@ async def dashboard_tags(request: Request, days: int = 30, scope: str = "",
     picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
     subs = picked or allowed or None
 
+    if not include_live:
+        from .snapshot_cache import ParsedJSONResponse
+
+        payload = await offload(
+            cost_by_tag, picked or None, days=max(1, min(days, 365)),
+            currency=currency or None, encoded=True)
+        return (ParsedJSONResponse(payload) if isinstance(payload, str)
+                else JSONResponse(payload))
+
     # Both halves at once: the warehouse query is offloaded to a thread while the Azure call for
     # live tag keys is in flight, so the tab costs the slower of the two rather than their sum.
     async with as_user(user):
@@ -4606,6 +4632,20 @@ async def dashboard_tags(request: Request, days: int = 30, scope: str = "",
     merged = merge_live_keys(payload, live)
     # Tag availability comes from these resource rows, not another subscription's last import.
     return JSONResponse(merged)
+
+
+@app.get("/api/dashboard/tags/live")
+async def dashboard_live_tags(request: Request, scope: str = "") -> JSONResponse:
+    """Optional current Azure tag keys, separate from the certified cost response."""
+    from .tags import is_platform_key, read_live_tag_keys
+
+    user = current_user(request)
+    allowed = await permitted(user)
+    picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
+    async with as_user(user):
+        keys = await read_live_tag_keys(picked or allowed or None)
+    return JSONResponse({"keys": [{**key, "platform": is_platform_key(key["key"])} for key in keys],
+                         "source": "Azure Resource Graph"})
 
 
 def _tags_missing_from_load() -> bool:

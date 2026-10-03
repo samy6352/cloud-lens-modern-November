@@ -92,6 +92,98 @@ class MemoryStore:
             del self.rows[key]
 
 
+def test_prevalidated_json_uses_actual_bytes_once_and_never_establishes_uncommitted_proof(monkeypatch):
+    from app import snapshot_cache
+
+    token = snapshot_cache.origin_validation_context.set((CONTEXT.partition(), "private-key", "1"))
+    try:
+        response = snapshot_cache.ParsedJSONResponse('{"total":123}')
+    finally:
+        snapshot_cache.origin_validation_context.reset(token)
+    monkeypatch.setattr(snapshot_cache, "_body", lambda *a, **kw: pytest.fail("duplicate full scan"))
+    cache = SnapshotCache(MemoryStore(), version="validated-json")
+    metadata = {}
+    assert cache._validated_body(response, CONTEXT.partition(), "private-key", "1", POLICY, metadata) == response.body
+    assert "value" in metadata
+    assert not cache._validation_proofs, "Only a fenced committed put may establish a reusable proof."
+
+
+@pytest.mark.parametrize("mutation", ["body", "headers", "owner", "key", "generation", "limit", "daily"])
+def test_prevalidated_json_preserves_all_body_header_owner_generation_and_policy_guards(monkeypatch, mutation):
+    from app import snapshot_cache
+
+    partition, key, generation, policy = CONTEXT.partition(), "private-key", "1", POLICY
+    token = snapshot_cache.origin_validation_context.set((partition, key, generation))
+    try:
+        response = snapshot_cache.ParsedJSONResponse('{"total":123}')
+    finally:
+        snapshot_cache.origin_validation_context.reset(token)
+    if mutation == "body":
+        response.body = b'{"password":"never-cache"}'
+    elif mutation == "headers":
+        response.headers["Cache-Control"] = "public"
+    elif mutation == "owner":
+        partition = "another-owner"
+    elif mutation == "key":
+        key = "another-key"
+    elif mutation == "generation":
+        generation = "2"
+    elif mutation == "daily":
+        policy = replace(POLICY, daily=True)
+    store = MemoryStore()
+    if mutation == "limit":
+        store.max_payload = len(response.body) - 1
+    cache = SnapshotCache(store, version="validated-json-guards")
+    calls = []
+    original = snapshot_cache._body
+
+    def validate(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshot_cache, "_body", validate)
+    result = cache._validated_body(response, partition, key, generation, policy, {})
+    assert result is None if mutation in {"body", "headers", "limit"} else result == response.body
+    assert bool(calls) == (mutation not in {"headers", "limit"})
+
+
+def test_prevalidated_json_never_marks_secret_or_failure_shaped_bodies_as_validated():
+    from app import snapshot_cache
+
+    for text in ('{"password":"secret"}', '{"total":123,"note":"Bearer private-token"}',
+                 '{"status":"running","total":123}'):
+        response = snapshot_cache.ParsedJSONResponse(text)
+        assert response._origin_report.validate() is None
+
+
+def test_prevalidated_json_cannot_be_replayed_from_outside_its_request_context(monkeypatch):
+    from app import snapshot_cache
+
+    response = snapshot_cache.ParsedJSONResponse('{"total":123}')
+    original = snapshot_cache._body
+    calls = []
+
+    def validate(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshot_cache, "_body", validate)
+    cache = SnapshotCache(MemoryStore(), version="validated-json-unowned")
+    assert cache._validated_body(response, CONTEXT.partition(), "private-key", "1", POLICY, {}) == response.body
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("text", [
+    '{"cost":NaN}', '{"cost":Infinity}', '{"cost":1e999}',
+    '{"note":"Bearer private-token","note":"ordinary"}', '{"broken":',
+])
+def test_parsed_response_rejects_corruption_before_any_validation_record_exists(text):
+    from app import snapshot_cache
+
+    with pytest.raises(ValueError):
+        snapshot_cache.ParsedJSONResponse(text)
+
+
 class Authorize:
     def __init__(self, context=CONTEXT):
         self.context, self.calls, self.denied = context, 0, False
@@ -1134,6 +1226,104 @@ def test_fused_private_validation_preserves_nested_job_envelope_rules(value):
 
     states = _ACTIVE | _FAILED
     assert _safe_content(value, states=states) == (not _unfinished(value, states=states))
+
+
+@pytest.mark.parametrize("value,partial", [
+    ({"resources": [{"cost": 12, "daily": [{"status": "ok"}]}]}, False),
+    ({"resources": [{"cost": 12, "daily": [{"STATUS": "UNKNOWN"}]}]}, True),
+    ({"nested": [[{"metric_status": "partial"}]], "total": 12}, True),
+    ({"nested": [{"TRUNCATED": True}], "total": 12}, True),
+    ({"nested": [{"unavailable": 1, "partial": "true", "errors": []}]}, False),
+    ({"nested": [{"errors": {"count": 1}}], "total": 12}, True),
+    ({"resources": [{"status": "ok"}] * 100 + [{"status": "unavailable"}]}, True),
+    ([{"state": "ok"}, [{"problem": "source failed", "amount": 12}]], True),
+])
+def test_partial_evidence_walk_preserves_nested_case_and_exact_boolean_rules(value, partial):
+    from app.snapshot_cache import _partial_evidence
+
+    assert _partial_evidence(value) is partial
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("partial", [False, True])
+def test_actual_body_validation_collects_coverage_with_one_partial_walk(monkeypatch, owned, partial):
+    from app import snapshot_cache as sc
+
+    calls = []
+    walk = sc._partial_evidence
+
+    def counted(value):
+        calls.append(1)
+        return walk(value)
+
+    monkeypatch.setattr(sc, "_partial_evidence", counted)
+    value = {"total": 12, "snapshot": {"cadence": "data-day", "data_day": "2026-10-03"},
+             "nested": [{"partial": partial}]}
+    if owned:
+        response = sc.ParsedJSONResponse(json.dumps(value))
+        metadata = response._origin_report.validate()
+    else:
+        collected = {}
+        assert sc._body(JSONResponse(value), 10000, metadata=collected)
+        metadata = collected["value"]
+    assert calls == [1]
+    assert metadata == (partial, "data-day", "2026-10-03")
+
+
+def test_private_scan_type_memo_retains_subclass_and_nested_job_checks():
+    from app.snapshot_cache import _ACTIVE, _FAILED, _safe_content
+
+    class Text(str):
+        pass
+
+    class Mapping(dict):
+        pass
+
+    class Sequence(list):
+        pass
+
+    states = _ACTIVE | _FAILED
+    assert _safe_content({"resources": Sequence([Mapping({"name": Text("normal")})])}, states=states)
+    assert not _safe_content({"resources": Sequence([
+        Mapping({"name": Text("normal")}), Mapping({"name": Text("Bearer synthetic")}),
+    ])}, states=states)
+    assert not _safe_content({"nested": Sequence([
+        Mapping({"job_id": "synthetic", "state": "running"}),
+    ])}, states=states)
+
+
+@pytest.mark.parametrize("tail", [
+    "Bearer synthetic", "pa\u017f\u017fword=synthetic",
+    {"credentials": "synthetic"},
+    [{"job_id": "synthetic", "state": "running"}],
+])
+def test_long_string_list_fast_path_checks_late_secrets_and_mixed_containers(tail):
+    from app.snapshot_cache import _ACTIVE, _FAILED, _body, _safe_content
+
+    value = {"total": 12, "jobs": ["ordinary"] * 32 + [tail]}
+    assert not _safe_content(value, states=_ACTIVE | _FAILED)
+    assert _body(JSONResponse(value), 10000) is None
+
+
+def test_long_string_list_fast_path_preserves_original_string_boundaries():
+    from app.snapshot_cache import _body, _safe_content
+
+    class Text(str):
+        pass
+
+    value = {"total": 12, "daily": [Text("Bear"), "er synthetic"] + ["ordinary"] * 32}
+    assert _safe_content(value)
+    assert _body(JSONResponse(value), 10000)
+    value["daily"][-1] = Text("Bearer synthetic")
+    assert not _safe_content(value)
+
+
+@pytest.mark.parametrize("tail", [0, None, True, {"status": "running"}])
+def test_long_string_list_fast_path_fallback_retains_scalar_and_resource_rules(tail):
+    from app.snapshot_cache import _ACTIVE, _FAILED, _safe_content
+
+    assert _safe_content({"resources": ["ordinary"] * 32 + [tail]},
+                         states=_ACTIVE | _FAILED)
 
 
 @pytest.mark.parametrize("body", [

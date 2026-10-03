@@ -5,7 +5,27 @@
 > updating the **status tracker (section 12)** as you go. Sections 8–11 are the longer v3 roadmap after the sprint.
 > This file deliberately contains **no secrets** — credentials come from the local environment / `.env` (never commit them).
 
-### 3 October update - native migration and generation-14 acceptance
+### 3 October follow-up - active local remediation (uncommitted)
+
+Latest first-read follow-up remains an **open latency gate**. Certified JSON byte reuse and an
+owner/body/header/generation-bound owned parse remove redundant work without dropping full privacy checks.
+Backend292 and affected browser52 pass, but repeat settled HTTP still measured Tags up to1.420s and
+Uptime up to2.046s; startup/login contention was slower. All14 views remain cached with exact parity.
+See handover section9 rather than treating an earlier isolated green run as final acceptance.
+
+- Tags now has an explicit bounded 16 MiB snapshot payload default, with the 256 MiB total store unchanged.
+  All 14 serving views now have genuine snapshot hits; no cost rows or monetary precision were removed.
+- Native imported Tags reads use `include_live=false`; current Azure tag keys are an explicit separate lookup,
+  with source errors displayed without replacing cost evidence. Classic/default combined behavior is preserved.
+- Subscription rows distinguish current, historical-only and unverified Azure access. The native picker preserves
+  historical billing but prevents new known-historical selections in live/admin views and warns on existing ones.
+- Generation14 repeated HTTP evidence: Tags forced 0.082-1.102 s (18/21 below1s), hits 0.009-0.202 s;
+  Uptime forced 0.086-0.839 s (21/21 below1s), hits 0.009-0.126 s. Exact core parity over 84 requests.
+  Three first Tags reads still exceed1s; this strict latency gate is not complete.
+- UI91, integrated453, responsive126 and axe47 gates passed; source/privacy/size regressions are recorded.
+  Changes are active locally but not committed or pushed. See handover section8 for evidence and process identity.
+
+### 3 October baseline - native migration and generation-14 acceptance
 
 - Native all-21-tab React migration and readiness-safe report options committed locally as `0685029`.
   Normal generation-14 rebuild finished without interruption; source, derived and serving all equal 14,

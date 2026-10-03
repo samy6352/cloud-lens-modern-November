@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 from psycopg.errors import UndefinedColumn
@@ -77,6 +78,57 @@ def test_normal_build_equals_exact_query(estate, endpoint, period, monkeypatch):
         module = uptime if endpoint == "uptime" else tags
         monkeypatch.setattr(module, "_build", lambda *a, **kw: pytest.fail("query fallback"))
         assert _function(endpoint)(days=days) == expected
+
+
+@pytest.mark.parametrize("period", [7, 30, 60, 90, "2026-07", "2026-08", "2026-09"])
+@pytest.mark.parametrize("endpoint", ["uptime", "tags"])
+def test_encoded_tabs_preserve_exact_published_bytes_and_query_answer(estate, period, endpoint, monkeypatch):
+    month = period if isinstance(period, str) else None
+    with reporting.select(month):
+        days = reporting.period_days(30 if month else period)
+        expected = _exact(estate, endpoint, days)
+        with estate.connect() as con:
+            row = con.execute(
+                f"SELECT payload FROM {tab_serving.TABLE} WHERE endpoint=? AND period=?",
+                [endpoint, tab_serving.period_key(days)]).fetchone()
+        monkeypatch.setattr(uptime if endpoint == "uptime" else tags, "_build",
+                            lambda *a, **kw: pytest.fail("query fallback"))
+        encoded = _function(endpoint)(days=days, encoded=True)
+        assert isinstance(encoded, str)
+        assert encoded == row[0]
+        assert json.loads(encoded) == expected
+
+
+@pytest.mark.parametrize("mode", ["scoped", "empty", "converted", "arbitrary", "history"])
+@pytest.mark.parametrize("endpoint", ["uptime", "tags"])
+def test_encoded_unsupported_tabs_retain_exact_query_path(estate, mode, endpoint, monkeypatch):
+    from app import currency
+
+    monkeypatch.setattr(currency, "rate_to", lambda code: 1.0)
+    with reporting.comparison_history() if mode == "history" else reporting.select(None):
+        args = {"scope": ["s1"] if mode in {"scoped", "converted"} else [] if mode == "empty" else None,
+                "days": 13 if mode == "arbitrary" else 30,
+                "currency": "USD" if mode == "converted" else None}
+        expected = _function(endpoint)(**args)
+        assert _function(endpoint)(**args, encoded=True) == expected
+
+
+@pytest.mark.parametrize("text", [
+    '{"cost":NaN}', '{"cost":Infinity}', '{"cost":-Infinity}', '{"cost":1e999}',
+    '{"cost":-1e999}', '{"broken":', '["not a report"]',
+    '{"note":"Bearer private-token","note":"ordinary"}',
+    '{"rows":[{"note":"Bearer private-token","note":"ordinary"}]}',
+])
+def test_encoded_corrupt_or_nonfinite_publications_raise(text, monkeypatch):
+    monkeypatch.setattr(tab_serving, "_read_payload", lambda *args: text)
+    with pytest.raises(ValueError):
+        tab_serving.read_json(None, "tags", 30)
+
+
+def test_encoded_valid_json_preserves_unicode_signed_credits_and_negative_zero(monkeypatch):
+    text = '{"name":"caf\\u00e9","cost":-123.456789012345,"credit":-0.0}'
+    monkeypatch.setattr(tab_serving, "_read_payload", lambda *args: text)
+    assert tab_serving.read_json(None, "tags", 30) == text.encode("utf-8")
 
 
 @pytest.mark.parametrize("endpoint", ["uptime", "tags"])
@@ -170,6 +222,7 @@ def test_atomic_read_rechecks_readiness_after_reader_creation(estate, mutation):
         try:
             r = Reader(con, tab_served=True)
             assert tab_serving.read(r, "tags", 30)
+            assert tab_serving.read_json(r, "tags", 30)
             if mutation == "ingest":
                 jobs.lock_generation(con)
                 jobs.advance_generation(con, (HI, HI + dt.timedelta(days=1)))
@@ -182,6 +235,7 @@ def test_atomic_read_rechecks_readiness_after_reader_creation(estate, mutation):
             else:
                 con.execute("DELETE FROM meta WHERE key = ?", [tab_serving.STAMP_KEY])
             assert tab_serving.read(r, "tags", 30) is None
+            assert tab_serving.read_json(r, "tags", 30) is None
             assert con.execute("SELECT 1").fetchone() == (1,)
         finally:
             con.execute("ROLLBACK")

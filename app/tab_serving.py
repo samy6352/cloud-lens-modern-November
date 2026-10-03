@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
-from typing import Any
+from typing import Any, NoReturn
 
 from . import hourly_usage, presence, reporting, resource_tags, rollup
 
@@ -56,6 +57,51 @@ def read(r: Any, endpoint: str, days: int) -> dict[str, Any] | None:
     Only absence is tolerated. Bad schema, corrupt payload or malformed metadata
     raises normally; speculative statements never poison a reader transaction.
     """
+    text = _read_payload(r, endpoint, days)
+    return json.loads(text) if text is not None else None
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("Serving payload contains a non-finite number.")
+    return value
+
+
+def _reject_constant(text: str) -> NoReturn:
+    raise ValueError(f"Serving payload contains an invalid JSON number: {text}.")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError("Serving payload contains duplicate JSON object keys.")
+    return value
+
+
+def read_json(r: Any, endpoint: str, days: int) -> bytes | None:
+    """Reuse published JSON bytes, not a second serialization of the same report."""
+    text = _read_payload(r, endpoint, days)
+    if text is None:
+        return None
+    decode_report_json(text)
+    return text.encode("utf-8")
+
+
+def decode_report_json(text: str | bytes) -> dict[str, Any]:
+    value = json.loads(text, parse_float=_finite_float, parse_constant=_reject_constant,
+                       object_pairs_hook=_unique_object)
+    if not isinstance(value, dict):
+        raise ValueError("Serving payload must be a JSON object.")
+    return value
+
+
+def read_text(r: Any, endpoint: str, days: int) -> str | None:
+    """Certified stored JSON; consumers must validate it before emitting a response."""
+    return _read_payload(r, endpoint, days)
+
+
+def _read_payload(r: Any, endpoint: str, days: int) -> str | None:
     from . import jobs
 
     if (not getattr(r, "tab_served", False) or getattr(r, "scoped", False)
@@ -96,7 +142,7 @@ def read(r: Any, endpoint: str, days: int) -> dict[str, Any] | None:
              jobs.ROLLUP_DIRTY_KEY, jobs.ROLLUP_TABLES_KEY],
             endpoint, key, contract(), sorted(REQUIRED),
         ])
-    return json.loads(rows[0]["payload"]) if rows else None
+    return rows[0]["payload"] if rows else None
 
 
 def _reader(con: Any, schema: str, bounds: tuple | None) -> Any:

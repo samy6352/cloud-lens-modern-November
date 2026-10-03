@@ -244,6 +244,7 @@ try {
   await page.goto(`${base}/v2/`, { waitUntil: "domcontentloaded" });
   const nav = page.getByRole("navigation", { name: "Workspaces" });
   await nav.waitFor({ timeout: 30000 });
+  await nav.getByRole("link", { name: routes.find(route => route.id === "audit").label, exact: true }).waitFor({ timeout: 30000 });
   check(await nav.getByRole("link").count() === routes.length, `all ${routes.length} native screens visible in sidebar`);
   if (!process.env.V2_MATRIX_ONLY) {
   for (const screen of selectedRoutes) {

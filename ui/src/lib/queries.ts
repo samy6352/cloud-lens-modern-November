@@ -13,6 +13,8 @@ export interface Subscription {
   currency?: string | null;
   cost: number | null;
   in_warehouse: boolean;
+  /** false is historical-only; null/absence means live access could not be verified. */
+  azure_access?: boolean | null;
   tenant_name?: string;
 }
 
@@ -349,9 +351,22 @@ export interface TagReport {
 /** Heavy on purpose (every tagged resource, filtered in the browser), so cached for minutes. */
 export const tagsQuery = (s: Scope, days: number) =>
   queryOptions({
-    queryKey: ["tags", s.scope ?? "", days],
-    queryFn: () => api<TagReport>("dashboard/tags", { days, scope: s.scope }),
+    queryKey: ["tags", s.scope ?? "", days, "warehouse"],
+    queryFn: () => api<TagReport>("dashboard/tags", { days, scope: s.scope, include_live: false }),
     staleTime: 5 * 60_000,
+  });
+
+export interface LiveTagKeys {
+  keys: Array<{ key: string; resources: number; platform: boolean }>;
+  source: string;
+}
+
+export const liveTagKeysQuery = (s: Scope) =>
+  queryOptions({
+    queryKey: ["live-tag-keys", s.scope ?? ""],
+    queryFn: () => api<LiveTagKeys>("dashboard/tags/live", { scope: s.scope }),
+    enabled: false,
+    retry: false,
   });
 
 export interface UptimeMeter {

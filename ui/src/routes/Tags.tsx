@@ -7,10 +7,11 @@ import { columnHelper, DataTable } from "@/components/DataTable";
 import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { tagsQuery, type TagReport, type TagResource } from "@/lib/queries";
+import { tagsQuery, liveTagKeysQuery, type TagReport, type TagResource } from "@/lib/queries";
 
 const WINDOWS = [
   { value: "30", label: "30 days" },
@@ -55,6 +56,8 @@ export function TagsPage() {
   const [days, setDays] = useState("30");
   const query = useQuery(tagsQuery(search, Number(days)));
   const data = query.data;
+  const live = useQuery(liveTagKeysQuery(search));
+  const uncosted = live.data?.keys.filter(k => !data?.keys.some(costed => costed.key === k.key)) ?? [];
   const [picked, setPicked] = useState<string | null>(null);
   const [value, setValue] = useState<string | null>(null);
   const [keyText, setKeyText] = useState("");
@@ -199,6 +202,25 @@ export function TagsPage() {
           Showing the {formatNumber(data.resources.length, { system: numbers, digits: 0 })} highest-cost resources. Totals cover these resources only.
         </Card>
       )}
+      <Card className="mb-4 p-4 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span>Cost tags come from imported billing. Check Azure separately for current keys without cost in this window.</span>
+          <Button variant="outline" disabled={!data || live.isFetching} onClick={() => void live.refetch()}>
+            {live.isFetching ? "Checking live tag keys…" : "Check live tag keys"}
+          </Button>
+        </div>
+        {live.isError && <p role="alert" className="mt-3 text-warn">Live tag keys unavailable: {live.error.message}. Imported cost evidence is unchanged.</p>}
+        {live.data && (
+          <div className="mt-3" role="status">
+            <p>{live.data.keys.length} current keys returned by {live.data.source}. This is live metadata, not cost attribution.</p>
+            {uncosted.length > 0 ? (
+              <ul className="mt-2 list-inside list-disc">
+                {uncosted.map(k => <li key={k.key}>{k.key} · {formatNumber(k.resources, { system: numbers, digits: 0 })} resources{k.platform ? " · platform-generated" : ""}</li>)}
+              </ul>
+            ) : <p>No additional live keys were returned beyond the cost keys shown.</p>}
+          </div>
+        )}
+      </Card>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiTile index={0} loading={!data} label="Tagged cost" value={money(data?.tagged.cost)} hint={`${formatNumber(data?.tagged.resources, { system: numbers, digits: 0 })} resources`} />

@@ -324,7 +324,7 @@ def test_snapshot_cache_bounds_defaults_and_validation_without_importing_app(mon
     assert settings() == {
         "max_bytes": 256 * 1024 * 1024,
         "max_entries": 4096,
-        "max_payload": 8 * 1024 * 1024,
+        "max_payload": 16 * 1024 * 1024,
         "origin_timeout": 300,
     }
     monkeypatch.setenv("SNAPSHOT_MAX_BYTES", "123")

@@ -35,7 +35,7 @@ import logging
 import re
 from collections.abc import Iterable
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, Literal, overload
 
 log = logging.getLogger("cloudlens.tags")
 
@@ -116,21 +116,25 @@ async def live_tag_keys(scope: list[str] | None = None) -> list[dict[str, Any]]:
     uses. An explicitly empty list means the opposite — nothing is in scope — and must not
     widen to the whole estate, which is what `scope or <all>` alone would do.
     """
+    try:
+        return await read_live_tag_keys(scope)
+    except Exception as exc:  # noqa: BLE001 - context is optional, the tab is not
+        log.info("live tag keys unavailable, continuing without them: %s", str(exc)[:200])
+        return []
+
+
+async def read_live_tag_keys(scope: list[str] | None = None) -> list[dict[str, Any]]:
+    """Read optional live evidence without disguising a failed lookup as an empty estate."""
     from .cost import list_subscriptions
     from .waste import _arg
 
     if scope is not None and not scope:
         return []
-
-    try:
-        subs = scope or [s["id"] for s in (await list_subscriptions())["subscriptions"]]
-        if not subs:
-            return []
-        rows = await _arg(LIVE_KEYS_QUERY, subs, top=500)
-    except Exception as exc:  # noqa: BLE001 - context is optional, the tab is not
-        log.info("live tag keys unavailable, continuing without them: %s", str(exc)[:200])
+    subs = scope if scope is not None else [
+        s["id"] for s in (await list_subscriptions())["subscriptions"]]
+    if not subs:
         return []
-
+    rows = await _arg(LIVE_KEYS_QUERY, subs, top=500)
     out = []
     for row in rows:
         key = str(row.get("k") or "").strip()
@@ -221,8 +225,18 @@ def _ranked_candidates(r: Any, hi: Any, days: int, code: str | None
     return raw, cutoff
 
 
+@overload
 def cost_by_tag(scope: list[str] | None = None, days: int = 30,
-                currency: str | None = None) -> dict[str, Any]:
+                currency: str | None = None, *, encoded: Literal[False] = False) -> dict[str, Any]: ...
+
+
+@overload
+def cost_by_tag(scope: list[str] | None = None, days: int = 30,
+                currency: str | None = None, *, encoded: Literal[True]) -> dict[str, Any] | str: ...
+
+
+def cost_by_tag(scope: list[str] | None = None, days: int = 30,
+                currency: str | None = None, *, encoded: bool = False) -> dict[str, Any] | str:
     """Every tagged resource in the window, with its cost, its tag keys and its daily spend."""
     from . import reporting
 
@@ -234,7 +248,8 @@ def cost_by_tag(scope: list[str] | None = None, days: int = 30,
     with warehouse.reader(scope=scope, currency=currency, usage=("tags",)) as r:
         from . import tab_serving
 
-        served = tab_serving.read(r, "tags", days)
+        served = (tab_serving.read_text(r, "tags", days) if encoded
+                  else tab_serving.read(r, "tags", days))
         return served if served is not None else _build(r, days, currency)
 
 

@@ -276,6 +276,32 @@ global: a committed cost change invalidates snapshot freshness, while the previo
 result remains available until a coherent rollup is published. Static assets use validated
 content-versioned URLs; unversioned URLs revalidate.
 
+`SNAPSHOT_MAX_PAYLOAD` defaults to **16 MiB per response**, accommodating the bounded
+8,000-resource Tags report (the measured seven-day response is 8.1 MiB). The overall
+store remains bounded by `SNAPSHOT_MAX_BYTES` (256 MiB) and `SNAPSHOT_MAX_ENTRIES` (4,096).
+Explicit deployment overrides remain authoritative, including smaller payload limits.
+Oversized responses are still rejected; authorization, content validation and committed-generation
+write fencing are unchanged. No rows, daily values or monetary precision are dropped to fit the cap.
+
+The native Tags page requests `include_live=false` for imported cost evidence, avoiding a cold
+Azure metadata lookup on its critical path. **Check live tag keys** explicitly reads the separate
+authorized `/api/dashboard/tags/live` endpoint. These current keys are supplementary metadata,
+never zero-cost attribution; lookup failures are shown without replacing imported costs.
+The original Tags API defaults to `include_live=true` for existing/classic consumers.
+For supported published cost-only views, the endpoint reuses the exact stored JSON bytes
+instead of serializing the full report again. The same atomic generation/period/contract
+certificate applies, and malformed, duplicate-key or non-finite JSON is rejected.
+Scoped, filtered, converted and unsupported views retain the exact query builder.
+Full snapshot privacy validation remains mandatory. The byte-preserving response owns one parse
+of its actual body; the snapshot wrapper reuses it only after verifying owner/calculation context,
+body digest and headers, then performs the normal full content checks. Reusable validation proofs
+are still established only after fenced commits.
+
+Subscription picker rows expose `azure_access`: `true` for current accessible subscriptions,
+`false` for historical warehouse-only scopes, and `null` when enumeration could not be verified.
+Historical costs remain selectable in billing views; known historical-only scopes cannot be
+newly added in live/admin views. Existing selections are warned about, never silently widened.
+
 `CLOUDLENS_TAB_SERVING` defaults to `false`. Opting in builds generation-owned Uptime
 and Tags responses from coherent published summaries during startup/normal serving refresh.
 Plan an approved build window before enabling it on a shared database. This is source serving

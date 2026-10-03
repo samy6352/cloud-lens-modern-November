@@ -93,7 +93,7 @@ def _stage_daily(r: Any, hourly: str) -> bool:
 
 
 def hourly_cost(scope: list[str] | None = None, days: int = 30,
-                currency: str | None = None) -> dict[str, Any]:
+                currency: str | None = None, *, encoded: bool = False) -> dict[str, Any] | str:
     """Billed hours, derived rates and estimated billed coverage for the window."""
     from . import reporting
     from .warehouse import warehouse
@@ -104,7 +104,8 @@ def hourly_cost(scope: list[str] | None = None, days: int = 30,
     with warehouse.reader(scope=scope, currency=currency, usage=("hourly", "tags")) as r:
         from . import tab_serving
 
-        served = tab_serving.read(r, "uptime", days)
+        served = (tab_serving.read_text(r, "uptime", days) if encoded
+                  else tab_serving.read(r, "uptime", days))
         return served if served is not None else _build(r, days)
 
 

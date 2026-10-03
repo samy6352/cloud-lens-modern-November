@@ -50,6 +50,8 @@ except ImportError:  # pragma: no cover - psycopg is present in deployed/test wa
 
 calculation_context: ContextVar[tuple[str, str] | None] = ContextVar(
     "cloudlens_snapshot_calculation", default=None)
+origin_validation_context: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "cloudlens_origin_validation", default=None)
 
 
 def inner_cache_key(key: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -75,12 +77,12 @@ _SECRET_VALUE = re.compile(
     r"|\b(?:session_cookie|session_id|client_secret|password)\s*=)",
     re.IGNORECASE,
 )
-_SECRET_WORDS = ("bearer", "eyj", "session_cookie", "session_id", "client_secret", "password")
 _ACTIVE = frozenset({
     "queued", "running", "pending", "loading", "waiting-for-azure", "downloading",
     "validating", "committing", "warming-cache", "in_progress", "in-progress",
 })
 _FAILED = frozenset({"failed", "error", "unavailable", "cancelled"})
+_PARTIAL_STATES = _FAILED | {"partial", "unknown"}
 _JOB_FIELDS = frozenset({
     "job", "jobs", "task", "tasks", "refresh_job", "ingest_job", "progress", "scan",
 })
@@ -445,6 +447,8 @@ def _safe_content(value: Any, *, states=None) -> bool:
     pending = [(value, True)]
     strings: set[str] = set()
     checked_keys: dict[str, str] = {}
+    # Parsed JSON has just these types. Unknown subclasses retain isinstance rules.
+    kinds = {str: 1, dict: 2, list: 2, int: 0, float: 0, bool: 0, type(None): 0}
     while pending:
         item, envelope = pending.pop()
         if isinstance(item, dict):
@@ -459,15 +463,33 @@ def _safe_content(value: Any, *, states=None) -> bool:
                     if lowered in _SECRET_KEYS:
                         return False
                     checked_keys[name] = lowered
-                if isinstance(child, str):
+                kind = kinds.get(type(child))
+                if kind is None:
+                    kind = 1 if isinstance(child, str) else 2 if isinstance(child, (dict, list)) else 0
+                    kinds[type(child)] = kind
+                if kind == 1:
                     strings.add(child)
-                elif isinstance(child, (dict, list)):
+                elif kind == 2:
                     pending.append((child, checked_keys[name] in _JOB_FIELDS))
         elif isinstance(item, list):
+            if type(item) is list and len(item) >= 16 and isinstance(item[0], str):
+                # join checks every element's string type in C. Screen the original
+                # values below, never the concatenation (boundaries are meaningful).
+                try:
+                    "".join(item)
+                except TypeError:
+                    pass
+                else:
+                    strings.update(item)
+                    continue
             for child in item:
-                if isinstance(child, str):
+                kind = kinds.get(type(child))
+                if kind is None:
+                    kind = 1 if isinstance(child, str) else 2 if isinstance(child, (dict, list)) else 0
+                    kinds[type(child)] = kind
+                if kind == 1:
                     strings.add(child)
-                elif isinstance(child, (dict, list)):
+                elif kind == 2:
                     pending.append((child, envelope))
         elif isinstance(item, str):
             strings.add(item)
@@ -478,7 +500,9 @@ def _safe_content(value: Any, *, states=None) -> bool:
         # These ASCII probes are necessary conditions only. Non-ASCII retains
         # Python's Unicode IGNORECASE rules in the full validator.
         candidate = (not item.isascii() or "?" in item or "&" in item
-                     or any(word in lowered for word in _SECRET_WORDS))
+                     or "bearer" in lowered or "eyj" in lowered
+                     or "session_cookie" in lowered or "session_id" in lowered
+                     or "client_secret" in lowered or "password" in lowered)
         if candidate and _SECRET_VALUE.search(item):
             return False
     return True
@@ -502,20 +526,28 @@ def _unfinished(value: Any, *, envelope=True, states=_ACTIVE | _FAILED) -> bool:
 
 
 def _partial_evidence(value: Any) -> bool:
-    if isinstance(value, dict):
-        for name, item in value.items():
-            key = str(name).lower()
-            if key in {"error", "errors", "problem"} and item:
-                return True
-            if ((key in {"status", "state"} or key.endswith("_status"))
-                    and isinstance(item, str) and item.lower() in _FAILED | {"partial", "unknown"}):
-                return True
-            if key in {"partial", "unavailable", "truncated"} and item is True:
-                return True
-            if isinstance(item, (dict, list)) and _partial_evidence(item):
-                return True
-    elif isinstance(value, list):
-        return any(_partial_evidence(item) for item in value if isinstance(item, (dict, list)))
+    pending = [value]
+    kinds = {}
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for name, item in current.items():
+                name = str(name)
+                kind = kinds.get(name)
+                if kind is None:
+                    key = name.lower()
+                    kind = (1 if key in {"error", "errors", "problem"} else
+                            2 if key in {"status", "state"} or key.endswith("_status") else
+                            3 if key in {"partial", "unavailable", "truncated"} else 0)
+                    kinds[name] = kind
+                if ((kind == 1 and item)
+                        or (kind == 2 and isinstance(item, str) and item.lower() in _PARTIAL_STATES)
+                        or (kind == 3 and item is True)):
+                    return True
+                if isinstance(item, (dict, list)):
+                    pending.append(item)
+        elif isinstance(current, list):
+            pending.extend(item for item in current if isinstance(item, (dict, list)))
     return False
 
 
@@ -543,14 +575,19 @@ def _has_evidence(value: Any, *, row=False) -> bool:
     return False
 
 
-def _cacheable_report(value: Any) -> bool:
+def _cacheable_report(value: Any, *, metadata: dict | None = None) -> bool:
     if not isinstance(value, (dict, list)) or not _safe_content(value, states=_ACTIVE | _FAILED):
         return False
     if isinstance(value, dict) and any(value.get(key) for key in ("error", "errors", "problem")):
         return False
     # Partial means evidence coverage, not an unfinished request. Keep all original
     # unknowns/notices/statuses; only failure-shaped empty reports are rejected.
-    return not _partial_evidence(value) or _has_evidence(value)
+    partial = _partial_evidence(value)
+    if partial and not _has_evidence(value):
+        return False
+    if metadata is not None:
+        metadata["value"] = _body_metadata(value, partial=partial)
+    return True
 
 
 def oversize(response: Response, limit: int) -> int:
@@ -579,22 +616,47 @@ def _body(response: Response, limit: int, *, metadata: dict | None = None) -> by
         return None
     try:
         value = json.loads(body)
-        if not _cacheable_report(value):
+        if not _cacheable_report(value, metadata=metadata):
             return None
-        if metadata is not None:
-            metadata["value"] = _body_metadata(value)
         return body
     except (ValueError, UnicodeError):
         return None
 
 
-def _body_metadata(value):
+def _body_metadata(value, *, partial=None):
     daily = value.get("snapshot", {}) if isinstance(value, dict) else {}
     if not isinstance(daily, dict):
         daily = {}
     cadence, data_day = daily.get("cadence", ""), daily.get("data_day", "")
-    return (_partial_evidence(value), cadence if isinstance(cadence, str) else "",
+    return (_partial_evidence(value) if partial is None else partial,
+            cadence if isinstance(cadence, str) else "",
             data_day if isinstance(data_day, str) else "")
+
+
+@dataclass(frozen=True)
+class _OriginReport:
+    request: tuple[str, str, str] | None
+    digest: bytes
+    headers: tuple[tuple[bytes, bytes], ...]
+    validate: Callable[[], tuple[bool, str, str] | None]
+
+
+class ParsedJSONResponse(Response):
+    """Own one actual-body parse; never accept caller-supplied reports or validation metadata."""
+
+    def __init__(self, text: str):
+        from .tab_serving import decode_report_json
+
+        super().__init__(text, media_type="application/json")
+        value = decode_report_json(self.body)
+
+        def validate():
+            metadata = {}
+            return metadata["value"] if _cacheable_report(value, metadata=metadata) else None
+
+        self._origin_report = _OriginReport(
+            origin_validation_context.get(), hashlib.sha256(self.body).digest(),
+            tuple(self.raw_headers), validate)
 
 
 def _json_body(response: Response, limit: int) -> bytes | None:
@@ -957,9 +1019,11 @@ class SnapshotCache:
                 await self._authorize(request, authorize, partition, context)
                 started = self.clock()
                 calculation = calculation_context.set((key, generation))
+                validation = origin_validation_context.set((partition, key, generation))
                 try:
                     response = await asyncio.wait_for(origin(), self.origin_timeout)
                 finally:
+                    origin_validation_context.reset(validation)
                     calculation_context.reset(calculation)
                 await self._authorize(request, authorize, partition, context)
                 if response.status_code in {401, 403}:
@@ -1087,6 +1151,16 @@ class SnapshotCache:
                 self._validation_proofs.move_to_end(proof)
                 metadata.update(value=saved, proof=proof)
                 return body
+            if isinstance(response, ParsedJSONResponse):
+                report = response._origin_report
+                if (report.request == (partition, key, generation)
+                        and report.digest == digest
+                        and report.headers == tuple(response.raw_headers)):
+                    value = report.validate()
+                    if value is None:
+                        return None
+                    metadata.update(value=value, proof=proof)
+                    return body
         result = _body(response, self.store.max_payload, metadata=metadata)
         if result is not None and not policy.daily:
             metadata["proof"] = proof

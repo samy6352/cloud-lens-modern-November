@@ -23,7 +23,7 @@ const costs = (readOnly = false) => ({
   can_review: !readOnly, read_only: readOnly, auto_enabled: true, checked_at: "2026-10-03", note: "Existing costs remain available",
 });
 interface Recorded { path: string; method: string; body: Record<string, unknown> | null }
-interface MockOptions { admin?: boolean; readOnly?: boolean; audit403?: boolean; downloadFail?: boolean; previewDelay?: number; failedJob?: boolean; jobsError?: boolean; queuedInteractive?: boolean; runningInteractive?: boolean; resumeFail?: boolean; completePricing?: boolean; jobScope?: string[] }
+interface MockOptions { admin?: boolean; readOnly?: boolean; audit403?: boolean; downloadFail?: boolean; previewDelay?: number; failedJob?: boolean; jobsError?: boolean; queuedInteractive?: boolean; runningInteractive?: boolean; resumeFail?: boolean; completePricing?: boolean; jobScope?: string[]; historicalScope?: boolean; selectedScope?: string; liveTagsFail?: boolean }
 async function mount(screen: string, options: MockOptions = {}) {
   const page = await browser.newPage({ acceptDownloads: true });
   page.setDefaultTimeout(8000);
@@ -40,7 +40,9 @@ async function mount(screen: string, options: MockOptions = {}) {
     let data: unknown = {};
     if (path === "auth/me") data = { authenticated: true, mode: "local", user: { name: "Mock", admin: options.admin !== false, source: "file" } };
     else if (path === "cost-data/subscriptions") data = { subscriptions };
-    else if (path === "subscriptions") data = { subscriptions, count: subscriptions.length };
+    else if (path === "subscriptions") data = { subscriptions: options.historicalScope
+      ? subscriptions.map((s, index) => ({ ...s, azure_access: index !== 0 }))
+      : subscriptions, count: subscriptions.length };
     else if (path === "reporting-period") data = { months: ["2026-08"], selected_month: null };
     else if (path === "cost-data") data = costs(options.readOnly);
     else if (path === "focus/jobs") {
@@ -63,6 +65,11 @@ async function mount(screen: string, options: MockOptions = {}) {
       if (options.resumeFail) { await route.fulfill({ status: 409, contentType: "application/json", body: '{"detail":"Mock resumption rejected"}' }); return; }
       data = { job_id: path.split("/").at(-2), kind: "focus-manual", scope: options.jobScope ?? ["sub-a", "sub-b"], status: "queued", tasks: [] };
     } else if (path === "cost-data/setup") data = { job_id: "mock-job", kind: "focus-setup", scope: body?.scope ?? ["sub-a", "sub-b"], status: "queued", tasks: [] };
+    else if (path === "dashboard/tags") data = { keys: [{ key: "Environment", cost: 100, resources: 1, platform: false, values: 1 }], resources: [{ id: "mock-resource", name: "VM", service: "Compute", subscription: "Subscription B", subscription_id: "sub-b", group: null, cost: 100, keys: ["Environment"], v: [0], tag_status: "tagged" }], values: ["prod"], currency: "USD", mixed: false, tagged: { cost: 100, resources: 1 }, untagged: { cost: 0, resources: 0 }, unknown: { cost: 0, resources: 0 }, tags_not_loaded: false, total: 100, days: 30, truncated: false, latest: "2026-08-30" };
+    else if (path === "dashboard/tags/live") {
+      if (options.liveTagsFail) { await route.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"Live metadata unavailable"}' }); return; }
+      data = { keys: [{ key: "Environment", resources: 1, platform: false }, { key: "Owner", resources: 2, platform: false }], source: "Azure Resource Graph" };
+    }
     else if (path === "report/options") data = { areas: [{ id: "compute", label: "Compute", cost: 100 }], blocks: ["trend", "services"], live: [{ id: "waste", label: "Orphaned resources" }], formats: [{ id: "csv", label: "CSV" }, { id: "xlsx", label: "Excel workbook" }, { id: "pptx", label: "PowerPoint deck" }], currency: "USD", as_of: "2026-08-30" };
     else if (path === "currency") data = { supported: ["USD"], source: "Mock reference" };
     else if (path === "archive") data = { enabled: true, days: { actual: ["2026-08-31"] } };
@@ -88,9 +95,9 @@ async function mount(screen: string, options: MockOptions = {}) {
     else { errors.push(`Unexpected API ${method} ${path}`); await route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"Not mocked; no real API access is allowed"}' }); return; }
     try { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) }); } catch { /* A deliberately cancelled request may already be gone. */ }
   });
-  const routePath = screen === "reports" ? "/reports/export" : screen === "audit" ? "/admin/audit" : screen === "commitments" ? "/optimize/commitments" : "/admin/cost-data";
-  await page.goto(`${base}/v2${routePath}`, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.locator("#main").getByRole("heading", { name: screen === "reports" ? "Export data" : screen === "audit" ? "Audit" : screen === "commitments" ? "Commitments" : "Cost data", exact: true }).waitFor({ timeout: 30000 });
+  const routePath = screen === "tags" ? "/explore/tags" : screen === "reports" ? "/reports/export" : screen === "audit" ? "/admin/audit" : screen === "commitments" ? "/optimize/commitments" : "/admin/cost-data";
+  await page.goto(`${base}/v2${routePath}${options.selectedScope ? `?scope=${options.selectedScope}` : ""}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.locator("#main").getByRole("heading", { name: screen === "tags" ? "Cost by Application / Tags" : screen === "reports" ? "Export data" : screen === "audit" ? "Audit" : screen === "commitments" ? "Commitments" : "Cost data", exact: true }).waitFor({ timeout: 30000 });
   return { page, requests, errors };
 }
 const waitText = async (page: Page, text: string) => { await page.getByText(text, { exact: false }).first().waitFor({ timeout: 8000 }); };
@@ -105,7 +112,7 @@ beforeAll(async () => {
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
           const path = "url" in req && typeof req.url === "string" ? req.url.split("?")[0] : "";
-          if (!path || !["/v2/admin/cost-data", "/v2/admin/audit", "/v2/reports/export", "/v2/optimize/commitments"].includes(path)) { next(); return; }
+          if (!path || !["/v2/explore/tags", "/v2/admin/cost-data", "/v2/admin/audit", "/v2/reports/export", "/v2/optimize/commitments"].includes(path)) { next(); return; }
           const html = await vite.transformIndexHtml("/v2/__admin-report-test", '<html><head></head><body><div id="root"></div><script type="module" src="/v2/__admin-report-test.js"></script></body></html>');
           res.setHeader("Content-Type", "text/html"); res.end(html);
         });
@@ -121,6 +128,56 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
 describe("native admin/report interactions (all APIs mocked)", () => {
+  it("loads exact imported Tags without Azure metadata until explicitly requested", async () => {
+    const { page, requests, errors } = await mount("tags", { selectedScope: "sub-b" });
+    try {
+      const live = page.getByRole("button", { name: "Check live tag keys", exact: true });
+      await live.waitFor();
+      await page.getByRole("button", { name: /^Environment/ }).waitFor();
+      expect(requests.some(r => r.path.includes("dashboard/tags?") && r.path.includes("include_live=false"))).toBe(true);
+      expect(requests.some(r => r.path.startsWith("dashboard/tags/live"))).toBe(false);
+      await live.click();
+      await waitText(page, "Owner · 2 resources");
+      expect(requests.filter(r => r.path.startsWith("dashboard/tags/live")).map(r => r.path)).toEqual(["dashboard/tags/live?scope=sub-b"]);
+      expect(requests.every(r => r.method === "GET")).toBe(true);
+      expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  }, 60000);
+
+  it("shows failed live metadata honestly while retaining imported Tags", async () => {
+    const { page, errors } = await mount("tags", { liveTagsFail: true });
+    try {
+      await page.getByRole("button", { name: /^Environment/ }).waitFor();
+      await page.getByRole("button", { name: "Check live tag keys", exact: true }).click();
+      await waitText(page, "Live tag keys unavailable: Live metadata unavailable");
+      expect(await page.getByRole("button", { name: /^Environment/ }).isVisible()).toBe(true);
+      expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  }, 60000);
+
+  it("retains historical billing selection but prevents new historical-only admin scopes", async () => {
+    const { page, errors } = await mount("tags", { historicalScope: true, selectedScope: "sub-a" });
+    try {
+      const original = new URL(page.url()).searchParams.get("scope");
+      await page.getByRole("button", { name: "Subscription scope", exact: true }).click();
+      await waitText(page, "your scope has not been changed");
+      expect(new URL(page.url()).searchParams.get("scope")).toBe(original);
+      await page.keyboard.press("Escape");
+      await page.getByRole("navigation", { name: "Workspaces" }).getByRole("link", { name: "Cost data", exact: true }).click();
+      await page.getByRole("heading", { name: "Cost data", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Subscription scope", exact: true }).click();
+      await page.locator("[cmdk-item]").filter({ hasText: "All subscriptions" }).click();
+      await page.waitForURL(url => !url.searchParams.has("scope"));
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Subscription scope", exact: true }).click();
+      const historical = page.locator("[cmdk-item]").filter({ hasText: "Subscription A" });
+      expect(await historical.getAttribute("aria-disabled")).toBe("true");
+      await page.locator("[cmdk-item]").filter({ hasText: "Subscription B" }).click();
+      await page.waitForURL(url => url.searchParams.get("scope") === "sub-b");
+      expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  }, 60000);
+
   it("requires review and explicit approval, sends the exact token/scope and cancels without writes", async () => {
     const { page, requests, errors } = await mount("cost");
     await waitText(page, "Ready to review.");
