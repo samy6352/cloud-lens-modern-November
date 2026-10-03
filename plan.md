@@ -521,6 +521,26 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
   coherent shared local estate, then record real forced endpoint misses and parity. Not a full derived rebuild.
   See handover section11 and README/config flag for precise activation/fallback contracts.
 
+### 3 October approved real serving build and measurements (supersedes pending activation above)
+
+- Ravi approved Enable and measure at10:48 IST. Persistent gitignored `.env` now has
+  `CLOUDLENS_TAB_SERVING=true`; local app uses it with managed exports stillfalse.
+  Source/ready/serving generation10, clean dirty ledger. Only tab-serving responses/stamp built, no full derived/raw
+  rebuild or Azure changes.14 responses,17.7MB physical/98.0MB uncompressed; logged computations597.271s (~10min).
+  Total build wall time unavailable after post-publication strict-order parity failure; retained diagnostics.
+- Uptime exact core parity. Tags same8000 resource members and decoded metadata/tags/rounded totals; tiny rawfloat
+  differences max3.73e-9 and tie/value-pool order changes, no nonnumeric semantic differences.
+  All14HTTP core responses exactly match their publication. No data/caps silently dropped.
+- Certified query-fallback-forbidden origin: Uptime0.099-0.171s, Tags0.134-0.202s.
+  Confirmed enabled default30-day HTTP forced refresh Uptime1.863-2.436s, Tags2.379-3.288s;
+  hitsUptime0.358-0.475s, Tags0.429-0.462s. Across supported periods some hits are lower.
+  Every forced request confirmed cache refresh/generation10/nonstale; no competingSQLpreflight.
+- **Do not claim end-to-end targets met:** serving read is subsecond, but refresh<1s andwarm<300ms remain unmet
+  consistently. Next profile response/snapshot path and optional Tagslive supplement, preserving privacy/freshness.
+- Old disabled server occupied8101 on first attempted restart; rejected measurements saved separately, oldowned
+  process stopped, newenabled server attribution confirmed. Current enabled UI36/36. Existing full2394-pass
+  source gate unchanged. Existing benchmark artifact preserved; activation handover records committed locally only.
+
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
   TypeScript 7.0, TanStack Router 1.170 / Query 5.103 / Table **9.2** (v9 API: `useTable` + `tableFeatures`, not
