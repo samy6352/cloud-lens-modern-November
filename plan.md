@@ -5,6 +5,24 @@
 > updating the **status tracker (section 12)** as you go. Sections 8–11 are the longer v3 roadmap after the sprint.
 > This file deliberately contains **no secrets** — credentials come from the local environment / `.env` (never commit them).
 
+### 3 October update - native migration and generation-14 acceptance
+
+- Native all-21-tab React migration and readiness-safe report options committed locally as `0685029`.
+  Normal generation-14 rebuild finished without interruption; source, derived and serving all equal 14,
+  dirty windows are empty, and all 14 serving publications match. The fix is active on local port 8101.
+- Final integrated acceptance: 453/453 checks, 21 routes, 126 viewport/theme cases, 47 axe audits;
+  UI 88/88, targeted Python 125, existing React smoke 36/36, final build/typecheck succeeded.
+  Mutating interactions were mocked; the live run made no budget/import/resume/storage writes.
+- Real generation-14 HTTP measurements cover 14 serving views / 28 requests with exact core parity.
+  Uptime refresh 0.105-1.139 s / hits 0.013-0.212 s; Tags forced reads 0.120-3.108 s /
+  actual hits 0.014-0.252 s. Background autovacuum was recorded; these are not isolated percentiles.
+- Remaining limitation: Tags rolling:7 is 8,481,874 bytes, above the 8 MiB snapshot policy.
+  Its repeated 0.611 s read is not a cache hit, and headers explicitly report oversized/incomplete data.
+  Consistently sub-second fresh reads remain unmet. Visual sign-off, real delegated SSO and installer
+  distribution remain separate gates. The stale historical-scope scenario still returns honest errors.
+- Nothing pushed; Azure resources untouched; old modified benchmark preserved byte-for-byte and uncommitted.
+  See `HANDOVER-2026-10-03.md` for current process identity, evidence locations and remaining boundaries.
+
 ---
 
 ## 1. Goal
