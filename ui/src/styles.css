@@ -35,7 +35,7 @@
   --cl-accent-fg: #ffffff;
   --cl-good: #047857;
   --cl-bad: #b91c1c;
-  --cl-warn: #d97706;
+  --cl-warn: #a45106;
   --cl-row: 2.5rem;
   --cl-pad: 1.25rem;
 }
@@ -74,6 +74,60 @@ body {
 /* Money and counts line up in columns everywhere. */
 .num {
   font-variant-numeric: tabular-nums;
+}
+
+/* Grid cards must shrink before their tables and charts establish intrinsic widths. */
+.cl-content .grid > *,
+.cl-content section {
+  min-width: 0;
+}
+
+.cl-content section > header {
+  flex-wrap: wrap;
+}
+
+.cl-content section > header > div,
+.cl-content section > header input,
+.cl-content section > header label {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cl-content section > header > div:has(input),
+.cl-content section > header > div:has([role="radiogroup"]) {
+  flex-shrink: 1;
+  flex-wrap: wrap;
+}
+
+.cl-content [role="radiogroup"] {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.cl-content .mb-5.flex > .flex {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.cl-content .animate-pulse {
+  max-width: 100%;
+}
+
+.cl-content [role="status"],
+.cl-content details {
+  overflow-wrap: anywhere;
+}
+
+/* Keep absolutely positioned accessible table labels within their scrollport. */
+.cl-content .overflow-x-auto {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+[data-radix-popper-content-wrapper] > [data-state] {
+  max-width: calc(100vw - 1.5rem);
 }
 
 @media (prefers-reduced-motion: reduce) {

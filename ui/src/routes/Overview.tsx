@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
+import { RegionSpend } from "@/components/RegionSpend";
+import { orderCurrencyViews } from "@/components/RegionSpendModel";
 import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,7 +17,7 @@ import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked } f
 function useCurrencyViews(views: ExecutiveView[]) {
   const [picked, setPicked] = useState<string | null>(null);
   const ordered = useMemo(
-    () => [...views].sort((a, b) => (b.kpis.total ?? 0) - (a.kpis.total ?? 0)),
+    () => orderCurrencyViews(views),
     [views],
   );
   const view = ordered.find((v) => v.currency === picked) ?? ordered[0];
@@ -35,7 +37,7 @@ function RankedBars({
 }) {
   const { numbers } = usePrefs();
   if (!rows.length) return <p className="py-6 text-center text-sm text-muted">{empty}</p>;
-  const max = Math.max(...rows.map((r) => r.cost), 1);
+  const max = Math.max(...rows.map((r) => Math.abs(r.cost)), 1);
   return (
     <ul className="space-y-1">
       {rows.map((r) => (
@@ -57,13 +59,13 @@ function RankedBars({
                   (r.change_pct ?? 0) > 0 ? "text-bad" : (r.change_pct ?? 0) < 0 ? "text-good" : "text-muted",
                 )}
               >
-                {r.change_pct == null ? "new" : `${r.change_pct > 0 ? "+" : ""}${r.change_pct.toFixed(1)}%`}
+                {r.change_pct == null ? "—" : `${r.change_pct > 0 ? "+" : ""}${r.change_pct.toFixed(1)}%`}
               </span>
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
               <div
-                className="h-full rounded-full bg-accent/70 transition-[width] duration-500 ease-out-soft group-hover:bg-accent"
-                style={{ width: `${(r.cost / max) * 100}%` }}
+                className={cn("h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500", r.cost < 0 ? "bg-good/70" : "bg-accent/70")}
+                style={{ width: `${(Math.abs(r.cost) / max) * 100}%` }}
               />
             </div>
           </button>
@@ -112,6 +114,16 @@ function trendOption(view: ExecutiveView, system: "indian" | "international") {
 }
 
 function areaOption(view: ExecutiveView, system: "indian" | "international") {
+  const signed = view.areas.some((area) => area.cost < 0);
+  if (signed) {
+    return {
+      grid: { left: 8, right: 16, top: 8, bottom: 8, containLabel: true },
+      tooltip: { trigger: "axis", valueFormatter: (v: number) => formatMoney(v, view.currency, { system, compact: true }) },
+      xAxis: { type: "value", axisLabel: { fontSize: 10, formatter: (v: number) => formatMoney(v, view.currency, { system, compact: true }) } },
+      yAxis: { type: "category", inverse: true, data: view.areas.map((a) => a.label ?? a.name), axisLabel: { width: 95, overflow: "truncate", fontSize: 10 } },
+      series: [{ type: "bar", barMaxWidth: 16, data: view.areas.map((a) => a.cost) }],
+    };
+  }
   return {
     tooltip: {
       trigger: "item",
@@ -166,13 +178,14 @@ export function OverviewPage() {
 
   const loading = query.isPending;
   const currency = view?.currency ?? null;
-  const money = (v: number | null | undefined, compact = true) => formatMoney(v, currency, { system: numbers, compact });
+  const money = (v: number | null | undefined, compact = true) =>
+    v == null || !Number.isFinite(v) ? "Unavailable" : formatMoney(v, currency, { system: numbers, compact });
   const period = search.month ? formatMonth(search.month) : `Last ${view?.days ?? 30} days`;
 
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
 
   return (
-    <div>
+    <div className="min-w-0">
       <PageHeader
         title="Overview"
         subtitle={
@@ -191,13 +204,21 @@ export function OverviewPage() {
               label="Currency"
               value={currency ?? ""}
               onChange={(c) => setPicked(c)}
-              options={ordered.map((v) => ({ value: v.currency ?? "", label: v.currency ?? "—" }))}
+              options={ordered.map((v) => ({ value: v.currency ?? "", label: v.currency ?? "Unspecified" }))}
             />
           ) : null
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {view && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-2 px-4 py-3 text-xs">
+          <p><span className="font-semibold">Your financial snapshot</span><span className="text-muted"> · {currency ?? "Currency unspecified"} · {period}</span></p>
+          <p className="text-muted">{ordered.length > 1 ? "One currency at a time. Totals are never combined or converted." : "Recorded billing spend, including credits."}</p>
+        </div>
+      )}
+      {query.data?.notice && <p className="mb-4 text-sm text-muted">{query.data.notice}</p>}
+
+      <div className="grid grid-cols-1 gap-4 [&>*]:min-w-0 sm:grid-cols-2 xl:grid-cols-4">
         <KpiTile
           index={0}
           loading={loading}
@@ -217,24 +238,33 @@ export function OverviewPage() {
           index={2}
           loading={loading}
           label="Resources billed"
-          value={formatNumber(view?.kpis.resources, { system: numbers, compact: true })}
-          hint={view ? `${view.kpis.services ?? "—"} services · ${view.kpis.regions ?? "—"} regions` : undefined}
+          value={view?.kpis.resources == null ? "Unavailable" : formatNumber(view.kpis.resources, { system: numbers, compact: true })}
+          hint={view ? `${view.kpis.services ?? "Unavailable"} services · ${view.kpis.regions ?? "Unavailable"} regions` : undefined}
         />
         <KpiTile
           index={3}
           loading={loading}
           label="Top-5 service concentration"
-          value={view?.kpis.top5_share_pct != null ? `${view.kpis.top5_share_pct.toFixed(1)}%` : "—"}
+          value={view?.kpis.top5_share_pct != null ? `${view.kpis.top5_share_pct.toFixed(1)}%` : "Unavailable"}
           hint="share of spend in the five largest services"
         />
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <Card className="min-w-0 xl:col-span-2">
           <CardHeader title="Daily spend" subtitle="This period against the one before it" />
           <CardBody>
             {view && view.trend.labels.length ? (
-              <Chart height={300} option={trendOption(view, numbers)} />
+              <>
+                <div role="img" aria-label={`Daily spend in ${currency ?? "unspecified currency"}, this and previous period. Exact daily values are available below.`}><div aria-hidden="true"><Chart height={300} option={trendOption(view, numbers)} /></div></div>
+                {view.trend.partial_last && <p className="mt-2 text-xs text-muted">Latest day is partial; do not compare it with a complete billing day.</p>}
+                <details className="mt-3 text-xs">
+                  <summary className="w-fit cursor-pointer font-medium text-accent">View daily values</summary>
+                  <div className="mt-2 max-h-64 overflow-auto" tabIndex={0} role="region" aria-label="Daily spend data">
+                    <table className="w-full text-left"><caption className="py-2 text-left text-muted">Executive API · {currency ?? "currency unspecified"} · previous period aligned by day</caption><thead><tr><th scope="col" className="py-2">Date</th><th scope="col">Current</th><th scope="col">Previous</th></tr></thead><tbody>{view.trend.labels.map((day, i) => <tr key={day} className="border-t border-border"><th scope="row" className="py-2 font-normal">{day}{view.trend.partial_last && i === view.trend.labels.length - 1 ? " (partial)" : ""}</th><td className="num">{money(view.trend.values[i], false)}</td><td className="num">{money(view.trend.previous[i], false)}</td></tr>)}</tbody></table>
+                  </div>
+                </details>
+              </>
             ) : loading ? (
               <Skeleton className="h-[300px] w-full" />
             ) : (
@@ -242,31 +272,38 @@ export function OverviewPage() {
             )}
           </CardBody>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardHeader title="Spend by area" subtitle="Where the money goes" />
           <CardBody>
             {view && view.areas.length ? (
               <>
-                <Chart height={180} option={areaOption(view, numbers)} />
+                {view.areas.every((a) => Number.isFinite(a.cost)) && view.areas.some((a) => a.cost !== 0) ? (
+                  <div role="img" aria-label={`Spend by billing area in ${currency ?? "unspecified currency"}. Exact values are listed below.`}><div aria-hidden="true"><Chart height={180} option={areaOption(view, numbers)} /></div></div>
+                ) : <p className="py-8 text-center text-xs text-muted">No complete, non-zero area costs to chart.</p>}
+                {view.areas.some((a) => a.cost < 0) && <p className="mt-2 text-xs text-muted">Credits included. Signed bars replace the ring to preserve net spend.</p>}
                 <ul className="mt-3 space-y-1.5 text-sm">
-                  {view.areas.slice(0, 6).map((a, i) => (
+                  {view.areas.map((a, i) => (
                     <li key={a.id ?? a.name} className="flex items-center gap-2">
                       <span className="size-2.5 shrink-0 rounded-sm" style={{ background: PALETTE[i % PALETTE.length] }} />
-                      <span className="flex-1 truncate">{a.label ?? a.name}</span>
-                      <span className="num text-muted">{a.share_pct?.toFixed(1)}%</span>
+                      <span className="min-w-0 flex-1 break-words">{a.label ?? a.name}</span>
+                      <span className="num text-xs text-muted">{a.share_pct == null ? "—" : `${a.share_pct.toFixed(1)}%`}</span>
                       <span className="num w-20 text-right font-medium">{money(a.cost)}</span>
                     </li>
                   ))}
                 </ul>
               </>
-            ) : (
+            ) : loading ? (
               <Skeleton className="h-[300px] w-full" />
+            ) : (
+              <p className="py-24 text-center text-sm text-muted">No area data in this period.</p>
             )}
           </CardBody>
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      {view ? <RegionSpend key={`${currency}-${search.month ?? ""}-${search.scope ?? ""}`} rows={view.regions ?? []} currency={currency} /> : loading ? <Skeleton className="mt-4 h-[420px] w-full" /> : null}
+
+      <div className="mt-4 grid grid-cols-1 gap-4 [&>*]:min-w-0 lg:grid-cols-3">
         <Card>
           <CardHeader title="Top services" />
           <CardBody>{view ? <RankedBars rows={view.services} currency={currency} /> : <Skeleton className="h-64" />}</CardBody>
@@ -295,8 +332,8 @@ export function OverviewPage() {
       </div>
 
       {view?.monthly && view.monthly.months.length > 1 && (
-        <Card className="mt-4">
-          <CardHeader title="Monthly spend by area" subtitle="Calendar months in the warehouse" />
+        <Card className="mt-4 min-w-0">
+          <CardHeader title="Monthly spend by area" subtitle={`Calendar months in the warehouse · ${view.monthly.currency}`} />
           <CardBody>
             <Chart height={300} option={monthlyOption(view, numbers)} />
           </CardBody>

@@ -10,8 +10,9 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { usePrefs } from "@/lib/prefs";
 
 export const tableFeatureSet = tableFeatures({
   rowSortingFeature,
@@ -85,7 +86,8 @@ export function DataTable<T extends RowData>({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const rows = table.getRowModel().rows;
-  const rowHeight = typeof document !== "undefined" && document.documentElement.dataset.density === "compact" ? 32 : 40;
+  const { density } = usePrefs();
+  const rowHeight = density === "compact" ? 32 : 40;
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -93,16 +95,23 @@ export function DataTable<T extends RowData>({
     getItemKey: (index) => rows[index]!.id,
     overscan: 12,
   });
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
 
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
   const template = headers
     .map((h) => (h.column.columnDef.meta as ColumnMetaLike | undefined)?.width ?? "minmax(120px, 1fr)")
     .join(" ");
+  const minWidth = headers.reduce((total, h) => {
+    const width = (h.column.columnDef.meta as ColumnMetaLike | undefined)?.width;
+    return total + Number(width?.match(/^(?:minmax\(\s*)?(\d+(?:\.\d+)?)px/)?.[1] ?? 120);
+  }, 0);
 
   return (
     // The footer sits beside the table, not in it: a table may own only rows, and the
     // footer can hold controls (a pager).
-    <div className={cn("overflow-hidden rounded-xl border border-border transition-opacity", busy && "opacity-60")}>
+    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border">
       <div
         ref={scrollRef}
         role="table"
@@ -110,10 +119,10 @@ export function DataTable<T extends RowData>({
         aria-busy={busy}
         // With no sortable header nothing inside can take focus, so keyboard users could not scroll.
         tabIndex={table.getHeaderGroups()[0]?.headers.some((h) => h.column.getCanSort()) ? undefined : 0}
-        className="overflow-auto"
-        style={{ maxHeight: height }}
+        className="max-w-full overflow-auto"
+        style={{ maxHeight: `min(${height}px, 70dvh)` }}
       >
-        <div role="rowgroup" className="sticky top-0 z-10 border-b border-border bg-surface-2/95 backdrop-blur">
+        <div role="rowgroup" className="sticky top-0 z-10 border-b border-border bg-surface-2/95 backdrop-blur" style={{ minWidth }}>
           <div role="row" className="grid" style={{ gridTemplateColumns: template }}>
             {headers.map((header) => {
               const meta = header.column.columnDef.meta as ColumnMetaLike | undefined;
@@ -151,7 +160,7 @@ export function DataTable<T extends RowData>({
         {rows.length === 0 ? (
           <div className="px-3 py-12 text-center text-sm text-muted">{empty}</div>
         ) : (
-          <div role="rowgroup" className="relative" style={{ height: virtualizer.getTotalSize() }}>
+          <div role="rowgroup" className="relative" style={{ minWidth, height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index]!;
               return (

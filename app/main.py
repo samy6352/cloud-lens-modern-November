@@ -2983,7 +2983,14 @@ async def _cost_data_subscriptions(scope: list[str] | None, user: User) -> list[
         raise HTTPException(400, "Choose at least one subscription.")
     selected = selected_scope(scope or [], await permitted(user))
     async with as_user(user):
-        subs = await cost._resolve(selected)
+        subs = await cost._resolve(None)
+    if selected is not None:
+        by_id = {sub["id"].lower(): sub for sub in subs}
+        wanted = [sid.lower() for sid in selected]
+        if any(sid not in by_id for sid in wanted):
+            raise HTTPException(400, "One or more selected subscriptions are no longer accessible. "
+                                "Choose from the current subscription list.")
+        subs = [by_id[sid] for sid in wanted]
     if not subs:
         raise HTTPException(400, "Select at least one accessible subscription.")
     return subs
@@ -5109,16 +5116,31 @@ class ReportRequest(BaseModel):
 async def report_options(request: Request, days: int = 30, scope: str = "",
                          currency: str = "") -> JSONResponse:
     """What this person could put in a report — the areas that actually have spend, plus the
-    live datasets. Driven by their data and their scope, so nothing offered comes back empty."""
+    live datasets. Driven by their data and their scope, so nothing offered comes back empty.
+    Returns a retryable 503 until the committed source has a certified cost summary."""
+    from . import jobs, rollup
     from .dashboard import get_dashboard
     from .report import BLOCKS, FORMATS, LIVE
+    from .snapshot_cache import _source_pending, read_generation
+    from .warehouse import warehouse
 
     user = current_user(request)
     allowed = await permitted(user)
     picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
 
-    summary = await offload(get_dashboard().sections, picked or None,
-                            days=max(1, min(days, 365)), currency=currency or None)
+    def options():
+        # A picker must not fall back to scanning raw costs while summaries rebuild.
+        with warehouse.connect(read_only=True) as con:
+            if (_source_pending(read_generation(con))
+                    or not jobs.rollup_current(con, rollup.TABLE)):
+                raise HTTPException(503, "Committed source data is still being prepared.",
+                                    headers={"Retry-After": "3",
+                                             "Cache-Control": "no-store",
+                                             "X-CloudLens-Source-State": "pending"})
+        return get_dashboard().sections(picked or None,
+                                        days=max(1, min(days, 365)), currency=currency or None)
+
+    summary = await offload(options)
     return JSONResponse({
         "areas": [{"id": s["id"], "label": s["label"], "cost": s["cost"]}
                   for s in summary.get("sections", []) if s.get("cost")],

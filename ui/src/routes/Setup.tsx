@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { Check, CircleAlert, Clock, Copy, Download, LoaderCircle, Minus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
@@ -279,9 +279,9 @@ export function SetupPage() {
             <Card className="mb-5 p-[var(--cl-pad)] text-sm">
               Automatic export setup is off for this deployment, so nothing is created or imported from here. The installer turns
               it on; until then exports are managed on the{" "}
-              <a href="/?tab=settings" className="font-medium text-accent hover:underline">
+              <Link to="/admin/cost-data" className="font-medium text-accent hover:underline">
                 Cost data
-              </a>{" "}
+              </Link>{" "}
               page.
             </Card>
           )}

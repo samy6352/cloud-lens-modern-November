@@ -71,7 +71,37 @@ const setupRoute = createRoute({
   component: lazyRouteComponent(() => import("./routes/Setup"), "SetupPage"),
 });
 
-const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute, tagsRoute, uptimeRoute, historyRoute, setupRoute, classicRoute]);
+const aiBillingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/explore/ai-billing",
+  component: lazyRouteComponent(() => import("./routes/AiBilling"), "AiBillingPage") });
+const savingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/savings",
+  component: lazyRouteComponent(() => import("./routes/Savings"), "SavingsPage") });
+const commitmentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/commitments",
+  component: lazyRouteComponent(() => import("./routes/Commitments"), "CommitmentsPage") });
+const performanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/performance",
+  component: lazyRouteComponent(() => import("./routes/Performance"), "PerformancePage") });
+const budgetsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/budgets",
+  component: lazyRouteComponent(() => import("./routes/Budgets"), "BudgetsPage") });
+const governanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/governance",
+  component: lazyRouteComponent(() => import("./routes/Governance"), "GovernancePage") });
+const esuRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/esu",
+  component: lazyRouteComponent(() => import("./routes/Esu"), "EsuPage") });
+const retirementsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/retirements",
+  component: lazyRouteComponent(() => import("./routes/Retirements"), "RetirementsPage") });
+const changesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/changes",
+  component: lazyRouteComponent(() => import("./routes/Changes"), "ChangesPage") });
+const updatesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/azure-updates",
+  component: lazyRouteComponent(() => import("./routes/AzureUpdates"), "AzureUpdatesPage") });
+const reportsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/reports/export",
+  component: lazyRouteComponent(() => import("./routes/Reports"), "ReportsPage") });
+const costDataRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/cost-data",
+  component: lazyRouteComponent(() => import("./routes/CostData"), "CostDataPage") });
+const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/audit",
+  component: lazyRouteComponent(() => import("./routes/Audit"), "AuditPage") });
+
+const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute,
+  tagsRoute, uptimeRoute, historyRoute, setupRoute, aiBillingRoute, savingsRoute, commitmentsRoute,
+  performanceRoute, budgetsRoute, governanceRoute, esuRoute, retirementsRoute, changesRoute,
+  updatesRoute, reportsRoute, costDataRoute, auditRoute, classicRoute]);
 
 export function makeRouter(queryClient: QueryClient) {
   return createRouter({

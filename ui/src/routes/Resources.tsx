@@ -100,7 +100,7 @@ function useColumns() {
             <span className={cls}>
               {r.delta > 0 ? "+" : ""}
               {money(r.delta, r.currency)}
-              {r.change_pct != null && <span className="ml-1 text-xs opacity-80">({r.change_pct > 0 ? "+" : ""}{r.change_pct}%)</span>}
+              {r.change_pct != null && <span className="ml-1 text-xs">({r.change_pct > 0 ? "+" : ""}{r.change_pct}%)</span>}
             </span>
           );
         },
@@ -249,7 +249,7 @@ export function ResourcesPage() {
               height={620}
               empty={q || state.change || state.currency ? "No resources match these filters." : "No resource-attributed cost in this period."}
               footer={
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <span className="num">
                     {data.total
                       ? `${formatNumber(first, { system: numbers, digits: 0 })}–${formatNumber(last, { system: numbers, digits: 0 })} of ${formatNumber(data.total, { system: numbers, digits: 0 })}`

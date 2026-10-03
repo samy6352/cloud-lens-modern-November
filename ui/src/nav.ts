@@ -28,7 +28,7 @@ export interface Screen {
   id: string;
   label: string;
   icon: LucideIcon;
-  /** Route inside /v2. Screens without a React view yet open a hand-off page to the classic UI. */
+  /** Native route inside /v2. */
   to: string;
   migrated: boolean;
   keywords?: string[];
@@ -42,12 +42,12 @@ export interface Workspace {
   screens: Screen[];
 }
 
-const classic = (id: string, label: string, icon: LucideIcon, keywords: string[] = [], adminOnly = false): Screen => ({
+const native = (id: string, label: string, icon: LucideIcon, to: string, keywords: string[] = [], adminOnly = false): Screen => ({
   id,
   label,
   icon,
-  to: `/classic/${id}`,
-  migrated: false,
+  to,
+  migrated: true,
   keywords,
   adminOnly,
 });
@@ -70,7 +70,7 @@ export const WORKSPACES: Workspace[] = [
       { id: "resources", label: "All resources", icon: Boxes, to: "/explore/resources", migrated: true, keywords: ["inventory", "resource"] },
       { id: "anomalies", label: "Anomalies", icon: Bell, to: "/explore/anomalies", migrated: true, keywords: ["spike", "alert"] },
       { id: "history", label: "History", icon: History, to: "/explore/history", migrated: true, keywords: ["archive", "compare"] },
-      classic("ai-billing", "AI Billing", Brain, ["openai", "foundry", "tokens"]),
+      native("ai-billing", "AI Billing", Brain, "/explore/ai-billing", ["openai", "foundry", "tokens"]),
     ],
   },
   {
@@ -78,9 +78,9 @@ export const WORKSPACES: Workspace[] = [
     label: "Optimize",
     icon: Gauge,
     screens: [
-      classic("savings", "Savings", PiggyBank, ["advisor", "rightsizing", "waste"]),
-      classic("commitments", "Reservation & Savings", Wallet, ["reservation", "savings plan", "commitment"]),
-      classic("performance", "Performance vs Spend", BarChart3, ["metrics"]),
+      native("savings", "Savings", PiggyBank, "/optimize/savings", ["advisor", "rightsizing", "waste"]),
+      native("commitments", "Reservation & Savings", Wallet, "/optimize/commitments", ["reservation", "savings plan", "commitment"]),
+      native("performance", "Performance vs Spend", BarChart3, "/optimize/performance", ["metrics"]),
     ],
   },
   {
@@ -88,19 +88,19 @@ export const WORKSPACES: Workspace[] = [
     label: "Govern",
     icon: ShieldCheck,
     screens: [
-      classic("budgets", "Budgets", ClipboardList, ["budget", "forecast"]),
-      classic("governance", "Governance", ShieldCheck, ["policy"]),
-      classic("esu", "End of support", CalendarClock, ["esu", "extended security"]),
-      classic("health", "Retirements", ScrollText, ["retirement", "deprecation"]),
-      classic("changes", "Change Analysis", GitCompare, ["change"]),
-      classic("azure-updates", "Azure Updates", Newspaper, ["news", "status"]),
+      native("budgets", "Budgets", ClipboardList, "/govern/budgets", ["budget", "forecast"]),
+      native("governance", "Governance", ShieldCheck, "/govern/governance", ["policy"]),
+      native("esu", "End of support", CalendarClock, "/govern/esu", ["esu", "extended security"]),
+      native("health", "Retirements", ScrollText, "/govern/retirements", ["retirement", "deprecation"]),
+      native("changes", "Change Analysis", GitCompare, "/govern/changes", ["change"]),
+      native("azure-updates", "Azure Updates", Newspaper, "/govern/azure-updates", ["news", "status"]),
     ],
   },
   {
     id: "reports",
     label: "Reports",
     icon: FileDown,
-    screens: [classic("report", "Export data", FileDown, ["excel", "csv", "powerpoint", "download"])],
+    screens: [native("report", "Export data", FileDown, "/reports/export", ["excel", "csv", "powerpoint", "download"])],
   },
   {
     id: "admin",
@@ -108,8 +108,8 @@ export const WORKSPACES: Workspace[] = [
     icon: Database,
     screens: [
       { id: "setup", label: "Setup progress", icon: CloudDownload, to: "/admin/setup", migrated: true, keywords: ["exports", "backfill", "onboarding", "history"] },
-      classic("settings", "Cost data", Database, ["exports", "ingest", "setup"]),
-      classic("audit", "Audit log", ScrollText, ["access", "who"], true),
+      native("settings", "Cost data", Database, "/admin/cost-data", ["exports", "ingest", "setup"]),
+      native("audit", "Audit log", ScrollText, "/admin/audit", ["access", "who"], true),
     ],
   },
 ];

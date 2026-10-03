@@ -45,14 +45,14 @@ function Sidebar() {
   return (
     <aside
       className={cn(
-        "sticky top-0 flex h-screen shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-300 ease-out-soft",
-        collapsed ? "w-16" : "w-64",
+        "sticky top-0 flex h-dvh shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-300 ease-out-soft",
+        collapsed ? "w-16" : "w-16 sm:w-64",
       )}
     >
       <div className="flex h-14 items-center gap-2.5 px-4">
         <img src={logo} alt="" className="size-7 shrink-0" />
         {!collapsed && (
-          <div className="min-w-0">
+          <div className="hidden min-w-0 sm:block">
             <div className="text-sm font-semibold tracking-tight">CloudLens</div>
             <div className="text-[11px] text-muted">v3 preview</div>
           </div>
@@ -66,7 +66,7 @@ function Sidebar() {
           return (
             <div key={ws.id} className="mt-4 first:mt-1">
               {!collapsed && ws.screens.length > 1 && (
-                <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">{ws.label}</div>
+                <div className="hidden px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted sm:block">{ws.label}</div>
               )}
               <ul className="space-y-0.5">
                 {screens.map((s) => {
@@ -77,7 +77,8 @@ function Sidebar() {
                       <Link
                         to={s.to}
                         search={search}
-                        title={collapsed ? s.label : undefined}
+                        title={s.label}
+                        aria-label={s.label}
                         className={cn(
                           "group relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
                           active ? "text-fg" : "text-muted hover:bg-surface-2 hover:text-fg",
@@ -93,7 +94,7 @@ function Sidebar() {
                         <Icon className="relative size-4 shrink-0" />
                         {!collapsed && (
                           <>
-                            <span className="relative truncate">{s.label}</span>
+                            <span className="relative hidden truncate sm:block">{s.label}</span>
                             {!s.migrated && (
                               <span className="relative ml-auto rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted group-hover:bg-canvas">
                                 classic
@@ -111,7 +112,7 @@ function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-border p-2">
+      <div className="hidden border-t border-border p-2 sm:block">
         <Button
           variant="ghost"
           size={collapsed ? "icon" : "md"}
@@ -207,8 +208,8 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-canvas/80 px-6 backdrop-blur-md">
-      <div className="flex min-w-0 items-center gap-1.5 text-sm">
+    <header className="sticky top-0 z-30 flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-canvas/80 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-6 xl:py-0">
+      <div className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-sm">
         {workspace && workspace.screens.length > 1 && (
           <>
             <span className="text-muted">{workspace.label}</span>
@@ -221,17 +222,17 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       <button
         type="button"
         onClick={onOpenPalette}
-        className="ml-4 hidden h-9 w-72 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-sm text-muted transition-colors hover:border-accent/40 md:flex"
+        className="ml-2 hidden h-9 shrink-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-sm text-muted transition-colors hover:border-accent/40 md:flex xl:ml-4 xl:w-72"
       >
         <Search className="size-4" />
-        Search or jump to…
-        <span className="ml-auto flex gap-1">
+        <span className="sr-only xl:not-sr-only">Search or jump to…</span>
+        <span className="ml-auto hidden gap-1 xl:flex">
           <Kbd>{mac ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>K</Kbd>
         </span>
       </button>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1 sm:gap-2">
         <MonthPicker />
         <ScopePicker />
         <Button variant="ghost" size="icon" onClick={() => void refresh()} aria-label="Refresh data" title="Refresh data">
@@ -262,7 +263,7 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-dvh">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2"
@@ -278,7 +279,7 @@ export function AppShell() {
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-6"
+          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-4 sm:px-6 sm:py-6"
         >
           <Outlet />
         </m.main>
