@@ -1199,6 +1199,337 @@ def test_warm_metadata_never_replaces_fresh_origin_privacy_validation():
     asyncio.run(scenario())
 
 
+@pytest.fixture
+def full_validation_calls(monkeypatch):
+    from app import snapshot_cache as sc
+
+    calls = []
+    original = sc._body
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sc, "_body", counted)
+    return calls
+
+
+def test_committed_validation_proof_reuses_work_not_fresh_origin(full_validation_calls):
+    async def scenario():
+        cache, auth, origins = make_cache(clock=lambda: 1000.), Authorize(), []
+
+        async def origin():
+            origins.append(1)
+            return JSONResponse({"total": 12})
+
+        first = await cache.get(request("fresh=1"), origin, auth)
+        # Header/metadata reads must not erase an independently established proof.
+        cache._body_metadata.clear()
+        await cache.get(request(), origin, auth)
+        second = await cache.get(request("fresh=1"), origin, auth)
+        assert origins == [1, 1] and full_validation_calls == [1]
+        assert cache.store.writes == 2 and auth.calls == 10
+        assert first.body == second.body
+        assert dict(first.headers) == dict(second.headers)
+        assert len(cache._validation_proofs) == 1
+        await cache.close()
+        assert not cache._validation_proofs
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changed", [
+    b'{"total":13}',
+    b'{"total":12,"nested":{"credentials":"synthetic"}}',
+    b'{"total":12,"nested":{"value":"Bearer\\u2003synthetic"}}',
+    b'{"total":12,"nested":{"value":"pa\\u017f\\u017fword=synthetic"}}',
+    b'{"total":12,"nested":{"jobs":[{"status":"running"}]}}',
+    b'{"total":12,"nested":{"jobs":[{"state":"failed"}]}}',
+    b'{"total":',
+])
+def test_validation_proof_checks_changed_bytes_despite_forged_etag(
+        changed, full_validation_calls):
+    async def scenario():
+        cache, auth = make_cache(), Authorize()
+        body = b'{"total":12}'
+
+        async def origin():
+            return Response(body, media_type="application/json", headers={"ETag": '"forged"'})
+
+        await cache.get(request("fresh=1"), origin, auth)
+        old = next(iter(cache.store.rows.values()))
+        body = changed
+        result = await cache.get(request("fresh=1"), origin, auth)
+        assert full_validation_calls == [1, 1]
+        if changed == b'{"total":13}':
+            assert result.body == changed and cache.store.writes == 2
+        else:
+            assert cache.store.rows[old.key].body == old.body and cache.store.writes == 1
+            assert result.headers["x-cloudlens-cache"] in {"source-incomplete", "source-pending"}
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("forged", [False, True])
+def test_loaded_metadata_cannot_establish_validation_proof(forged, full_validation_calls):
+    async def scenario():
+        store, auth = MemoryStore(), Authorize()
+        first = make_cache(store)
+        body = {"total": 12}
+
+        async def origin():
+            return JSONResponse(body)
+
+        await first.get(request(), origin, auth)
+        await first.close()
+        if forged:
+            body = {"total": 12, "nested": {"credentials": "synthetic"}}
+            old = next(iter(store.rows.values()))
+            store.rows[old.key] = replace(old, body=JSONResponse(body).body)
+        cache = make_cache(store)
+        await cache.get(request(), origin, auth)
+        assert cache._body_metadata and not cache._validation_proofs
+        result = await cache.get(request("fresh=1"), origin, auth)
+        assert full_validation_calls == [1, 1] and store.writes == (1 if forged else 2)
+        if forged:
+            assert not cache._validation_proofs
+            assert result.headers["x-cloudlens-cache"] == "source-incomplete"
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+def test_false_validation_results_never_establish_proof(full_validation_calls):
+    async def scenario():
+        cache, auth, origins = make_cache(), Authorize(), []
+
+        async def origin():
+            origins.append(1)
+            return JSONResponse({"total": 12, "nested": {"credentials": "synthetic"}})
+
+        for _ in range(2):
+            result = await cache.get(request("fresh=1"), origin, auth)
+            assert result.headers["x-cloudlens-cache"] == "source-incomplete"
+            assert not cache._validation_proofs
+        assert full_validation_calls == [1, 1] and origins == [1, 1]
+        assert not cache.store.rows and cache.store.writes == 0
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+def test_validation_proof_does_not_bypass_post_origin_authorization(full_validation_calls):
+    async def scenario():
+        cache, auth, origins = make_cache(), Authorize(), []
+
+        async def origin():
+            origins.append(1)
+            if len(origins) == 2:
+                auth.denied = True
+            return JSONResponse({"total": 12})
+
+        await cache.get(request("fresh=1"), origin, auth)
+        with pytest.raises(HTTPException) as exc:
+            await cache.get(request("fresh=1"), origin, auth)
+        assert exc.value.status_code == 403 and not cache.store.rows
+        assert cache.store.writes == 1 and full_validation_calls == [1]
+        assert origins == [1, 1]
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["owner", "key", "version", "policy", "generation"])
+def test_validation_proof_is_private_and_calculation_bound(change, full_validation_calls):
+    async def scenario():
+        cache, auth, origins = make_cache(), Authorize(), []
+
+        async def origin():
+            origins.append(1)
+            return JSONResponse({"total": 12})
+
+        await cache.get(request("fresh=1"), origin, auth)
+        query = "fresh=1"
+        if change == "owner":
+            auth.context = replace(CONTEXT, principal="other-reader")
+        elif change == "key":
+            query += "&days=7"
+        elif change == "version":
+            cache.version = "calculation-v2"
+        elif change == "policy":
+            cache.policies[PATH] = replace(POLICY, source="monitor")
+        else:
+            cache.store.generation = "2"
+        result = await cache.get(request(query), origin, auth)
+        assert full_validation_calls == [1, 1] and origins == [1, 1]
+        assert cache.store.writes == 2
+        assert result.headers["x-cloudlens-stale"] == "false"
+        if change == "generation":
+            assert result.headers["x-cloudlens-source-generation"] == "2"
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["exception", "busy", "rejected"])
+def test_failed_put_cannot_establish_validation_proof(failure, full_validation_calls):
+    async def scenario():
+        store, auth = MemoryStore(), Authorize()
+        put = store.put
+
+        def failing(item):
+            if failure == "rejected":
+                return False
+            raise SnapshotBusy() if failure == "busy" else OSError("synthetic")
+
+        store.put = failing
+        cache = make_cache(store)
+
+        async def origin():
+            return JSONResponse({"total": 12})
+
+        if failure == "rejected":
+            with pytest.raises(HTTPException) as exc:
+                await cache.get(request("fresh=1"), origin, auth)
+            assert exc.value.status_code == 409
+        else:
+            await cache.get(request("fresh=1"), origin, auth)
+        assert not cache._validation_proofs and not store.rows
+        store.put = put
+        await cache.get(request("fresh=1"), origin, auth)
+        assert full_validation_calls == [1, 1] and store.writes == 1
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mutation", [
+    "cookie", "encoding", "download", "html", "status", "public", "shared", "size",
+])
+def test_validation_proof_still_checks_current_response_envelope(mutation, full_validation_calls):
+    async def scenario():
+        cache, auth = make_cache(), Authorize()
+        changed = False
+
+        async def origin():
+            response = JSONResponse({"total": 12})
+            if changed:
+                if mutation == "cookie":
+                    response.set_cookie("synthetic", "synthetic")
+                elif mutation == "status":
+                    response.status_code = 502
+                elif mutation != "size":
+                    name, value = {
+                        "encoding": ("Content-Encoding", "gzip"),
+                        "download": ("Content-Disposition", "attachment"),
+                        "html": ("Content-Type", "text/html"),
+                        "public": ("Cache-Control", "public, max-age=60"),
+                        "shared": ("Cache-Control", "s-maxage=60"),
+                    }[mutation]
+                    response.headers[name] = value
+            return response
+
+        await cache.get(request("fresh=1"), origin, auth)
+        old = next(iter(cache.store.rows.values()))
+        changed = True
+        if mutation == "size":
+            cache.store.max_payload = len(old.body) - 1
+        await cache.get(request("fresh=1"), origin, auth)
+        assert cache.store.writes == 1 and cache.store.rows[old.key].body == old.body
+        assert full_validation_calls == [1]
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+def test_validation_proof_header_change_revalidates(full_validation_calls):
+    async def scenario():
+        cache, auth = make_cache(), Authorize()
+        header = "private, no-store"
+
+        async def origin():
+            return JSONResponse({"total": 12}, headers={"Cache-Control": header})
+
+        await cache.get(request("fresh=1"), origin, auth)
+        header = "private, no-cache"
+        await cache.get(request("fresh=1"), origin, auth)
+        assert cache.store.writes == 2 and full_validation_calls == [1, 1]
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+def test_validation_proof_is_bounded_lru_without_payloads(full_validation_calls):
+    async def scenario():
+        cache, auth = make_cache(), Authorize()
+        cache.store.max_entries = 2
+        origins = []
+
+        async def origin():
+            origins.append(1)
+            return JSONResponse({"total": 12, "name": "uncached-raw-string"})
+
+        for query in ("days=1", "days=2", "days=1", "days=3", "days=2"):
+            await cache.get(request(query + "&fresh=1"), origin, auth)
+            assert len(cache._validation_proofs) <= 2
+        assert len(origins) == 5 and len(full_validation_calls) == 4
+        assert "uncached-raw-string" not in repr(cache._validation_proofs)
+        assert all(value == (False, "", "") for value in cache._validation_proofs.values())
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+def test_reused_validation_still_rejects_source_change_during_origin(full_validation_calls):
+    async def scenario():
+        cache, auth, origins = make_cache(), Authorize(), []
+
+        async def origin():
+            origins.append(1)
+            if len(origins) == 2:
+                cache.store.generation = "2"
+            return JSONResponse({"total": 12})
+
+        await cache.get(request("fresh=1"), origin, auth)
+        old = next(iter(cache.store.rows.values()))
+        with pytest.raises(HTTPException) as exc:
+            await cache.get(request("fresh=1"), origin, auth)
+        assert exc.value.status_code == 409
+        assert exc.value.headers["X-CloudLens-Cache"] == "superseded"
+        assert full_validation_calls == [1] and origins == [1, 1]
+        assert cache.store.writes == 1 and cache.store.rows[old.key] == old
+        await cache.get(request("fresh=1"), origin, auth)
+        assert full_validation_calls == [1, 1] and cache.store.writes == 2
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("daily", [False, True])
+def test_partial_and_daily_annotation_never_establish_full_proof(daily, full_validation_calls):
+    async def scenario():
+        cache = daily_cache() if daily else make_cache()
+        auth = Authorize(DAILY_CONTEXT if daily else CONTEXT)
+        origins = []
+
+        async def origin():
+            origins.append(1)
+            return JSONResponse({"total": 12} if daily else {"error": "source failed", "total": 12})
+
+        path = AI_PATH if daily else PATH
+        first = await cache.get(request("fresh=1", path=path), origin, auth)
+        second = await cache.get(request("fresh=1", path=path), origin, auth)
+        assert cache.store.writes == 2 and origins == [1, 1]
+        assert len(full_validation_calls) == (4 if daily else 2)
+        assert not cache._validation_proofs and first.body == second.body
+        if daily:
+            assert json.loads(second.body)["snapshot"]["data_day"] == DAILY_CONTEXT.data_day
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("kind", ["cookie", "stream", "error", "download", "html"])
 def test_non_json_errors_cookies_streams_downloads_never_persist(kind):
     async def scenario():

@@ -596,7 +596,10 @@ def _body_metadata(value):
 def _json_body(response: Response, limit: int) -> bytes | None:
     """The body, if the response is a plain, private-safe JSON 200 within the size limit."""
     body = getattr(response, "body", None)
+    directives = {part.strip().lower().split("=", 1)[0]
+                  for part in response.headers.get("cache-control", "").split(",")}
     if (response.status_code != 200 or not isinstance(body, bytes) or len(body) > limit
+            or directives & {"public", "s-maxage"}
             or "set-cookie" in response.headers
             or "content-encoding" in response.headers
             or "content-disposition" in response.headers
@@ -693,6 +696,7 @@ class SnapshotCache:
         self._maintenance_error = ""
         self._failures: OrderedDict[str, _Failure] = OrderedDict()
         self._body_metadata: OrderedDict[tuple, tuple[bool, str, str]] = OrderedDict()
+        self._validation_proofs: OrderedDict[tuple, tuple[bool, str, str]] = OrderedDict()
         self._closed = False
 
     async def start(self):
@@ -787,6 +791,7 @@ class SnapshotCache:
         self._tasks.clear()
         self._maintenance = None
         await asyncio.gather(*list(self._db_tasks), return_exceptions=True)
+        self._validation_proofs.clear()
 
     async def _authorize(self, request, authorize, partition=None, expected=None):
         context = await authorize(request)
@@ -957,7 +962,7 @@ class SnapshotCache:
                     await self._db(self.store.discard, key, partition)
                     return response
                 metadata = {}
-                body = _body(response, self.store.max_payload, metadata=metadata)
+                body = self._validated_body(response, partition, key, generation, policy, metadata)
                 ttl = policy.ttl
                 if body is None and not _pending_body(response, self.store.max_payload):
                     # A complete answer about incomplete evidence -- one subscription
@@ -1022,6 +1027,14 @@ class SnapshotCache:
                     self._failures.pop(key, None)
                     if "value" in metadata:
                         self._remember_metadata(item, metadata["value"])
+                        proof = metadata.get("proof")
+                        if proof is not None and len(metadata["value"][1]) + len(metadata["value"][2]) <= 256:
+                            # Only actual origin validation followed by a committed,
+                            # fenced put can establish trust; DB/header reads cannot.
+                            self._validation_proofs[proof] = metadata["value"]
+                            self._validation_proofs.move_to_end(proof)
+                            if len(self._validation_proofs) > getattr(self.store, "max_entries", 512):
+                                self._validation_proofs.popitem(last=False)
                     return item
                 # A generation changed while the source worked. Never mark the old
                 # calculation fresh, nor allow it to replace the newer publication.
@@ -1050,6 +1063,30 @@ class SnapshotCache:
             self._log_failure("refresh", request, exc)
             await self._record_failure(old, request, "source_failed")
             raise
+
+    def _validated_body(self, response, partition, key, generation, policy, metadata):
+        body = _json_body(response, self.store.max_payload)
+        if body is None:
+            return None
+        # Daily annotation changes bytes after this check; partial validation has
+        # different completion rules. Neither path creates/reuses a full proof.
+        if not policy.daily:
+            digest = hashlib.sha256(body).digest()
+            etag = _digest([generation, self.version, digest.hex()])
+            headers = hashlib.sha256()
+            for name, value in response.raw_headers:
+                headers.update(len(name).to_bytes(8, "big") + name)
+                headers.update(len(value).to_bytes(8, "big") + value)
+            proof = (partition, key, self.version, policy, etag, digest, headers.digest())
+            saved = self._validation_proofs.get(proof)
+            if saved is not None:
+                self._validation_proofs.move_to_end(proof)
+                metadata.update(value=saved, proof=proof)
+                return body
+        result = _body(response, self.store.max_payload, metadata=metadata)
+        if result is not None and not policy.daily:
+            metadata["proof"] = proof
+        return result
 
     def _metadata(self, item):
         # Verify the bytes too: a persisted ETag alone is not a content certificate.
