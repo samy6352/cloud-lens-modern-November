@@ -541,6 +541,22 @@ first export run to 13/13 loaded, 37,242 rows; import work 90 s of it · **Test 
   process stopped, newenabled server attribution confirmed. Current enabled UI36/36. Existing full2394-pass
   source gate unchanged. Existing benchmark artifact preserved; activation handover records committed locally only.
 
+### HTTP-overhead pass: implemented, live activation waiting for the existing rebuild
+
+- Profile found repeated privacy/eligibility traversals dominate the post-serving request path.
+  Implemented request-local deduplication and fused validation, with Unicode/secret/nested-job rules intact;
+  bounded content-digest/partition/key/ETag metadata reuse only after fenced committed writes; measured gzip6.
+  Code committed locally `d848222`, no push.403 focused passes plus11 metadata follow-up; independent review clean.
+- During profiling, live source advanced13 while derived/serving stayed10, dirty windowAug1-Oct4exclusive;
+  normal rebuild is actively repairing summaries. Do not restart/interrupt it or pretend generation10 is current.
+  No new source/serving publication was performed by this transport work.
+- Isolated ASGI using actual payloads/coherent fixturemetadata: Uptime fresh2.475/2.499 ->1.007/0.883s,
+  warm0.178/0.170s; Tags repeatedfresh1.539s, warm0.285/0.202s. Cold optionalAzure cost6.883s.
+  Exact HTTPcoreparity preserved; these are NOT fresh live-server measurements. Fresh<1s stillnotconsistent.
+- Read-only one-hour observer waits forsource=ready=serving and14currentresponses, then parent can safely activate
+  and measure live code. Existing app stays running; observer neither mutatesdata nor restartsjobs.
+  Remaining live activation/HTTPallperiod/UIgate is pending; handoversection13 has evidence and safe continuation.
+
 ### ADR notes
 - **ADR-1 (30 Sep) React from day 1, strangler at /v2.** Versions pinned by lockfile: React 19.3, Vite 8.3 (Rolldown),
   TypeScript 7.0, TanStack Router 1.170 / Query 5.103 / Table **9.2** (v9 API: `useTable` + `tableFeatures`, not
