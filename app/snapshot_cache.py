@@ -75,6 +75,7 @@ _SECRET_VALUE = re.compile(
     r"|\b(?:session_cookie|session_id|client_secret|password)\s*=)",
     re.IGNORECASE,
 )
+_SECRET_WORDS = ("bearer", "eyj", "session_cookie", "session_id", "client_secret", "password")
 _ACTIVE = frozenset({
     "queued", "running", "pending", "loading", "waiting-for-azure", "downloading",
     "validating", "committing", "warming-cache", "in_progress", "in-progress",
@@ -436,18 +437,46 @@ class SnapshotStore:
                         [key, partition])
 
 
-def _safe_content(value: Any) -> bool:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            name = str(key).lower()
-            if name in _SECRET_KEYS:
+def _safe_content(value: Any, *, states=None) -> bool:
+    pending = [(value, True)]
+    strings: set[str] = set()
+    checked_keys: dict[str, str] = {}
+    while pending:
+        item, envelope = pending.pop()
+        if isinstance(item, dict):
+            if (states is not None and (envelope or "job_id" in item or "task_id" in item)
+                    and (any(str(item.get(name, "")).lower() in states for name in ("status", "state"))
+                         or any(item.get(flag) is True for flag in ("running", "pending", "loading")))):
                 return False
-            if not _safe_content(item):
-                return False
-    elif isinstance(value, list):
-        return all(_safe_content(item) for item in value)
-    elif isinstance(value, str) and _SECRET_VALUE.search(value):
-        return False
+            for key, child in item.items():
+                name = str(key)
+                if name not in checked_keys:
+                    lowered = name.lower()
+                    if lowered in _SECRET_KEYS:
+                        return False
+                    checked_keys[name] = lowered
+                if isinstance(child, str):
+                    strings.add(child)
+                elif isinstance(child, (dict, list)):
+                    pending.append((child, checked_keys[name] in _JOB_FIELDS))
+        elif isinstance(item, list):
+            for child in item:
+                if isinstance(child, str):
+                    strings.add(child)
+                elif isinstance(child, (dict, list)):
+                    pending.append((child, envelope))
+        elif isinstance(item, str):
+            strings.add(item)
+    # Repeated resource IDs, dates and tags are identical evidence. This memo is
+    # confined to one validation, never shared between requests or identities.
+    for item in strings:
+        lowered = item.lower()
+        # These ASCII probes are necessary conditions only. Non-ASCII retains
+        # Python's Unicode IGNORECASE rules in the full validator.
+        candidate = (not item.isascii() or "?" in item or "&" in item
+                     or any(word in lowered for word in _SECRET_WORDS))
+        if candidate and _SECRET_VALUE.search(item):
+            return False
     return True
 
 
@@ -463,7 +492,8 @@ def _unfinished(value: Any, *, envelope=True, states=_ACTIVE | _FAILED) -> bool:
         return any(_unfinished(item, envelope=str(name).lower() in _JOB_FIELDS, states=states)
                    for name, item in value.items() if isinstance(item, (dict, list)))
     if isinstance(value, list):
-        return any(_unfinished(item, envelope=envelope, states=states) for item in value)
+        return any(_unfinished(item, envelope=envelope, states=states)
+                   for item in value if isinstance(item, (dict, list)))
     return False
 
 
@@ -478,10 +508,10 @@ def _partial_evidence(value: Any) -> bool:
                 return True
             if key in {"partial", "unavailable", "truncated"} and item is True:
                 return True
-            if _partial_evidence(item):
+            if isinstance(item, (dict, list)) and _partial_evidence(item):
                 return True
     elif isinstance(value, list):
-        return any(_partial_evidence(item) for item in value)
+        return any(_partial_evidence(item) for item in value if isinstance(item, (dict, list)))
     return False
 
 
@@ -510,7 +540,7 @@ def _has_evidence(value: Any, *, row=False) -> bool:
 
 
 def _cacheable_report(value: Any) -> bool:
-    if not isinstance(value, (dict, list)) or not _safe_content(value) or _unfinished(value):
+    if not isinstance(value, (dict, list)) or not _safe_content(value, states=_ACTIVE | _FAILED):
         return False
     if isinstance(value, dict) and any(value.get(key) for key in ("error", "errors", "problem")):
         return False
@@ -539,15 +569,28 @@ def oversize(response: Response, limit: int) -> int:
     return len(body)
 
 
-def _body(response: Response, limit: int) -> bytes | None:
+def _body(response: Response, limit: int, *, metadata: dict | None = None) -> bytes | None:
     body = _json_body(response, limit)
     if body is None:
         return None
     try:
         value = json.loads(body)
-        return body if _cacheable_report(value) else None
+        if not _cacheable_report(value):
+            return None
+        if metadata is not None:
+            metadata["value"] = _body_metadata(value)
+        return body
     except (ValueError, UnicodeError):
         return None
+
+
+def _body_metadata(value):
+    daily = value.get("snapshot", {}) if isinstance(value, dict) else {}
+    if not isinstance(daily, dict):
+        daily = {}
+    cadence, data_day = daily.get("cadence", ""), daily.get("data_day", "")
+    return (_partial_evidence(value), cadence if isinstance(cadence, str) else "",
+            data_day if isinstance(data_day, str) else "")
 
 
 def _json_body(response: Response, limit: int) -> bytes | None:
@@ -578,7 +621,7 @@ def _partial_body(response: Response, limit: int) -> bytes | None:
         value = json.loads(body)
     except (ValueError, UnicodeError):
         return None
-    if not isinstance(value, (dict, list)) or not _safe_content(value) or _unfinished(value):
+    if not isinstance(value, (dict, list)) or not _safe_content(value, states=_ACTIVE | _FAILED):
         return None
     return body if _carries_money(value) else None
 
@@ -649,6 +692,7 @@ class SnapshotCache:
         self._maintenance: asyncio.Task | None = None
         self._maintenance_error = ""
         self._failures: OrderedDict[str, _Failure] = OrderedDict()
+        self._body_metadata: OrderedDict[tuple, tuple[bool, str, str]] = OrderedDict()
         self._closed = False
 
     async def start(self):
@@ -836,7 +880,7 @@ class SnapshotCache:
                 "source-pending", generation)
         daily = policy.daily and bool(context.data_day)
         if daily and item:
-            saved_day = json.loads(item.body).get("snapshot", {}).get("data_day")
+            saved_day = self._metadata(item)[2]
             source_changed = saved_day != context.data_day
             # The source revision still fences writes. A completed daily report,
             # however, survives same-day imports and midnight without new data.
@@ -912,7 +956,8 @@ class SnapshotCache:
                 if response.status_code in {401, 403}:
                     await self._db(self.store.discard, key, partition)
                     return response
-                body = _body(response, self.store.max_payload)
+                metadata = {}
+                body = _body(response, self.store.max_payload, metadata=metadata)
                 ttl = policy.ttl
                 if body is None and not _pending_body(response, self.store.max_payload):
                     # A complete answer about incomplete evidence -- one subscription
@@ -931,7 +976,8 @@ class SnapshotCache:
                     value["snapshot"] = {"cadence": "data-day", "data_day": context.data_day}
                     response.body = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode()
                     response.headers["Content-Length"] = str(len(response.body))
-                    body = (_body(response, self.store.max_payload) if ttl == policy.ttl
+                    metadata.clear()
+                    body = (_body(response, self.store.max_payload, metadata=metadata) if ttl == policy.ttl
                             else _partial_body(response, self.store.max_payload))
                 if body is None:
                     if _pending_body(response, self.store.max_payload):
@@ -974,6 +1020,8 @@ class SnapshotCache:
                     return self._unavailable(response, "write_failed")
                 if accepted:
                     self._failures.pop(key, None)
+                    if "value" in metadata:
+                        self._remember_metadata(item, metadata["value"])
                     return item
                 # A generation changed while the source worked. Never mark the old
                 # calculation fresh, nor allow it to replace the newer publication.
@@ -1003,7 +1051,29 @@ class SnapshotCache:
             await self._record_failure(old, request, "source_failed")
             raise
 
+    def _metadata(self, item):
+        # Verify the bytes too: a persisted ETag alone is not a content certificate.
+        key = (item.partition, item.key, item.etag, hashlib.sha256(item.body).digest())
+        saved = self._body_metadata.get(key)
+        if saved is not None:
+            self._body_metadata.move_to_end(key)
+            return saved
+        result = _body_metadata(json.loads(item.body))
+        self._remember_metadata(item, result, key=key)
+        return result
+
+    def _remember_metadata(self, item, result, *, key=None):
+        if len(result[1]) + len(result[2]) > 256:
+            return
+        if key is None:
+            key = (item.partition, item.key, item.etag, hashlib.sha256(item.body).digest())
+        self._body_metadata[key] = result
+        self._body_metadata.move_to_end(key)
+        if len(self._body_metadata) > getattr(self.store, "max_entries", 512):
+            self._body_metadata.popitem(last=False)
+
     def _response(self, request, item, *, stale, revalidating, state="hit"):
+        partial, cadence, data_day = self._metadata(item)
         headers = {
             "Cache-Control": "private, no-store",
             "ETag": item.etag,
@@ -1014,14 +1084,11 @@ class SnapshotCache:
             "X-CloudLens-Age": str(max(0, int(self.clock() - item.created))),
             "X-CloudLens-Stale": str(stale).lower(),
             "X-CloudLens-Revalidating": str(revalidating).lower(),
-            "X-CloudLens-Coverage": (
-                "partial" if _partial_evidence(json.loads(item.body)) else "as-reported"),
+            "X-CloudLens-Coverage": "partial" if partial else "as-reported",
         }
-        if self.policies[request.url.path].daily:
-            saved = json.loads(item.body).get("snapshot", {})
-            if saved.get("cadence") == "data-day":
-                headers["X-CloudLens-Refresh-Policy"] = "data-day"
-                headers["X-CloudLens-Data-Day"] = saved["data_day"]
+        if self.policies[request.url.path].daily and cadence == "data-day":
+            headers["X-CloudLens-Refresh-Policy"] = "data-day"
+            headers["X-CloudLens-Data-Day"] = data_day
         notice = self._failures.get(item.key)
         if notice and notice.created == item.created and not notice.persisted:
             headers["X-CloudLens-Cache-Error"] = "failure_write_failed"

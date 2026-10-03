@@ -897,7 +897,7 @@ app = FastAPI(title="CloudLens", version="1.0.0", lifespan=lifespan)
 # SSE is already chunked and must not be buffered, so exclude it by minimum size rather than
 # compressing everything: JSON and the HTML/CSS/JS bundle benefit, the event stream is unaffected
 # because each frame is far below the threshold.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 def auth_service() -> Auth:

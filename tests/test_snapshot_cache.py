@@ -1092,6 +1092,113 @@ def test_error_incomplete_and_credential_payloads_are_never_persisted(result):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("secret", [
+    "Bearer synthetic", "beArEr\tsynthetic", "Bearer\u2003synthetic",
+    "eyJsynthetic.synthetic.signature", "EYJSYNTHETIC.synthetic.signature",
+    "session_cookie = synthetic", "session_id=synthetic",
+    "client_secret = synthetic", "password=synthetic",
+    "sess\u0131on_id=synthetic", "pa\u017f\u017fword=synthetic",
+    "https://synthetic.invalid/?sig=synthetic",
+    "https://synthetic.invalid/?ok=true&access_token=synthetic",
+])
+def test_secret_screening_still_checks_nested_unique_and_repeated_values(secret):
+    from app.snapshot_cache import _body, _safe_content
+
+    value = {"resources": [{"name": "normal", "days": ["2026-09-01"] * 100},
+                           {"name": "normal", "nested": [{"value": secret}]}]}
+    assert not _safe_content(value)
+    assert _body(JSONResponse(value), 10000) is None
+
+
+def test_secret_screening_checks_all_private_keys_after_benign_repetition():
+    from app.snapshot_cache import _SECRET_KEYS, _body
+
+    for key in _SECRET_KEYS:
+        value = {"resources": [{"name": "normal"}] * 100,
+                 "nested": [{"private": {key.upper(): "synthetic"}}]}
+        assert _body(JSONResponse(value), 100000) is None, key
+
+
+@pytest.mark.parametrize("value", [
+    {"status": "running"}, [{"status": "running"}],
+    {"resources": [{"status": "running", "cost": 12}]},
+    {"resources": [{"job_id": "synthetic", "status": "running"}]},
+    {"resources": [{"task_id": "synthetic", "state": "failed"}]},
+    {"nested": [{"jobs": [[{"pending": True}]]}]},
+    {"nested": {"loading": True, "status": "running"}},
+    {"job": {"nested": {"status": "running"}}},
+    {"total": 12, "jobs": [{"status": "ok"}]},
+])
+def test_fused_private_validation_preserves_nested_job_envelope_rules(value):
+    from app.snapshot_cache import _ACTIVE, _FAILED, _safe_content, _unfinished
+
+    states = _ACTIVE | _FAILED
+    assert _safe_content(value, states=states) == (not _unfinished(value, states=states))
+
+
+@pytest.mark.parametrize("body", [
+    b'{"nested":', b'{"nested": "\xff"}', b'{"value":"\\uZZZZ"}',
+    b'{"value":12} trailing', b'"Bearer synthetic"', b"null", b"123",
+])
+def test_malformed_or_scalar_json_never_produces_eligibility_metadata(body):
+    from app.snapshot_cache import _body
+
+    metadata = {}
+    assert _body(Response(body, media_type="application/json"), 10000, metadata=metadata) is None
+    assert not metadata
+
+
+def test_body_metadata_cache_checks_bytes_even_if_persisted_etag_is_unchanged():
+    cache = make_cache()
+    item = Snapshot("key", "owner", "1", b'{"total":12}', 1, 10, 100, '"same"')
+    complete = cache._response(request(), item, stale=False, revalidating=False)
+    changed = replace(item, body=b'{"total":12,"partial":true}')
+    partial = cache._response(request(), changed, stale=False, revalidating=False)
+    assert complete.headers["x-cloudlens-coverage"] == "as-reported"
+    assert partial.headers["x-cloudlens-coverage"] == "partial"
+    assert len(cache._body_metadata) == 2
+
+
+def test_body_metadata_cache_is_partitioned_bounded_and_does_not_retain_payloads():
+    cache = make_cache()
+    cache.store.max_entries = 2
+    body = b'{"total":12}'
+    for owner in ("a", "b", "c"):
+        item = Snapshot("key", owner, "1", body, 1, 10, 100, '"same"')
+        cache._response(request(), item, stale=False, revalidating=False)
+    assert len(cache._body_metadata) == 2
+    assert {key[0] for key in cache._body_metadata} == {"b", "c"}
+    assert all(value == (False, "", "") for value in cache._body_metadata.values())
+
+
+def test_large_daily_metadata_is_preserved_without_unbounded_memo_storage():
+    cache = daily_cache()
+    day = "synthetic-" * 1000
+    body = json.dumps({"total": 12, "snapshot": {"cadence": "data-day", "data_day": day}}).encode()
+    item = Snapshot("key", "owner", "1", body, 1, 10, 100, '"same"')
+    result = cache._response(request(path=AI_PATH), item, stale=False, revalidating=False)
+    assert result.headers["x-cloudlens-data-day"] == day
+    assert not cache._body_metadata
+
+
+def test_warm_metadata_never_replaces_fresh_origin_privacy_validation():
+    async def scenario():
+        cache, auth = make_cache(), Authorize()
+        secret = False
+
+        async def origin():
+            return JSONResponse({"total": 12, **({"credentials": "synthetic"} if secret else {})})
+
+        await cache.get(request(), origin, auth)
+        secret = True
+        result = await cache.get(request("fresh=true"), origin, auth)
+        assert result.headers["x-cloudlens-cache"] == "source-incomplete"
+        assert json.loads(next(iter(cache.store.rows.values())).body) == {"total": 12}
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("kind", ["cookie", "stream", "error", "download", "html"])
 def test_non_json_errors_cookies_streams_downloads_never_persist(kind):
     async def scenario():
