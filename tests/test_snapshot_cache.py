@@ -1983,6 +1983,53 @@ def test_postgres_new_cache_instance_reads_persistent_snapshot(postgres_warehous
 
 @pytest.mark.postgres
 @pytest.mark.usefixtures("ready_cache_warehouse")
+def test_postgres_put_preserves_identical_bytes_but_commits_all_metadata(
+        postgres_warehouse, monkeypatch):
+    store = SnapshotStore(postgres_warehouse.connect)
+    store.initialize()
+    original = Snapshot("same", "partition", "0", b'{"total":12}', 100, 110, 200,
+                        '"etag"', family_key="family")
+    assert store.put(original)
+    store.failure(original, 101, "source_failed")
+    refreshed = replace(original, created=102, expires=112, retain_until=202,
+                        etag='"new-etag"', family_key="new-family")
+    assert store.put(refreshed)
+    # A separate transaction sees the committed refresh, including cleared failures.
+    assert store.load("same", "partition", 103)[0] == refreshed
+    with postgres_warehouse.connect() as con:
+        con.execute("UPDATE private_snapshots SET body=? WHERE cache_key=?",
+                    ['{"total":99}', "same"])
+    repaired = replace(refreshed, created=104)
+    assert store.put(repaired)
+    assert store.load("same", "partition", 105)[0] == repaired
+    changed = replace(repaired, body=b'{"total":13}', created=106)
+    assert store.put(changed)
+    assert store.load("same", "partition", 107)[0] == changed
+
+    def fail_prune(*args):
+        raise RuntimeError("injected transaction failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_prune", fail_prune)
+        with pytest.raises(RuntimeError, match="injected transaction failure"):
+            store.put(replace(changed, body=b'{"total":14}', created=108))
+        assert store.load("same", "partition", 109)[0] == changed
+        with pytest.raises(RuntimeError, match="injected transaction failure"):
+            store.put(replace(changed, created=108))
+        assert store.load("same", "partition", 109)[0] == changed
+
+    other = replace(changed, partition="other", created=110)
+    assert store.put(other)
+    assert store.load("same", "partition", 111)[0] is None
+    assert store.load("same", "other", 111)[0] == other
+    with postgres_warehouse.connect() as con:
+        con.execute("UPDATE meta SET value='1' WHERE key='data_generation'")
+    assert not store.put(replace(other, created=112))
+    assert store.load("same", "other", 113)[0] == other
+
+
+@pytest.mark.postgres
+@pytest.mark.usefixtures("ready_cache_warehouse")
 def test_postgres_generation_cas_bounds_and_failure_sanitization(postgres_warehouse):
     from app.snapshot_cache import Snapshot
 

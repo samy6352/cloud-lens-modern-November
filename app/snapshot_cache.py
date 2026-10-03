@@ -395,6 +395,7 @@ class SnapshotStore:
                     con.execute("ROLLBACK")
                     return False
                 family = item.family_key or item.key
+                # Keep the TOAST pointer only for byte-identical, same-owner bodies.
                 row = con.execute(
                     "INSERT INTO private_snapshots "
                     "(cache_key,partition_hash,family_key,source_generation,body,created,expires,"
@@ -402,7 +403,10 @@ class SnapshotStore:
                     "ON CONFLICT(cache_key) DO UPDATE SET "
                     "partition_hash=excluded.partition_hash,"
                     "family_key=excluded.family_key,"
-                    "source_generation=excluded.source_generation,body=excluded.body,"
+                    "source_generation=excluded.source_generation,"
+                    "body=CASE WHEN private_snapshots.partition_hash=excluded.partition_hash "
+                    'AND private_snapshots.body COLLATE "C"=excluded.body COLLATE "C" '
+                    "THEN private_snapshots.body ELSE excluded.body END,"
                     "created=excluded.created,expires=excluded.expires,"
                     "retain_until=excluded.retain_until,etag=excluded.etag,"
                     "byte_size=excluded.byte_size,failures=0,retry_at=0,error_code='' "
