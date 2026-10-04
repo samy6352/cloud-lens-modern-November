@@ -15,8 +15,8 @@ sign-in, publishes the code, and polls `/readyz` plus an unauthenticated sign-in
 
 ## Two-line install (Azure Cloud Shell)
 
-The customer path. Open Cloud Shell in **PowerShell** mode, get the CloudLens source (for now a
-clone; see *Distribution* below), then:
+The customer path. Open Cloud Shell in **PowerShell** mode, get and extract the reviewed
+CloudLens source bundle (or a clone; see *Distribution* below), then:
 
 ```powershell
 az account set --subscription <subscription-to-host-cloudlens>
@@ -60,9 +60,36 @@ reports `504 GatewayTimeout` for a deployment that then succeeds. `deploy.ps1` t
 unknown state and follows the App Service deployment record to its real outcome (success, or the
 failed build's log) before checking readiness.
 
-**Distribution** is not settled: the script already accepts `-Source <https zip URL or path>` so the
-second line can become `iex "& { $(irm https://<host>/install.ps1) } -Location centralindia -Source <zip>"`
-once a public release (or a zip handed to the customer) exists.
+**Source distribution:** build a versioned customer artifact locally with the existing packager:
+
+```powershell
+.\tools\package.ps1 -InstallerSource -Version <reviewed-commit-SHA> -Destination <new-source-zip-path>
+```
+
+Use Python 3.11+, PowerShell 7 and Node.js 20+. The command builds v3 using `ui/package-lock.json`;
+`-SkipUiBuild` is only for an already validated `web/v2` build (missing v3 assets refuse source
+packaging). The root `release-manifest.json` labels the artifact `installer-source`, records the
+supplied version and each file's size/SHA-256. Retain the separately reported ZIP SHA-256 and verify
+both the ZIP and extracted file hashes before use. A version label is not a signature.
+
+The ZIP contains `app/main.py` beside `infra/install.ps1`, all Bicep installer helpers/modules,
+classic web assets, the tested v3 build, buildable UI source and its dependency lock, Python
+requirements and the runtime packager. It excludes configuration/credentials, user data, database
+files, test/QA evidence, Git history, environments and installed dependencies. Python requirements
+retain their existing lower bounds; they are **not** a fully locked Python environment.
+
+Extract into a new customer-owned folder; from its root follow this guide's prerequisite/preflight
+checks and run `.\infra\install.ps1 -Location <approved-region>` only after approving charges and
+all provisioning/identity/export/import side effects. An independently obtained installer bootstrap
+can also consume this ZIP with `-Source <local-zip-path>`; a script already inside a valid checkout
+uses that checkout instead. Installation still needs Azure login/access and outbound dependency
+downloads; the bundle does not make deployment offline. Cloud Shell needs the tools above too.
+
+Without `-InstallerSource`, `tools/package.ps1` produces an `app-service-runtime` ZIP that
+intentionally omits `infra/` and UI source: **do not pass that ZIP to installer `-Source`.**
+Local artifact creation is supported; a published release URL, customer delivery/access approval
+and a fresh paid end-to-end Azure installation remain separate acceptance gates. No public release
+or GitHub access is implied by creating the bundle.
 
 ## Common commands
 

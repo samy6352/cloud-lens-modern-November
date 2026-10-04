@@ -47,11 +47,11 @@ class Packaging(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
-    def package(self):
+    def package(self, *options):
         return subprocess.run(
             [POWERSHELL, "-NoProfile", "-File", str(ROOT / "tools" / "package.ps1"),
              "-SourceRoot", str(self.root), "-Destination", str(self.archive),
-             "-Python", sys.executable],
+             "-Python", sys.executable, *options],
             capture_output=True, text=True, timeout=60,
         )
 
@@ -125,6 +125,83 @@ class Packaging(unittest.TestCase):
             'import("./dashboard-billing.js#version");', encoding="utf-8")
         result = self.package()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def source_fixture(self):
+        for name in (
+            "README.md", "Cloudlens-Documentation.Md", "requirements-dev.txt", "pyproject.toml",
+            "ingest.py", "verify_warehouse.py",
+            "tools/package.ps1", "tools/validate_package.py", "infra/README.md",
+            "infra/install.ps1", "infra/deploy.ps1", "infra/preflight.ps1",
+            "infra/deployment-checks.ps1", "infra/cost-access.ps1", "infra/storage-naming.ps1",
+            "infra/focus-exports.ps1", "infra/grant-cost-access.ps1", "infra/main.bicep",
+            "infra/bicepconfig.json", "infra/modules/identity.bicep",
+            "infra/modules/postgres-admin.bicep", "infra/modules/stack.bicep",
+            "infra/sql/create-app-role.sql", "ui/package.json", "ui/package-lock.json",
+            "ui/index.html", "ui/tsconfig.json", "ui/vite.config.ts",
+            "ui/src/main.tsx", "ui/src/styles.css", "ui/public/favicon.svg",
+            "ui/public/theme.js", "web/v2/index.html",
+        ):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("", encoding="utf-8")
+        (self.root / "ui/index.html").write_text(
+            '<link rel="icon" href="/favicon.svg"><script src="/theme.js"></script>'
+            '<script type="module" src="/src/main.tsx"></script>', encoding="utf-8")
+        for name in (
+            "ui/node_modules/private.js", "ui/src/private.test.ts", "ui/src/.private/secret.ts",
+            "ui/src/credentials.json", "infra/private.json", "infra/main.json",
+            "infra/terraform/customer.tfstate", "HANDOVER.md", "tools/bench-tabs-latest.json",
+        ):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("must-not-ship", encoding="utf-8")
+
+    def test_installer_source_is_consumable_and_excludes_private_state(self):
+        self.source_fixture()
+        result = self.package("-InstallerSource", "-Version", "reviewed-abc123", "-SkipUiBuild")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.archive) as archive:
+            names = set(archive.namelist())
+            self.assertTrue({"infra/install.ps1", "infra/main.bicep", "app/main.py",
+                             "tools/package.ps1", "tools/validate_package.py",
+                             "ui/package-lock.json", "ui/src/main.tsx", "web/v2/index.html",
+                             "ui/public/favicon.svg", "ui/public/theme.js"} <= names)
+            manifest = json.loads(archive.read("release-manifest.json"))
+            self.assertEqual(manifest["kind"], "installer-source")
+            self.assertEqual(manifest["version"], "reviewed-abc123")
+            self.assertEqual(names - {"release-manifest.json"},
+                             {entry["path"] for entry in manifest["files"]})
+            for entry in manifest["files"]:
+                content = archive.read(entry["path"])
+                self.assertNotIn(b"must-not-ship", content)
+                self.assertEqual(entry["sha256"], hashlib.sha256(content).hexdigest())
+                self.assertEqual(entry["bytes"], len(content))
+
+    def test_installer_source_requires_version_helpers_and_built_ui(self):
+        self.source_fixture()
+        result = self.package("-InstallerSource", "-SkipUiBuild")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Installer source needs -Version", result.stdout + result.stderr)
+        self.assertFalse(self.archive.exists())
+        for name in ("infra/install.ps1", "ui/package-lock.json", "web/v2/index.html"):
+            path = self.root / name
+            original = path.read_bytes()
+            path.unlink()
+            with self.subTest(name=name):
+                result = self.package("-InstallerSource", "-Version", "abc123", "-SkipUiBuild")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(name, result.stdout + result.stderr)
+                self.assertFalse(self.archive.exists())
+            path.write_bytes(original)
+
+    def test_runtime_archive_is_not_installer_source(self):
+        result = self.package()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(self.archive) as archive:
+            self.assertNotIn("infra/install.ps1", archive.namelist())
+            self.assertNotIn("ui/package-lock.json", archive.namelist())
+            self.assertEqual(json.loads(archive.read("release-manifest.json"))["kind"],
+                             "app-service-runtime")
 
 
 if __name__ == "__main__":

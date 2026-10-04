@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build a source-only CloudLens App Service ZIP without local state or development files.
+    Build an App Service ZIP, or an installer source ZIP, without local state.
 #>
 [CmdletBinding()]
 param(
@@ -11,7 +11,11 @@ param(
     [string]$Python = '',
     # Package the web/v2 build already on disk instead of running npm (for example in CI, where
     # the UI was built in an earlier step).
-    [switch]$SkipUiBuild
+    [switch]$SkipUiBuild,
+    # Installer source includes infra/, buildable ui/ and the tested web/v2 assets.
+    # It is not a ZIP to send directly to App Service.
+    [switch]$InstallerSource,
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +27,9 @@ if (-not $Python) {
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root = (Get-Item -LiteralPath $SourceRoot).FullName.TrimEnd('\', '/')
+if ($InstallerSource -and $Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+    throw 'Installer source needs -Version <reviewed release label or commit SHA>.'
+}
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $destinationPath) {
     throw "Destination already exists: $destinationPath"
@@ -90,7 +97,61 @@ $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ord
 foreach ($file in $files) { $paths.Add($file.Path) | Out-Null }
 $requiredFiles = @('app/__init__.py', 'app/main.py', 'web/index.html', 'web/login.html',
                    'web/assets/dashboard.js', 'web/assets/app.js', 'web/assets/app.css')
-if ($builtUi) { $requiredFiles += 'web/v2/index.html' }
+if ($builtUi -or $InstallerSource) { $requiredFiles += 'web/v2/index.html' }
+if ($InstallerSource) {
+    $sourceFiles = @(
+        'README.md', 'Cloudlens-Documentation.Md', 'requirements-dev.txt', 'pyproject.toml',
+        'ingest.py', 'verify_warehouse.py',
+        'tools/package.ps1', 'tools/validate_package.py',
+        'infra/README.md', 'infra/install.ps1', 'infra/deploy.ps1',
+        'infra/preflight.ps1', 'infra/deployment-checks.ps1',
+        'infra/cost-access.ps1', 'infra/storage-naming.ps1',
+        'infra/focus-exports.ps1', 'infra/grant-cost-access.ps1',
+        'infra/main.bicep', 'infra/bicepconfig.json',
+        'infra/modules/identity.bicep', 'infra/modules/postgres-admin.bicep',
+        'infra/modules/stack.bicep', 'infra/sql/create-app-role.sql',
+        'ui/package.json', 'ui/package-lock.json', 'ui/index.html',
+        'ui/tsconfig.json', 'ui/vite.config.ts',
+        'ui/public/favicon.svg', 'ui/public/theme.js'
+    )
+    $uiSource = Join-Path $ui 'src'
+    if (-not (Test-Path -LiteralPath $uiSource -PathType Container)) {
+        throw 'Installer source is missing ui/src.'
+    }
+    foreach ($folder in @((Get-Item -LiteralPath $uiSource)) + @(Get-ChildItem -LiteralPath $uiSource -Recurse -Directory -Force)) {
+        if ($folder.LinkType -in @('SymbolicLink', 'Junction')) {
+            throw "Refusing a linked source directory: $($folder.FullName)"
+        }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $uiSource -Recurse -File -Force) {
+        $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+        if ($relative -match '(^|/)(\.|__pycache__|node_modules|tests/)' -or
+            $relative -match '\.(test|spec)\.[cm]?[jt]sx?$' -or
+            $file.Extension -notin @('.ts', '.tsx', '.js', '.jsx', '.css', '.svg', '.png', '.ico', '.woff', '.woff2', '.ttf')) { continue }
+        $sourceFiles += $relative
+    }
+    foreach ($relative in $sourceFiles) {
+        $source = Join-Path $root $relative
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Installer source is missing $relative."
+        }
+        $item = Get-Item -LiteralPath $source
+        if ($item.LinkType -in @('SymbolicLink', 'Junction')) {
+            throw "Refusing a linked source file: $relative"
+        }
+        # A file can look ordinary while a parent directory is a junction.
+        $parent = $item.Directory
+        while ($parent -and $parent.FullName.Length -ge $root.Length) {
+            if ($parent.LinkType -in @('SymbolicLink', 'Junction')) {
+                throw "Refusing a linked source directory: $($parent.FullName)"
+            }
+            $parent = $parent.Parent
+        }
+        $files.Add([pscustomobject]@{ Path = $relative; Source = $source; Size = $item.Length })
+        $paths.Add($relative) | Out-Null
+    }
+    $requiredFiles += @('ui/src/main.tsx', 'ui/src/styles.css')
+}
 foreach ($required in $requiredFiles) {
     if (-not $paths.Contains($required)) { throw "Package is missing $required." }
 }
@@ -98,7 +159,7 @@ foreach ($required in $requiredFiles) {
 # Validate local module imports before writing any archive, including untracked lazy views.
 $imports = '(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)["''](?<path>\.{1,2}/[^"'']+)["'']'
 foreach ($file in $files | Where-Object { $_.Path.EndsWith('.js') }) {
-    $source = Get-Content -LiteralPath $file.Source -Raw
+    $source = [string](Get-Content -LiteralPath $file.Source -Raw)
     foreach ($match in [regex]::Matches($source, $imports)) {
         $module = ($match.Groups['path'].Value -split '[?#]', 2)[0]
         $absolute = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $file.Source) $module))
@@ -115,11 +176,14 @@ foreach ($file in $files | Where-Object { $_.Path.EndsWith('.js') }) {
 
 # Parse source only: packaging must not initialize the warehouse or read local configuration.
 $validation = Join-Path $PSScriptRoot 'validate_package.py'
-@($files.Path) | ConvertTo-Json -Compress | & $Python $validation $root
+@($files.Path | Where-Object { $_ -like 'app/*' -or $_ -like 'web/*' }) |
+    ConvertTo-Json -Compress | & $Python $validation $root
 if ($LASTEXITCODE -ne 0) { throw 'Package source validation failed.' }
 
 $manifest = [ordered]@{
     application = 'CloudLens'
+    kind = $(if ($InstallerSource) { 'installer-source' } else { 'app-service-runtime' })
+    version = $Version
     createdUtc = [DateTime]::UtcNow.ToString('o')
     files = @($files | Sort-Object Path | ForEach-Object {
         [ordered]@{ path = $_.Path; bytes = $_.Size; sha256 = (Get-FileHash -LiteralPath $_.Source -Algorithm SHA256).Hash.ToLowerInvariant() }
