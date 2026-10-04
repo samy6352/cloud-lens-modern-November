@@ -31,7 +31,7 @@ function BudgetHistory({ budget }: { budget: Budget }) {
     {gap && <GovernNotice warning>Warehouse total {nativeMoney(trend.total, budget.currency)} differs from Azure spend {nativeMoney(budget.current_spend, budget.currency)}. Source timing or coverage may differ.</GovernNotice>}</div>;
 }
 
-function BudgetComposer({ scope, existing, demo }: { scope: Scope; existing: Budget[]; demo: boolean }) {
+function BudgetComposer({ scope, existing, demo, demoNote }: { scope: Scope; existing: Budget[]; demo: boolean; demoNote: string | null }) {
   const client = useQueryClient();
   const subscriptions = useQuery(governSubscriptionsQuery);
   const me = useQuery(governMeQuery);
@@ -78,6 +78,7 @@ function BudgetComposer({ scope, existing, demo }: { scope: Scope; existing: Bud
   }
   return <Card className="space-y-5 p-5">
     <div><h3 className="font-semibold">Draft a tag-scoped Azure budget</h3><p className="mt-1 text-sm text-muted">Nothing is sent until you review the exact request and explicitly confirm. Azure creates or replaces a budget with the same name.</p></div>
+    {demoNote && <GovernNotice warning>{demoNote}</GovernNotice>}
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <GovernField label="Subscription"><select className={governInput} value={draft.subscription} onChange={e => setDraft({ ...draft, subscription: e.target.value })}><option value="">Select subscription</option>{eligible.map(s => <option value={s.id} key={s.id}>{s.name || s.id}</option>)}</select></GovernField>
       <GovernField label="Budget name"><input className={governInput} maxLength={63} value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></GovernField>
@@ -102,7 +103,7 @@ function BudgetComposer({ scope, existing, demo }: { scope: Scope; existing: Bud
     {subscriptions.isError && <GovernError error={subscriptions.error} retry={() => void subscriptions.refetch()} />}
     {capabilities.isError && <GovernError error={capabilities.error} retry={() => void capabilities.refetch()} />}
     <GovernNotice warning={!permission.allowed}><ShieldCheck className="mr-2 inline size-4" />{permission.reason}</GovernNotice>
-    <Button disabled={!draft.subscription || capabilities.isFetching || tags.isFetching} onClick={() => { void capabilities.refetch(); void tags.refetch(); }}>Recheck scoped permissions & native currency</Button>
+    <Button className="h-auto min-h-9 max-w-full whitespace-normal py-2" disabled={!draft.subscription || capabilities.isFetching || tags.isFetching} onClick={() => { void capabilities.refetch(); void tags.refetch(); }}>Recheck scoped permissions & native currency</Button>
     {duplicate && <GovernNotice warning>This name already exists. The Azure request can replace its amount, filter and notifications. Review carefully.</GovernNotice>}
     {validation.length > 0 && <ul role="alert" className="list-inside list-disc text-sm text-bad">{validation.map(v => <li key={v}>{v}</li>)}</ul>}
     {error != null && <GovernError error={error} retry={() => { setError(null); prepare(); }} />}
@@ -133,6 +134,8 @@ export function BudgetsPage() {
   const [picked, setPicked] = useState<Budget | null>(null);
   const [compose, setCompose] = useState(false);
   const all = query.data?.budgets ?? [];
+  const demo = query.data?.demo_mode === true;
+  const demoNote = demo ? (query.data?.note || "Demo mode: live Azure budget reads and writes are disabled.") : null;
   const rows = all.filter(b => (!status || (status === "attention" ? ["over", "near"].includes(budgetStatus(b)) : budgetStatus(b) === status))
     && (!currency || (b.currency || "__missing") === currency) && (!tag || b.tag_filter?.some(([k]) => k === tag))
     && [b.name, b.subscription, b.filter, ...(b.tag_filter ?? []).flat()].join(" ").toLowerCase().includes(q.trim().toLowerCase()));
@@ -148,15 +151,16 @@ export function BudgetsPage() {
   const selected = picked ? all.find(b => b.name === picked.name && b.subscription_id === picked.subscription_id) : null;
   function refreshRead() { if (!refresh) setRefresh(true); else void query.refetch(); }
   return <div className="space-y-5"><PageHeader title="Budgets" subtitle="Azure-native limits and current-period counters. No display-currency conversion or global cost-month substitution." actions={<><GovernRefresh busy={query.isFetching} onClick={refreshRead} /><Button onClick={() => setCompose(v => !v)}><Plus />{compose ? "Hide draft" : "Draft budget"}</Button></>} />
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><KpiTile label="Budgets read" value={query.isError ? "Unavailable" : query.isPending ? "…" : all.length} hint={`${query.data?.subscriptions_read ?? "—"} of ${query.data?.subscriptions_requested ?? "—"} subscriptions read`} />
-      <KpiTile label="Over budget" value={query.isError ? "Unavailable" : all.filter(b => budgetStatus(b) === "over").length} loading={query.isPending} /><KpiTile label="Near limit" value={query.isError ? "Unavailable" : all.filter(b => budgetStatus(b) === "near").length} loading={query.isPending} /><KpiTile label="Counter unavailable" value={query.isError ? "Unavailable" : all.filter(b => budgetStatus(b) === "unknown").length} loading={query.isPending} /></div>
+    {demoNote && <GovernNotice warning>{demoNote}</GovernNotice>}
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><KpiTile label="Budgets read" value={query.isError ? "Unavailable" : query.isPending ? "…" : demo ? "Not in demo" : all.length} hint={demo ? "Live budget reads are disabled" : `${query.data?.subscriptions_read ?? "—"} of ${query.data?.subscriptions_requested ?? "—"} subscriptions read`} />
+      <KpiTile label="Over budget" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "over").length} loading={query.isPending} /><KpiTile label="Near limit" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "near").length} loading={query.isPending} /><KpiTile label="Counter unavailable" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "unknown").length} loading={query.isPending} /></div>
     {query.data?.error || query.data?.partial ? <GovernNotice warning>{query.data.error || "Budget reads are incomplete."} An empty list does not prove there are no budgets.</GovernNotice> : null}
-    {compose && <BudgetComposer scope={scope} existing={all} demo={query.data?.demo_mode === true} />}
+    {compose && <BudgetComposer scope={scope} existing={all} demo={demo} demoNote={demoNote} />}
     <Card className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4"><GovernField label="Search budgets"><input type="search" className={governInput} value={q} onChange={e => setQ(e.target.value)} /></GovernField>
       <GovernSelect label="State" value={status} onChange={setStatus} options={["attention", "over", "near", "ok", "unknown"]} />
       <GovernSelect label="Native currency" value={currency} onChange={setCurrency} options={all.map(b => b.currency || "__missing")} />
       <GovernSelect label="Exact tag key" value={tag} onChange={setTag} options={all.flatMap(b => b.tag_filter?.map(([key]) => key) ?? [])} /></Card>
-    {query.isError ? <GovernError error={query.error} retry={() => void query.refetch()} /> : query.isPending ? <GovernLoading /> : <DataTable data={rows} columns={columns} rowKey={b => `${b.subscription_id}:${b.name}`} height={390} empty={query.data?.partial || query.data?.error ? "Unavailable subscriptions may contain budgets. Retry the read." : "No budgets match this scope and filters."} />}
+    {query.isError ? <GovernError error={query.error} retry={() => void query.refetch()} /> : query.isPending ? <GovernLoading /> : <DataTable data={rows} columns={columns} rowKey={b => `${b.subscription_id}:${b.name}`} height={390} empty={query.data?.partial || query.data?.error ? "Unavailable subscriptions may contain budgets. Retry the read." : demoNote || "No budgets match this scope and filters."} />}
     {selected && <Card className="space-y-4 p-5"><div className="flex items-center justify-between gap-2"><h3 className="font-semibold">{selected.name}</h3><Button onClick={() => setPicked(null)}>Close details</Button></div>
       <GovernLink url={budgetPortal(selected)} /><div className="grid gap-3 sm:grid-cols-3"><KpiTile label="Azure-reported spend" value={nativeMoney(selected.current_spend, selected.currency)} /><KpiTile label="Remaining" value={nativeMoney(selected.remaining, selected.currency)} /><KpiTile label="Usage" value={selected.percent_used == null ? "Unknown" : `${selected.percent_used}%`} /></div>
       {selected.percent_used != null && <div role="meter" aria-label={`${selected.name} usage`} aria-valuenow={selected.percent_used} aria-valuemin={0} aria-valuemax={Math.max(100, selected.percent_used)} className="h-2 overflow-hidden rounded-full bg-surface-2"><div className="h-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, selected.percent_used))}%` }} /></div>}

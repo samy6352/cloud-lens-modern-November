@@ -11,6 +11,7 @@ import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
 import {
   resourcesQuery,
+  resourceCurrenciesQuery,
   type ResourceChange,
   type ResourcePage,
   type ResourceQuery,
@@ -130,9 +131,12 @@ export function ResourcesPage() {
     change: "",
   });
   // Any change of what matches starts again from the first page.
-  useEffect(() => setState((s) => ({ ...s, page: 1 })), [q, search.month, search.scope]);
+  useEffect(() => setState((s) => ({ ...s, page: 1 })), [q]);
+  useEffect(() => setState((s) => ({ ...s, page: 1, currency: "" })), [search.month, search.scope]);
 
   const query = useQuery({ ...resourcesQuery(search, { ...state, q }), placeholderData: keepPreviousData });
+  const currencyInventory = useQuery(resourceCurrenciesQuery(search));
+  const currencies = currencyInventory.data?.currencies ?? [];
   const data = query.data;
   const columns = useColumns();
   // Mixed currencies are never added together; like Billing, the header totals the
@@ -172,12 +176,12 @@ export function ResourcesPage() {
           )
         }
         actions={
-          data && data.currencies.length > 1 ? (
+          currencies.length > 1 || state.currency ? (
             <Segmented
               label="Billing currency"
               value={state.currency}
               onChange={(v) => set({ currency: v })}
-              options={[{ value: "", label: "All" }, ...data.currencies.map((c) => ({ value: c, label: c.toUpperCase() }))]}
+              options={[{ value: "", label: "All" }, ...currencies.map((c) => ({ value: c, label: c.toUpperCase() }))]}
             />
           ) : null
         }

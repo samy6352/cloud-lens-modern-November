@@ -25,6 +25,8 @@ from typing import Any, Literal
 
 import httpx
 
+from .http_client import async_client
+
 log = logging.getLogger("cloudlens.cost")
 
 ARM = "https://management.azure.com"
@@ -413,7 +415,7 @@ class Azure:
         if "/providers/Microsoft.CostManagement/" in url:
             headers["ClientType"] = CLIENT_TYPE
 
-        async with _CONCURRENCY, httpx.AsyncClient(timeout=90) as client:
+        async with _CONCURRENCY, async_client(timeout=90) as client:
             for attempt in range(attempts):
                 r = await client.request(method, url, json=json_body, params=params,
                                          headers=headers)

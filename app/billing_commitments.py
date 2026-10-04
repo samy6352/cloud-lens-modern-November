@@ -24,6 +24,7 @@ import httpx
 from . import cost
 from .azure_updates import read_response
 from .commitments import get_commitments
+from .http_client import async_client
 
 API_VERSION = "2022-11-01"
 SOURCE_DOCS = [
@@ -227,7 +228,7 @@ async def _get_metadata(url: str, *, params: dict | None = None) -> dict:
         raise ValueError("Unsupported commitment metadata URL")
     token = await cost.azure._bearer(url)
     async with (
-        httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=5), follow_redirects=False) as client,
+        async_client(timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=5), follow_redirects=False) as client,
         client.stream("GET", url, params=params, headers={"Authorization": f"Bearer {token}"}) as response,
     ):
         payload = await read_response(response, 4 * 1024 * 1024)

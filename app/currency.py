@@ -36,7 +36,7 @@ import os
 import time
 from typing import Any
 
-import httpx
+from .http_client import async_client
 
 log = logging.getLogger("cloudlens.currency")
 
@@ -100,7 +100,7 @@ async def _fetch() -> dict[str, Any]:
     source = None
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with async_client(timeout=15) as client:
             r = await client.get(PRIMARY, params={"base": "USD"})
             if r.status_code == 200:
                 body = r.json()
@@ -115,7 +115,7 @@ async def _fetch() -> dict[str, Any]:
     missing = [c for c in OFFERED if c not in rates and c != "USD"]
     if missing:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with async_client(timeout=15) as client:
                 r = await client.get(FALLBACK)
                 if r.status_code == 200:
                     body = r.json()

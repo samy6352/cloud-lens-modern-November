@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -100,12 +101,110 @@ async def _token() -> str:
     return "token"
 
 
+@pytest.mark.asyncio
+async def test_client_construction_yields_and_preserves_caller_context(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    observed = {}
+
+    class Client(_Client):
+        def __init__(self, **kwargs):
+            observed.update(constructor_thread=threading.get_ident(),
+                            caller=cost._caller_id.get(), kwargs=kwargs)
+            started.set()
+            release.wait(2)
+
+        async def request(self, *args, **kwargs):
+            observed["request_thread"] = threading.get_ident()
+            return await super().request(*args, **kwargs)
+
+    monkeypatch.setattr(cost.httpx, "AsyncClient", Client)
+    token = cost._caller_id.set("caller-isolated")
+    request = asyncio.create_task(cost.Azure().request("GET", URL, cache=False))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert not release.is_set() and not request.done()
+        assert observed["constructor_thread"] != loop_thread
+        release.set()
+        assert await request == {"value": 1}
+        assert observed["caller"] == "caller-isolated"
+        assert observed["kwargs"] == {"timeout": 90}
+        assert observed["request_thread"] == loop_thread
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+        cost._caller_id.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_client_construction_closes_without_network_call(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    closed = asyncio.Event()
+
+    class Client(_Client):
+        def __init__(self, **kwargs):
+            started.set()
+            release.wait(2)
+
+        async def aclose(self):
+            closed.set()
+
+    async def read():
+        async with cost.async_client(timeout=90) as client:
+            await client.request("GET", URL)
+
+    monkeypatch.setattr(cost.httpx, "AsyncClient", Client)
+    request = asyncio.create_task(read())
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        request.cancel()
+        await asyncio.sleep(0)
+        request.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert closed.is_set()
+        assert _Client.calls == []
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_offloaded_client_preserves_transport_options_and_closes_on_failure(monkeypatch):
+    options = {"timeout": cost.httpx.Timeout(30, connect=5), "follow_redirects": False,
+               "verify": True, "trust_env": True}
+    observed = {}
+    loop_thread = threading.get_ident()
+
+    class Client(_Client):
+        def __init__(self, **kwargs):
+            observed["options"] = kwargs
+
+        async def __aexit__(self, *exc):
+            observed.update(exit_thread=threading.get_ident(), exception=exc[0])
+
+    monkeypatch.setattr(cost.httpx, "AsyncClient", Client)
+    with pytest.raises(RuntimeError, match="read failed"):
+        async with cost.async_client(**options):
+            raise RuntimeError("read failed")
+    assert observed["options"] == options
+    assert observed["exit_thread"] == loop_thread
+    assert observed["exception"] is RuntimeError
+
+
 async def _settle() -> None:
     """Let any background refresh finish before asserting on it."""
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if not cost._refreshing:
-            return
+    tasks = tuple(cost._refresh_tasks)
+    if tasks:
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+
+
+async def _wait_calls(count: int) -> None:
+    async def wait():
+        while len(_Client.calls) < count:
+            await asyncio.sleep(0.001)
+    await asyncio.wait_for(wait(), 2)
 
 
 def _age(seconds: float) -> None:
@@ -164,8 +263,7 @@ async def test_concurrent_cold_readers_cause_one_call():
 
     readers = [asyncio.create_task(azure.request("GET", URL)) for _ in range(10)]
     # Let every one of them reach the network before any of them is allowed to finish.
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _wait_calls(1)
     _Client.block.set()
 
     assert await asyncio.gather(*readers) == [{"value": 1}] * 10
@@ -180,8 +278,7 @@ async def test_one_reader_giving_up_does_not_abort_the_others():
 
     leaves = asyncio.create_task(azure.request("GET", URL))
     stays = asyncio.create_task(azure.request("GET", URL))
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _wait_calls(1)
 
     leaves.cancel()
     _Client.block.set()
@@ -202,15 +299,13 @@ async def test_a_reader_after_a_write_does_not_join_the_fetch_before_it():
     _Client.block = asyncio.Event()
 
     before = asyncio.create_task(azure.request("GET", URL))
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _wait_calls(1)
 
     cost.forget("Microsoft.CostManagement")
     _Client.payload = {"value": 2}
 
     after = asyncio.create_task(azure.request("GET", URL))
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _wait_calls(2)
     _Client.block.set()
 
     assert await before == {"value": 1}
@@ -233,8 +328,7 @@ async def test_concurrent_cold_readers_are_not_shared_between_callers():
 
     alice = asyncio.create_task(read_as("alice"))
     bob = asyncio.create_task(read_as("bob"))
-    for _ in range(50):
-        await asyncio.sleep(0)
+    await _wait_calls(2)
     _Client.block.set()
 
     await asyncio.gather(alice, bob)

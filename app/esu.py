@@ -26,7 +26,7 @@ import re
 from datetime import date
 from typing import Any
 
-import httpx
+from .http_client import async_client
 
 log = logging.getLogger("cloudlens.esu")
 
@@ -99,7 +99,7 @@ async def esu_prices() -> dict[str, float]:
     params = {"currencyCode": "'USD'", "$filter": "contains(productName,'Extended Security')"}
     rates: dict[str, float] = {}
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with async_client(timeout=30) as client:
             r = await client.get(PRICES_URL, params=params)
             r.raise_for_status()
             items = r.json().get("Items", [])

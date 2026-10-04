@@ -264,6 +264,10 @@ export const resourcesQuery = (s: Scope, r: ResourceQuery) =>
       }),
   });
 
+/** Currency facets for this exact scope/period, independent of table filters and pages. */
+export const resourceCurrenciesQuery = (s: Scope) =>
+  resourcesQuery(s, { page: 1, pageSize: 1, sort: "cost", desc: true, q: "", currency: "", change: "" });
+
 export interface AnomalyIncident {
   id: string;
   dimension: string;
