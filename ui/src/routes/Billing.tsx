@@ -183,7 +183,7 @@ export function BillingPage() {
       <Card className="mt-4">
         <CardHeader
           title={DIMENSIONS.find((d) => d.value === dimension)!.label}
-          subtitle="Click a column to sort. Every row is here; only the visible ones are drawn."
+          subtitle={<><span className="sm:hidden">Use Sort to reorder.</span><span className="hidden sm:inline">Click a column to sort.</span> Every row is here; only the visible ones are drawn.</>}
           actions={
             <label className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
