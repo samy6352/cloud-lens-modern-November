@@ -11,6 +11,12 @@ incur charges, including a web app, database, private storage and an AI service.
 [Full documentation](Cloudlens-Documentation.Md) |
 [Detailed deployment guide](infra/README.md)
 
+For local engineering/recovery rehearsals, use the
+[explicit, read-only-by-default launcher](infra/README.md#reproducible-local-startup).
+Runtime versions are pinned in `requirements.txt`; editable direct dependencies are
+in `requirements.in`. A new customer rehearsal can request `-InitialHistoryMonths 1`
+instead of the normal three-month initial history.
+
 ## Before you start
 
 No programming is required, but Azure permissions and service availability matter.
