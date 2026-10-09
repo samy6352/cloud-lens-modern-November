@@ -55,6 +55,14 @@ class Packaging(unittest.TestCase):
             capture_output=True, text=True, timeout=60,
         )
 
+    def verify_archive(self, kind, version=""):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools/verify_package.py"), str(self.archive),
+             "--kind", kind, "--version", version],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_includes_untracked_modules_excludes_state_and_records_hashes(self):
         result = self.package()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -71,6 +79,7 @@ class Packaging(unittest.TestCase):
                 content = archive.read(entry["path"])
                 self.assertEqual(entry["sha256"], hashlib.sha256(content).hexdigest())
                 self.assertEqual(entry["bytes"], len(content))
+        self.verify_archive("app-service-runtime")
 
     def test_missing_lazy_module_refuses_package(self):
         (self.root / "web/assets/dashboard-billing.js").unlink()
@@ -128,9 +137,10 @@ class Packaging(unittest.TestCase):
 
     def source_fixture(self):
         for name in (
-            "README.md", "Cloudlens-Documentation.Md", "requirements-dev.txt", "pyproject.toml",
+            "README.md", "Cloudlens-Documentation.Md", ".env.example",
+            "requirements.in", "requirements-dev.txt", "pyproject.toml",
             "ingest.py", "verify_warehouse.py",
-            "tools/package.ps1", "tools/validate_package.py", "infra/README.md",
+            "tools/package.ps1", "tools/validate_package.py", "tools/verify_package.py", "tools/start_local.py", "infra/README.md",
             "infra/install.ps1", "infra/deploy.ps1", "infra/preflight.ps1",
             "infra/deployment-checks.ps1", "infra/cost-access.ps1", "infra/storage-naming.ps1",
             "infra/focus-exports.ps1", "infra/grant-cost-access.ps1", "infra/main.bicep",
@@ -163,7 +173,8 @@ class Packaging(unittest.TestCase):
         with zipfile.ZipFile(self.archive) as archive:
             names = set(archive.namelist())
             self.assertTrue({"infra/install.ps1", "infra/main.bicep", "app/main.py",
-                             "tools/package.ps1", "tools/validate_package.py",
+                             "tools/package.ps1", "tools/validate_package.py", "tools/verify_package.py",
+                             "tools/start_local.py", "requirements.in", ".env.example",
                              "ui/package-lock.json", "ui/src/main.tsx", "web/v2/index.html",
                              "ui/public/favicon.svg", "ui/public/theme.js"} <= names)
             manifest = json.loads(archive.read("release-manifest.json"))
@@ -176,6 +187,7 @@ class Packaging(unittest.TestCase):
                 self.assertNotIn(b"must-not-ship", content)
                 self.assertEqual(entry["sha256"], hashlib.sha256(content).hexdigest())
                 self.assertEqual(entry["bytes"], len(content))
+        self.verify_archive("installer-source", "reviewed-abc123")
 
     def test_installer_source_requires_version_helpers_and_built_ui(self):
         self.source_fixture()

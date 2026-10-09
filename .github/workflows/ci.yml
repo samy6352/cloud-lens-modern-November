@@ -53,7 +53,7 @@ jobs:
           node-version: "22"
       - run: pip install -r requirements-dev.txt
       - name: Verify database-free tooling
-        run: python -m pytest tests/test_conftest.py tests/test_packaging.py tests/test_deployment.py tests/test_preflight_checks.py -q
+        run: python -m pytest tests/test_conftest.py tests/test_packaging.py tests/test_package_integrity.py tests/test_runtime_requirements.py tests/test_ingest_policy.py tests/test_local_start.py tests/test_install.py tests/test_deployment.py tests/test_preflight_checks.py -q
 
       # Both runner images ship PostgreSQL with the service stopped, so it is started
       # here rather than pulled as a service container. A container would have been
@@ -123,3 +123,20 @@ jobs:
       - name: Build the customer application package
         shell: pwsh
         run: ./tools/package.ps1 -Destination (Join-Path $env:GITHUB_WORKSPACE '.artifacts/cloudlens-app.zip')
+      - name: Build and verify the customer installer source
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE '.artifacts/cloudlens-source.zip'
+          ./tools/package.ps1 -InstallerSource -Version $env:GITHUB_SHA -SkipUiBuild -Destination $source
+          if ($LASTEXITCODE -ne 0) { throw 'Installer source packaging failed.' }
+          python tools/verify_package.py $source --kind installer-source --version $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Installer source verification failed.' }
+          python tools/verify_package.py .artifacts/cloudlens-app.zip --kind app-service-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime package verification failed.' }
+      - name: Retain release candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudlens-packages-${{ github.sha }}
+          path: .artifacts/cloudlens-*.zip
+          if-no-files-found: error
+          retention-days: 30

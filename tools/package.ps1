@@ -100,9 +100,10 @@ $requiredFiles = @('app/__init__.py', 'app/main.py', 'web/index.html', 'web/logi
 if ($builtUi -or $InstallerSource) { $requiredFiles += 'web/v2/index.html' }
 if ($InstallerSource) {
     $sourceFiles = @(
-        'README.md', 'Cloudlens-Documentation.Md', 'requirements-dev.txt', 'pyproject.toml',
+        'README.md', 'Cloudlens-Documentation.Md', '.env.example',
+        'requirements.in', 'requirements-dev.txt', 'pyproject.toml',
         'ingest.py', 'verify_warehouse.py',
-        'tools/package.ps1', 'tools/validate_package.py',
+        'tools/package.ps1', 'tools/validate_package.py', 'tools/verify_package.py', 'tools/start_local.py',
         'infra/README.md', 'infra/install.ps1', 'infra/deploy.ps1',
         'infra/preflight.ps1', 'infra/deployment-checks.ps1',
         'infra/cost-access.ps1', 'infra/storage-naming.ps1',
