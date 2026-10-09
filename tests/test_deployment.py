@@ -40,6 +40,11 @@ function global:az {
     if ($call.StartsWith('deployment group list') -and $scenario -eq 'storage-preview') { return '[]' }
     if ($call.StartsWith('storage account check-name')) { return '{"nameAvailable":true}' }
     if ($call.StartsWith('deployment sub what-if')) {
+        if ($scenario -eq 'history-preview') {
+            if (-not $call.Contains('initialHistoryMonths=1')) { throw 'Initial history did not reach the template' }
+            Write-Host 'ONE_MONTH_HISTORY_IN_TEMPLATE'
+            return
+        }
         if ($scenario -eq 'storage-preview') {
             if (-not $call.Contains('storageAccountName=cloudlensstrv0913')) { throw 'Preview would rename storage' }
             Write-Host 'EXISTING_STORAGE_PRESERVED_IN_PREVIEW'
@@ -202,6 +207,15 @@ class DeploymentFailures(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("-ManagedExports needs -EnableExportManagement", refused.stdout + refused.stderr)
         self.assertNotIn("MANAGED_EXPORTS_IN_TEMPLATE", refused.stdout)
+
+    def test_initial_history_reaches_template_before_any_deployment(self):
+        result = self.run_deploy("history-preview", "-WhatIf -SkipEntra -InitialHistoryMonths 1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ONE_MONTH_HISTORY_IN_TEMPLATE", result.stdout)
+        for months in (0, 14):
+            result = self.run_deploy("history-preview", f"-WhatIf -SkipEntra -InitialHistoryMonths {months}")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("ONE_MONTH_HISTORY_IN_TEMPLATE", result.stdout)
 
     def test_failed_role_grant_stops_deployment(self):
         result = self.run_deploy("role-failure", "-SkipCode -SkipEntra")

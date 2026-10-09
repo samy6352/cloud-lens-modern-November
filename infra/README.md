@@ -38,7 +38,7 @@ It prints the URL and the setup-progress page (`/v2/admin/setup`). Re-running up
 
 Managed exports (`CLOUDLENS_MANAGED_EXPORTS=true`, the `managedExports` template parameter): the
 installer creates one **paused** Parquet FOCUS export per monitored subscription **as you**, then on
-first start the app adopts them and imports the current month plus the previous 12, newest month
+first start the app adopts them and imports three calendar months by default, newest month
 first, at most `CLOUDLENS_EXPORT_CONCURRENCY` Azure runs at a time. Why the split: Cost Management
 lets the app's managed identity *run* an export but not *create or update* one — creation needs a
 caller it will let grant the export's own identity a role on the storage account, and a service
@@ -48,6 +48,16 @@ Reader, Cost Management Reader and Cost Management Contributor for the app ident
 scope (once at the management group when `-Scope` is one). A subscription that appears later shows
 the one operator command (`infra/focus-exports.ps1 … -Paused`) on the setup page, and setup
 continues by itself within minutes of it being run.
+
+Use `-InitialHistoryMonths 1` on `install.ps1` or `deploy.ps1` for an initial
+current-month-only rehearsal; accepted values are 1-13 and the default remains 3.
+The template carries this as `INGEST_MONTHS` for automatic startup, login backfill,
+quick refresh and managed setup. A persisted administrator choice on Setup still
+takes precedence for managed history; a smaller deployment setting does not cancel
+existing jobs, remove loaded rows or undo that choice. Later correction runs can
+cover older periods. This setting is not a total data-volume or spending cap.
+Configured SAS or discovered legacy exports are imported as complete reports and
+can include older dates; use managed-export setup for a month-bounded new rehearsal.
 
 Other options: `-EntraClientId <id>` adopts an app registration an identity team created;
 `-LocalSignIn` skips Entra entirely: the installer generates a local administrator password, gives
@@ -72,11 +82,28 @@ packaging). The root `release-manifest.json` labels the artifact `installer-sour
 supplied version and each file's size/SHA-256. Retain the separately reported ZIP SHA-256 and verify
 both the ZIP and extracted file hashes before use. A version label is not a signature.
 
+Verify a downloaded or locally generated ZIP without extracting or starting the app:
+
+```powershell
+python .\tools\verify_package.py <source-zip-path> --kind installer-source --version <release-label> --sha256 <trusted-zip-SHA256>
+```
+
+The verifier checks every payload size and hash, exact manifest coverage, required
+files and safe, unique archive paths. Obtain the expected ZIP hash independently;
+an internally consistent manifest alone does not establish authenticity. CI retains
+verified runtime and installer-source candidates for 30 days; these are not
+production approvals. Keep approved customer releases in durable release storage,
+not a temporary agent-session directory.
+
 The ZIP contains `app/main.py` beside `infra/install.ps1`, all Bicep installer helpers/modules,
 classic web assets, the tested v3 build, buildable UI source and its dependency lock, Python
-requirements and the runtime packager. It excludes configuration/credentials, user data, database
-files, test/QA evidence, Git history, environments and installed dependencies. Python requirements
-retain their existing lower bounds; they are **not** a fully locked Python environment.
+requirements, a non-secret `.env.example` template and the runtime packager.
+It excludes private configuration/credentials, user data, database
+files, test/QA evidence, Git history, environments and installed dependencies.
+`requirements.txt` now pins the runtime dependency graph for Windows and Linux,
+including platform-specific dependencies. `requirements.in` retains the editable
+direct requirements. These are version pins, not a wheel-hash lock; Python, operating
+system, package-index availability and native wheels remain installation prerequisites.
 
 Extract into a new customer-owned folder; from its root follow this guide's prerequisite/preflight
 checks and run `.\infra\install.ps1 -Location <approved-region>` only after approving charges and
@@ -84,6 +111,49 @@ all provisioning/identity/export/import side effects. An independently obtained 
 can also consume this ZIP with `-Source <local-zip-path>`; a script already inside a valid checkout
 uses that checkout instead. Installation still needs Azure login/access and outbound dependency
 downloads; the bundle does not make deployment offline. Cloud Shell needs the tools above too.
+
+## Reproducible local startup
+
+Install the pinned runtime dependencies into a dedicated Python 3.11+ environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+.\.venv\Scripts\python.exe .\tools\start_local.py --env-file <protected-env-file> --port 8101 --check
+.\.venv\Scripts\python.exe .\tools\start_local.py --env-file <protected-env-file> --port 8101
+```
+
+Copy `.env.example` to a private, Git-ignored file and supply real values.
+The file must explicitly provide `PGHOST` and `PROJECT_ENDPOINT`, plus the
+deployment's remaining authentication/database/model settings. Use literal dotenv
+values; interpolation, malformed lines, duplicate keys and valueless keys are refused.
+The launcher does not copy inherited application settings or credentials. It preserves
+OS/proxy/certificate settings, loads this file, refuses an occupied port and launches
+one Uvicorn worker on loopback. The launcher itself prints no configuration values
+or credentials. Child application logging is unchanged: explicitly configure
+authentication to avoid the existing first-run generated-password log.
+`--check` checks Uvicorn availability but does not import `app.main`, start the
+application lifespan or contact Azure/PostgreSQL.
+
+Default review mode overrides configured ingestion, refresh, login backfill, managed
+exports and warming to off and applies the application's read-only mutation policy.
+That policy is not PostgreSQL read-only enforcement: local authentication state and
+application caches can still write. Use an isolated database/data directory for recovery
+or failure rehearsals. Disabling snapshot caching also means this mode is not a production
+performance benchmark. `--allow-writes` explicitly honours the file's worker/write
+settings and is only for an approved isolated runtime. This is a launch recipe, not an
+OS service, automatic restart supervisor or permission to stop an existing listener.
+
+For a reviewed lock refresh, use uv 0.12.19 (development tooling only):
+
+```powershell
+uv pip compile .\requirements.in --universal --python-version 3.11 --no-annotate --output-file .\requirements.txt
+```
+
+The Windows/Linux resolver environments are defined in `pyproject.toml`. Review
+version changes and qualify the regenerated lock before publishing. Runtime and
+App Service installation continue to use `pip install -r requirements.txt`; uv
+is not required by a customer deployment.
 
 Without `-InstallerSource`, `tools/package.ps1` produces an `app-service-runtime` ZIP that
 intentionally omits `infra/` and UI source: **do not pass that ZIP to installer `-Source`.**

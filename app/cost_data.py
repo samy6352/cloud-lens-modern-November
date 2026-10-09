@@ -9,7 +9,12 @@ import re
 from datetime import UTC, date, datetime, timedelta
 
 from . import focus_workflow, jobs, schedules
-from .job_policy import read_only_mode, require_writable
+from .job_policy import (
+    DEFAULT_HISTORY_MONTHS,
+    MANAGED_HISTORY_MONTHS,
+    read_only_mode,
+    require_writable,
+)
 
 CADENCES = {
     "Daily": "Check daily at 02:00 UTC; refresh 7 recent days. After downtime, overlap the previous successful window. Starting the month after setup, reconcile 90 days for older corrections on the first monthly check on or after the 7th.",
@@ -195,8 +200,6 @@ def history_window(start: str | None = None, end: str | None = None,
 # Earlier months are optional (an administrator adds them from Setup), back to the current
 # month plus the twelve before it -- the history Cost Management generates for an export, one
 # calendar month per run.
-DEFAULT_HISTORY_MONTHS = 3
-MANAGED_HISTORY_MONTHS = 13
 # Twelve whole months plus a current month of at most 31 days.
 MANAGED_MAX_DAYS = 397
 

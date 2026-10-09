@@ -101,6 +101,11 @@ param pgStatementTimeout string = '25s'
 @description('Ingest cost data on first boot when the warehouse is empty.')
 param autoIngest bool = true
 
+@description('Calendar months to ingest automatically before an administrator chooses earlier history. Current month counts as one.')
+@minValue(1)
+@maxValue(13)
+param initialHistoryMonths int = 3
+
 @description('Run the daily refresh.')
 param autoRefresh bool = true
 
@@ -186,6 +191,7 @@ module stack 'modules/stack.bicep' = {
     pgWorkMem: pgWorkMem
     pgStatementTimeout: pgStatementTimeout
     autoIngest: autoIngest
+    initialHistoryMonths: initialHistoryMonths
     autoRefresh: autoRefresh
     snapshotWarmingEnabled: snapshotWarmingEnabled
     authAllowLocal: authAllowLocal

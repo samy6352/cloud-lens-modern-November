@@ -111,6 +111,9 @@ param(
     # mix them into a restored estate. Production runs -AutoIngest:$false.
     [bool]$AutoIngest = $true,
 
+    [ValidateRange(1, 13)]
+    [int]$InitialHistoryMonths = 3,
+
     [bool]$AutoRefresh = $true,
 
     [bool]$SnapshotWarmingEnabled = $true,
@@ -503,6 +506,7 @@ $templateParameters = @(
     "pgWorkMem=$PgWorkMem"
     "pgStatementTimeout=$PgStatementTimeout"
     "autoIngest=$($AutoIngest.ToString().ToLower())"
+    "initialHistoryMonths=$InitialHistoryMonths"
     "autoRefresh=$($AutoRefresh.ToString().ToLower())"
     "snapshotWarmingEnabled=$($SnapshotWarmingEnabled.ToString().ToLower())"
     "authAllowLocal=$($AuthAllowLocal.ToString().ToLower())"

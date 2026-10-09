@@ -174,6 +174,26 @@ def test_managed_history_defaults_to_three_months_and_allows_up_to_thirteen():
     assert cost_data.requested_from({"history": {"from": "2026-07-01"}, "extended_from": "2025-10-01"}) == "2025-10-01"
 
 
+def test_one_month_initial_history_limits_managed_setup_and_preserves_admin_choice(azure, monkeypatch):
+    from app import bootstrap
+
+    monkeypatch.setenv("INGEST_MONTHS", "1")
+    first = asyncio.run(bootstrap.run_once())
+    assert first["error"] is None and first["history_months"] == 1
+    job = azure.jobs.get(first["job_id"])
+    windows = [task for task in job["tasks"] if task.get("from")]
+    assert len(windows) == 3
+    assert {task["from"][:7] for task in windows} == {_month(0)[:7]}
+    grid = bootstrap.progress([{"id": S1, "name": "One"}], admin=True)
+    assert grid["history_months"] == {"chosen": 1, "default": 1, "max": 13}
+    assert grid["months"] == [_month(0)[:7]]
+    assert bootstrap.set_history_months(6, "Admin") == 6
+    monkeypatch.setenv("INGEST_MONTHS", "1")
+    assert bootstrap.history_months() == 6
+    assert bootstrap.progress([{"id": S1, "name": "One"}])["history_months"] == {
+        "chosen": 6, "default": 1, "max": 13}
+
+
 def test_subscription_listing_follows_next_link_and_refuses_to_leave_arm(azure, monkeypatch):
     from app import cost
 

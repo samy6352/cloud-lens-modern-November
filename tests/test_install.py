@@ -79,7 +79,7 @@ STUB_DEPLOY = r"""
 param(
     [string]$Location, [string]$ResourceGroup, [string]$PostgresSku, [int]$PostgresStorageGb,
     [string]$AppServicePlanSku, [switch]$SkipFocusExports, [switch]$EnableExportManagement,
-    [bool]$ManagedExports, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup,
+    [bool]$ManagedExports, [int]$InitialHistoryMonths, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup,
     [string]$EntraClientId, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
 )
 $bound = [ordered]@{}
@@ -188,6 +188,7 @@ exit $code
             "Location": "centralindia", "ResourceGroup": "rg-cloudlens",
             "PostgresSku": "Standard_D2ds_v5", "PostgresStorageGb": 128, "AppServicePlanSku": "B2",
             "SkipFocusExports": True, "EnableExportManagement": True, "ManagedExports": True,
+            "InitialHistoryMonths": 3,
             "CostScopeSubscriptions": [HOST]})
         # Only what is missing: two hosting providers and the export provider.
         self.assertEqual(self.registered(recorded), sorted([
@@ -213,6 +214,21 @@ exit $code
         self.assertIn("3 subscription(s) today", result.stdout)
         self.assertEqual(sorted(self.exports["Subscriptions"]), sorted([S1, S2, S3]))
         self.assertTrue(self.exports["Paused"])
+
+    def test_initial_history_is_bounded_and_passed_to_deployment(self):
+        for months in (1, 13):
+            with self.subTest(months=months):
+                result, _, deploy = self.install(f"-InitialHistoryMonths {months} -WhatIf")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(deploy["InitialHistoryMonths"], months)
+                self.assertIn(f"{months} calendar month(s)", result.stdout)
+        for months in (0, 14):
+            with self.subTest(months=months):
+                result, recorded, deploy = self.install(f"-InitialHistoryMonths {months}")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(recorded["writes"], [])
+                self.assertEqual(recorded["calls"], [])
+                self.assertIsNone(deploy)
 
     def test_subscription_scope_accepts_both_spellings(self):
         for scope in (OTHER, f"/subscriptions/{OTHER}/"):

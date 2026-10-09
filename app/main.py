@@ -43,6 +43,7 @@ try:
 except ImportError:  # pragma: no cover - env vars can always be exported instead
     pass
 
+from . import web_v2
 from .agent import CostAgent
 from .assets import PrecompressedStatic, stamp_asset_urls
 from .auth import COOKIE, Auth, User
@@ -50,6 +51,7 @@ from .canonical import CanonicalOriginMiddleware, validate_public_base_url
 from .entra import needs_admin_consent as entra_needs_consent
 from .entra import normalise_email as entra_email
 from .entra import sign as entra_sign
+from .job_policy import initial_history_months
 from .snapshot_cache import (
     CacheContext,
     SnapshotCache,
@@ -59,7 +61,6 @@ from .snapshot_cache import (
     install_snapshot_routes,
 )
 from .store import PoolBusy
-from . import web_v2
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("cloudlens")
@@ -299,7 +300,7 @@ async def _daily_refresh() -> None:
             sas = os.getenv("COST_EXPORT_SAS_URL", "").strip()
             if sas:
                 task = await _start_ingest_task(functools.partial(
-                    _run_ingest, int(os.getenv("INGEST_MONTHS", "3"))),
+                    _run_ingest, initial_history_months()),
                     kind="automatic", identity="workload")
                 if task is None:
                     continue
@@ -313,7 +314,7 @@ async def _daily_refresh() -> None:
                 from . import cost
                 subs = (await cost.list_subscriptions())["subscriptions"]
                 task = await _start_ingest_task(functools.partial(
-                    _refresh_primary, subs, months=int(os.getenv("INGEST_MONTHS", "3"))),
+                    _refresh_primary, subs, months=initial_history_months()),
                     scope=[s["id"] for s in subs], kind="automatic", identity="workload")
                 if task is None:
                     continue
@@ -771,6 +772,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.snapshot_bootstrap_ready = False
     app.state.snapshot_bootstrap_error = None
     snapshot_warming_enabled()
+    initial_history_months()
     if not os.getenv("PROJECT_ENDPOINT"):
         raise RuntimeError("PROJECT_ENDPOINT is not set. See README.md.")
     from . import azure_updates, backfill, currency, onboarding, service_health
@@ -840,7 +842,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if (not read_only_mode() and os.getenv("AUTO_INGEST", "true").lower() != "false"
                 and warehouse.summary()["rows"] == 0):
             await _start_ingest_task(functools.partial(
-                _run_ingest, int(os.getenv("INGEST_MONTHS", "3"))),
+                _run_ingest, initial_history_months()),
                 kind="automatic", identity="workload")
 
         # Warm slow dependencies without delaying startup. MSAL does blocking tenant discovery.
@@ -1829,7 +1831,7 @@ async def subscriptions(request: Request) -> JSONResponse:
         try:
             async with as_user(user):
                 if not read_only_mode():
-                    backfill.schedule(mine, months=int(os.getenv("INGEST_MONTHS", "3")),
+                    backfill.schedule(mine, months=initial_history_months(),
                                       have=have)
         except HTTPException:
             # An expired Azure session must not fail the picker; the page still renders from

@@ -54,6 +54,10 @@ param(
 
     [string]$ResourceGroup = 'rg-cloudlens',
 
+    # Current month counts as one. Earlier history remains an explicit administrator choice.
+    [ValidateRange(1, 13)]
+    [int]$InitialHistoryMonths = 3,
+
     # An app registration an identity team created (single-tenant, public client). See infra/README.md.
     [string]$EntraClientId = '',
 
@@ -206,6 +210,7 @@ Info "hosting      : $($account.name) ($hosting)"
 Info "tenant       : $($account.tenantId)"
 Info "source       : $root"
 Info "size         : $Size -- $($sizing.Rows): PostgreSQL $($sizing.PostgresSku), $($sizing.PostgresStorageGb) GB; App Service $($sizing.AppServicePlanSku)"
+Info "initial data : $InitialHistoryMonths calendar month(s), newest first"
 
 $target = Resolve-CloudLensScope $Scope $hosting
 Step "Resolving the monitored scope ($($target.Path))"
@@ -279,6 +284,7 @@ $deploy = [ordered]@{
     SkipFocusExports       = $true
     EnableExportManagement = $true
     ManagedExports         = $true
+    InitialHistoryMonths   = $InitialHistoryMonths
 }
 if ($target.Kind -eq 'managementGroup') { $deploy.CostScopeManagementGroup = $target.Id }
 else { $deploy.CostScopeSubscriptions = @($target.Id) }

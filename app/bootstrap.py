@@ -42,7 +42,7 @@ from typing import Any
 from uuid import uuid4
 
 from . import cost_data, focus_workflow, jobs, schedules
-from .job_policy import read_only_mode, require_writable
+from .job_policy import initial_history_months, read_only_mode, require_writable
 
 log = logging.getLogger("cloudlens.bootstrap")
 
@@ -89,7 +89,7 @@ def _next_pass(result: dict[str, Any]) -> int:
 
 
 def history_months() -> int:
-    """Calendar months managed setup imports: the administrator's choice, else the default (3)."""
+    """Use the persisted administrator choice, else the deployment's initial history."""
     from .warehouse import warehouse
 
     try:
@@ -98,7 +98,7 @@ def history_months() -> int:
         months = None
     if type(months) is int and 1 <= months <= cost_data.MANAGED_HISTORY_MONTHS:
         return months
-    return cost_data.DEFAULT_HISTORY_MONTHS
+    return initial_history_months()
 
 
 def set_history_months(months: int, by: str | None = None) -> int:
@@ -430,7 +430,7 @@ def progress(subscriptions: list[dict], *, admin: bool = False) -> dict[str, Any
     return {
         "enabled": enabled(), "months": months, "subscriptions": rows, "totals": totals,
         "history": {"from": start, "to": hi},
-        "history_months": {"chosen": chosen, "default": cost_data.DEFAULT_HISTORY_MONTHS,
+        "history_months": {"chosen": chosen, "default": initial_history_months(),
                            "max": cost_data.MANAGED_HISTORY_MONTHS},
         "expectation": EXPECTATION,
         "checked_at": saved.get("checked_at"), "error": saved.get("error") if admin else None,

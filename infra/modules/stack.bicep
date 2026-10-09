@@ -100,6 +100,11 @@ param pgStatementTimeout string = '25s'
 @description('Let the application ingest cost data on first boot when the warehouse is empty. False for a deployment whose data is loaded by other means, so a boot cannot mix its own subscription into a restored estate.')
 param autoIngest bool = true
 
+@description('Initial automatic ingestion history in calendar months, including the current month.')
+@minValue(1)
+@maxValue(13)
+param initialHistoryMonths int = 3
+
 @description('Run the daily refresh. False pins the warehouse to exactly what was loaded.')
 param autoRefresh bool = true
 
@@ -743,6 +748,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'AUTO_INGEST'
           value: autoIngest ? 'true' : 'false'
+        }
+        {
+          name: 'INGEST_MONTHS'
+          value: string(initialHistoryMonths)
         }
         {
           name: 'AUTO_REFRESH'
