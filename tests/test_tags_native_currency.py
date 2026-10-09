@@ -1,7 +1,31 @@
 """Tag budgets retain subscription identity and native units under display conversion."""
 import uuid
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+
+
+@pytest.mark.parametrize(("counts", "currency"), [(None, None), (None, "USD"), ("resource_counts", "unknown")])
+def test_unavailable_daily_cap_proof_does_not_scan_costs(counts, currency):
+    from app.tags import _daily_cells_exceed_cap
+
+    rows = Mock(side_effect=AssertionError("No active-resource proof exists"))
+    reader = SimpleNamespace(counts=counts, rows=rows)
+    assert not _daily_cells_exceed_cap(reader, "costs", "TRUE", "DATE '2026-01-01'", currency)
+    rows.assert_not_called()
+
+
+def test_available_daily_cap_proof_retains_exact_lower_bound():
+    from app import tags
+
+    rows = Mock(side_effect=[
+        [{"n": tags.MAX_DAILY_CELLS + 1}],
+        [{"resources": tags.MAX_DAILY_CELLS + 3, "currency": "USD"}],
+    ])
+    reader = SimpleNamespace(counts="resource_counts", rows=rows)
+    assert tags._daily_cells_exceed_cap(reader, "costs", "TRUE", "DATE '2026-01-01'", "USD")
+    assert rows.call_count == 2
 
 
 @pytest.fixture

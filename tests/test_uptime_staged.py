@@ -12,12 +12,29 @@ means the same meters, the same figures to the cent, and identical series.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 
 pytestmark = pytest.mark.postgres
 
 HI = dt.date(2026, 9, 28)
+
+
+def test_hour_unit_fast_path_matches_full_duration_rule(postgres_warehouse):
+    from app import hourly_usage
+
+    units = ["1 Hour", "1 Hours", "Hour", "Hours", "hour", "hours", "1 hour", "1 hours",
+             " 1 HOUR ", "10 Hours", "0.5 /hour", "100 / Hours", "1 GB/Hour",
+             "GB/Month", "Hourly", "per Hour", "", None]
+    values = ",".join("(?)" for _ in units)
+    with postgres_warehouse.connect() as con:
+        rows = con.execute(
+            f'SELECT "UnitOfMeasure", {hourly_usage.PREDICATE} FROM '
+            f'(VALUES {values}) AS units("UnitOfMeasure")', units).fetchall()
+    assert [bool(row[1]) for row in rows] == [
+        re.search(hourly_usage.HOUR_UNIT, (unit or "").strip().lower()) is not None
+        for unit in units]
 
 
 def _row(day, resource, meter, *, hours=24.0, unit="1 Hour", cost=1.0, currency="USD",

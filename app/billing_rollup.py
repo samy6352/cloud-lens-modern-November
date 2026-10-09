@@ -104,7 +104,7 @@ GRAIN: dict[str, str] = {
     # groups on the same value the detail path groups on.
     "currency": "currency",
     "BillingCostBasis": '"BillingCostBasis"',
-    # Already lowercased by the CTE, which is what `lower("SubAccountId") IN (...)`
+    # Already lowercased by the CTE, which is what `lower("SubAccountId") = ANY (...)`
     # in the scope clause expects to match.
     "SubAccountId": "sub_id",
     "SubAccountName": '"SubAccountName"',

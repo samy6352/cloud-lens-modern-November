@@ -38,6 +38,7 @@ unchanged.
 """
 from __future__ import annotations
 
+import functools
 import re
 
 # Format codes used by the application's strftime calls, mapped to the
@@ -63,6 +64,10 @@ _TYPE_NAMES = {
 
 # What a protected range is, because the scanner treats the three differently.
 LITERAL, IDENTIFIER, COMMENT = "literal", "identifier", "comment"
+
+# The only characters that can open a protected range.
+_SPECIAL = re.compile(r"[$'\"/-]")
+_DOLLAR = re.compile(r"\$([A-Za-z_]\w*)?\$")
 
 
 def _is_e_string(sql: str, quote: int) -> bool:
@@ -96,11 +101,17 @@ def _scan(sql: str) -> tuple[list[tuple[int, int, str]], bool]:
     protected: list[tuple[int, int, str]] = []
     i, n = 0, len(sql)
     while i < n:
+        # Every other character only advances the scan, so jump to the next one that can
+        # open a protected range.
+        found = _SPECIAL.search(sql, i)
+        if found is None:
+            break
+        i = found.start()
         ch = sql[i]
         if ch == "$":
             # $tag$ ... $tag$ -- the delimiter is whatever appears between the dollars, so
             # the closing one has to match it exactly.
-            opener = re.compile(r"\$([A-Za-z_]\w*)?\$").match(sql, i)
+            opener = _DOLLAR.match(sql, i)
             if opener:
                 tag = opener.group(0)
                 close = sql.find(tag, opener.end())
@@ -161,6 +172,27 @@ def _is_code(pos: int, protected: list[tuple[int, int]]) -> bool:
     return not any(start <= pos < end for start, end in protected)
 
 
+def _code_chars(sql: str, start: int, protected: list[tuple[int, int]]):
+    """`(index, char)` for each executable character from `start`, in order.
+
+    `protected` comes from `_scan`, sorted and non-overlapping, so one forward walk skips
+    each span whole -- the same characters `_is_code` would accept, without testing every
+    position against every span.
+    """
+    k, n = 0, len(protected)
+    i, end = start, len(sql)
+    while i < end:
+        while k < n and protected[k][1] <= i:
+            k += 1
+        if k < n and protected[k][0] <= i:
+            i = protected[k][1]
+            continue
+        stop = protected[k][0] if k < n else end
+        while i < stop:
+            yield i, sql[i]
+            i += 1
+
+
 def _match_call(sql: str, open_paren: int) -> int:
     """Index of the parenthesis closing the one at `open_paren`.
 
@@ -169,12 +201,10 @@ def _match_call(sql: str, open_paren: int) -> int:
     """
     protected = _spans(sql)
     depth = 0
-    for i in range(open_paren, len(sql)):
-        if not _is_code(i, protected):
-            continue
-        if sql[i] == "(":
+    for i, ch in _code_chars(sql, open_paren, protected):
+        if ch == "(":
             depth += 1
-        elif sql[i] == ")":
+        elif ch == ")":
             depth -= 1
             if depth == 0:
                 return i
@@ -189,9 +219,7 @@ def _split_args(inner: str) -> list[str]:
     """
     protected = _spans(inner)
     args, depth, start = [], 0, 0
-    for i, ch in enumerate(inner):
-        if not _is_code(i, protected):
-            continue
+    for i, ch in _code_chars(inner, 0, protected):
         if ch == "(":
             depth += 1
         elif ch == ")":
@@ -220,6 +248,8 @@ def _rewrite_calls(sql: str, name: str, build) -> str:
     is how one-argument `round` is passed through.
     """
     pattern = re.compile(rf"\b{name}\s*\(", re.IGNORECASE)
+    if pattern.search(sql) is None:
+        return sql
     protected = _spans(sql)
     out: list[str] = []
     pos = 0
@@ -359,6 +389,8 @@ def _try_cast(sql: str) -> str:
     does not parse as a number is missing data, not a failed query.
     """
     pattern = re.compile(r"\btry_cast\s*\(", re.IGNORECASE)
+    if pattern.search(sql) is None:
+        return sql
     while True:
         protected = _spans(sql)
         found = None
@@ -402,6 +434,8 @@ def _interval(sql: str) -> str:
     """
     units = "day|days|month|months|year|years|hour|hours|minute|minutes|second|seconds"
     pattern = re.compile(rf"\bINTERVAL\s+(\d+)\s+({units})\b", re.IGNORECASE)
+    if pattern.search(sql) is None:
+        return sql
     protected = _spans(sql)
 
     def swap(m: re.Match) -> str:
@@ -415,6 +449,8 @@ def _interval(sql: str) -> str:
 
 def _placeholders(sql: str) -> str:
     """`?` becomes `%s`, and a literal `%` is doubled so psycopg leaves it alone."""
+    if "?" not in sql:
+        return sql.replace("%", "%%")
     protected = _spans(sql)
     out = []
     for i, ch in enumerate(sql):
@@ -431,6 +467,8 @@ def _placeholders(sql: str) -> str:
 
 def _questions_to_markers(sql: str) -> str:
     """`?` becomes `%s`, leaving `%` alone."""
+    if "?" not in sql:
+        return sql
     protected = _spans(sql)
     return "".join("%s" if ch == "?" and _is_code(i, protected) else ch
                    for i, ch in enumerate(sql))
@@ -487,7 +525,17 @@ def to_postgres(sql: str, bind: bool = True) -> str:
     Placeholder rewriting is last either way: every step above may introduce `%`
     characters of its own -- to_char templates, regex patterns -- and those need
     escaping exactly once, along with the ones already in the statement.
+
+    The translation is a pure function of its two arguments, and a request re-sends the
+    same statements -- the reader's currency views alone are 30k characters, translated on
+    every connection. Remembered results skip that; a statement that fails to translate
+    raises every time, because a raised call is never cached.
     """
+    return _translate(sql, bool(bind))
+
+
+@functools.lru_cache(maxsize=1024)
+def _translate(sql: str, bind: bool) -> str:
     sql = _rewrite_calls(sql, "strftime", _strftime)
     sql = _rewrite_calls(sql, "regexp_extract", _regexp_extract)
     sql = _rewrite_calls(sql, "regexp_matches", _regexp_matches)
@@ -506,6 +554,9 @@ def _types(sql: str) -> str:
     Earlier steps emit `::double precision` casts of their own, and rewriting the
     first word of those produced `double precision precision`.
     """
+    pattern = re.compile(r"\b(DOUBLE(?!\s+precision\b)|VARCHAR)\b", re.IGNORECASE)
+    if pattern.search(sql) is None:
+        return sql
     protected = _spans(sql)
 
     def swap(m: re.Match) -> str:
@@ -513,8 +564,7 @@ def _types(sql: str) -> str:
             return m.group(0)
         return _TYPE_NAMES.get(m.group(0).lower(), m.group(0))
 
-    return re.sub(r"\b(DOUBLE(?!\s+precision\b)|VARCHAR)\b", swap, sql,
-                  flags=re.IGNORECASE)
+    return pattern.sub(swap, sql)
 
 
 # Where the shim functions live.

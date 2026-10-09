@@ -937,6 +937,7 @@ class Warehouse:
             flat += [dim, val]
         placeholders = ", ".join("(?, ?)" for _ in rows)
         con.execute(f"INSERT INTO _filter (dim, val) VALUES {placeholders}", flat)
+        con.execute("ANALYZE _filter")
         return " AND ".join(clauses)
 
     def connect(self, read_only: bool = False,
@@ -944,7 +945,8 @@ class Warehouse:
                 currency: str | None = None,
                 filters: dict[str, list[str]] | None = None,
                 *, include_commitments: bool = False,
-                usage: tuple[str, ...] = ()) -> Any:
+                usage: tuple[str, ...] = (),
+                budget_ms: int | None = None) -> Any:
         """A pooled PostgreSQL session, optionally restricted to a set of subscriptions.
 
         Scope is enforced by shadowing `costs` with a temp view holding only the selected
@@ -981,7 +983,7 @@ class Warehouse:
         try:
             return self._prepare_connection(
                 con, read_only, scope, currency, filters,
-                include_commitments=include_commitments, usage=usage)
+                include_commitments=include_commitments, usage=usage, budget_ms=budget_ms)
         except BaseException:
             try:
                 con.close()
@@ -993,7 +995,8 @@ class Warehouse:
                             scope: list[str] | None, currency: str | None,
                             filters: dict[str, list[str]] | None, *,
                             include_commitments: bool = False,
-                            usage: tuple[str, ...] = ()) -> Any:
+                            usage: tuple[str, ...] = (),
+                            budget_ms: int | None = None) -> Any:
         if include_commitments and not read_only:
             raise ValueError("Commitment summaries require a read-only warehouse connection.")
         unknown_usage = set(usage) - set(USAGE_MODULES)
@@ -1008,6 +1011,12 @@ class Warehouse:
         if read_only and self._store.statement_timeout:
             con.execute("SELECT set_config('statement_timeout', ?, false)",
                         [self._store.statement_timeout])
+        if read_only and budget_ms and budget_ms > 0:
+            con.execute(
+                "SELECT set_config('statement_timeout', (EXTRACT(EPOCH FROM LEAST("
+                "NULLIF(current_setting('statement_timeout'), '0')::interval, "
+                "make_interval(secs => ? / 1000.0))) * 1000)::bigint::text, false)",
+                [budget_ms])
 
         target = (currency or "").upper()
         rate = None
@@ -1039,11 +1048,22 @@ class Warehouse:
             #
             # Compared in canonical form as well as verbatim, so a caller passing an ARM path,
             # a differently cased GUID, or the plain GUID all select the same rows.
-            ids = [canonical_sub_id(s) or "" for s in scope] + list(scope)
+            ids = list(dict.fromkeys([canonical_sub_id(s) or "" for s in scope] + list(scope)))
             values = ", ".join("(?)" for _ in ids)
             con.execute("CREATE TEMP TABLE _scope (id text)")
             con.execute(f"INSERT INTO _scope (id) VALUES {values}", ids)
-            where = 'WHERE (lower("SubAccountId") IN (SELECT id FROM _scope))'
+            # Autovacuum cannot analyze session-local tables. Without these few
+            # rows' statistics, scoped reads plan against hundreds of unknown IDs.
+            con.execute("ANALYZE _scope")
+            if len(ids) == 1:
+                # A scalar InitPlan can use the subscription/date index before
+                # projecting FX expressions; a semijoin can filter after the scan.
+                where = 'WHERE (lower("SubAccountId") = (SELECT id FROM _scope))'
+            else:
+                # The same set as an InitPlan array, so the subscription/date index takes both
+                # conditions. As `IN (SELECT ...)` it became a semijoin applied after an index
+                # scan of every subscription's rows in the window -- 124,000 rows for 3,100 kept.
+                where = 'WHERE (lower("SubAccountId") = ANY (ARRAY(SELECT id FROM _scope)))'
         # Scope alone, before the filter bar and the period narrow it further. Tags are
         # looked up per resource *after* those have chosen the resources, and are kept
         # per month, so a day-level period predicate must not be applied to them.
@@ -1287,7 +1307,11 @@ class Warehouse:
         # BillingCostBasis, and `env` names the Tags document. None of those survive
         # into the grain, so the rollup cannot answer these exactly and the detail
         # table has to.
-        con.execute(f"CREATE TEMP VIEW {rollup.TABLE} AS {rollup.derive_sql('costs')}")
+        # Converted tabs ask for the edge, totals and names on the same reader.
+        # Stage their exact scoped aggregate once, inside that reader's work,
+        # rather than repeat raw-row FX conversion for every reduction.
+        kind = "TABLE" if rate is not None else "VIEW"
+        con.execute(f"CREATE TEMP {kind} {rollup.TABLE} AS {rollup.derive_sql('costs')}")
 
     @contextmanager
     def reader(self, scope: list[str] | None = None,
@@ -1325,15 +1349,11 @@ class Warehouse:
         connect_options: dict[str, Any] = {"include_commitments": True} if include_commitments else {}
         if usage:
             connect_options["usage"] = tuple(usage)
+        if budget_ms and budget_ms > 0:
+            connect_options["budget_ms"] = budget_ms
         con = self.connect(
             read_only=True, scope=scope, currency=currency, filters=filters, **connect_options)
         try:
-            if budget_ms and budget_ms > 0:
-                con.execute(
-                    "SELECT set_config('statement_timeout', (EXTRACT(EPOCH FROM LEAST("
-                    "NULLIF(current_setting('statement_timeout'), '0')::interval, "
-                    "make_interval(secs => ? / 1000.0))) * 1000)::bigint::text, false)",
-                    [budget_ms])
             aggregate, counted, named, billing = self._derived_sources(
                 con, scope, currency, filters)
             native_agg = (self._native_currency_source(con, filters)
@@ -1931,6 +1951,12 @@ class Warehouse:
             'CREATE INDEX IF NOT EXISTS costs_period_idx ON costs ("ChargePeriodStart")',
             'CREATE INDEX IF NOT EXISTS costs_sub_period_idx '
             'ON costs (lower("SubAccountId"), "ChargePeriodStart")',
+            # Built by `_create_period_sub_index`, which also keeps the loop below short.
+            # Converted Uptime falls back to raw hourly charges. Keep its exact
+            # unit predicate in the index, including nonstandard valid durations.
+            'CREATE INDEX IF NOT EXISTS costs_hourly_sub_period_idx '
+            'ON costs (lower("SubAccountId"), "ChargePeriodStart") '
+            f'WHERE {hourly_usage.PREDICATE}',
             'CREATE INDEX IF NOT EXISTS costs_resource_idx '
             'ON costs ("ResourceId", "ChargePeriodStart")',
         ]
@@ -1939,6 +1965,10 @@ class Warehouse:
                 con.execute(statement)
             except Exception as exc:  # noqa: BLE001 - a missing index is slow, not broken
                 log.warning("warehouse: could not create index (%s)", exc)
+        try:
+            _create_period_sub_index(con)
+        except Exception as exc:  # noqa: BLE001 - a missing index is slow, not broken
+            log.warning("warehouse: could not create index (%s)", exc)
 
     def _merge_subscription_spellings(self, con: Any) -> None:
         """Normalize identities without guessing which historical charges are duplicates.
@@ -3343,6 +3373,42 @@ def _report_failure(body: dict, metric: str) -> str:
 # into multi-row VALUES statements cut that to 3.4s. Larger chunks are slower again, because
 # the statement is compiled with chunk x 25 placeholders and that overtakes the saving.
 INSERT_CHUNK = 200
+
+
+def _create_period_sub_index(con: Any) -> None:
+    """`costs_period_sub_idx`, built without blocking writes when PostgreSQL allows it.
+
+    Scoped reads compare the subscription to an InitPlan the planner cannot see, so it costs the
+    subscription-led index no better than the period one and took the period index: a converted
+    Tags month read every subscription's 113k rows to keep 19k. With the subscription second,
+    the date range and the InitPlan are both index conditions whichever the planner picks.
+
+    A plain build holds a lock that stalls every write for its whole duration (43s for 16.9M
+    rows, measured), so a flat table is built CONCURRENTLY. A partitioned `costs` cannot be, and
+    keeps the plain build. An interrupted concurrent build leaves an INVALID index that
+    `IF NOT EXISTS` would treat as present forever, so it is dropped and rebuilt. The statement
+    timeout is lifted for the build alone: it outlasts any ordinary limit on a slow server, and
+    a timeout would only leave another invalid index to retry at every start.
+    """
+    name = "costs_period_sub_idx"
+    ddl = ('INDEX {} IF NOT EXISTS ' + name + ' ON costs ("ChargePeriodStart", lower("SubAccountId"))')
+    if _partitioned_target(con, "costs") is not None:
+        con.execute("CREATE " + ddl.format(""))
+        return
+    row = con.execute(
+        "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+        "WHERE c.oid = to_regclass(?)", [name]).fetchone()
+    if row is not None and row[0]:
+        return
+    if row is not None:
+        log.warning("warehouse: dropping the invalid %s left by an interrupted build", name)
+        con.execute(f"DROP INDEX IF EXISTS {name}")
+    limit = con.execute("SELECT current_setting('statement_timeout')").fetchone()[0]
+    con.execute("SELECT set_config('statement_timeout', '0', false)")
+    try:
+        con.execute("CREATE " + ddl.format("CONCURRENTLY"))
+    finally:
+        con.execute("SELECT set_config('statement_timeout', ?, false)", [limit])
 
 
 def _partitioned_target(con: Any, table: str) -> str | None:

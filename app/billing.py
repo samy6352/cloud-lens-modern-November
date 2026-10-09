@@ -555,7 +555,7 @@ def _sql_remeasures(prefix: str = "") -> str:
 
 
 def _statement_sql(window: dict, source: str, *, stored: bool = False,
-                   indexed: bool = False) -> str:
+                   indexed: bool = False, materialize: bool = False) -> str:
     """Keep the expensive computed source single-pass within each aggregate.
 
     Only a confirmed stored source can cheaply rank resource keys before summing
@@ -575,6 +575,12 @@ def _statement_sql(window: dict, source: str, *, stored: bool = False,
               f' AND DATE \'{window["end"]}\'')
     current = (f'WHERE "ChargePeriodStart" BETWEEN DATE \'{window["start"]}\''
                f' AND DATE \'{window["end"]}\'')
+    input_cte = ""
+    if stored and not indexed and materialize:
+        # Scoped service views otherwise repeat the same scope/filter joins for
+        # every aggregate. Keep all native measures and both comparison months.
+        input_cte = f"billing_input AS MATERIALIZED (SELECT * FROM {source} {period}),"
+        source = "billing_input"
     resource_ctes = ""
     resource_select = ""
     grouped = f"""
@@ -663,7 +669,7 @@ def _statement_sql(window: dict, source: str, *, stored: bool = False,
           FROM resources
         """
     return f"""
-          WITH daily AS (
+          WITH {input_cte} daily AS (
             SELECT "ChargePeriodStart" AS day, currency, "BillingCostBasis" AS basis,
               {measures} FROM {source} {period} GROUP BY 1, 2, 3
           ),
@@ -710,9 +716,13 @@ def build(scopes: list[str] | None, currency: str = "", month: str | None = None
             if len(status) == 1 and status[0]["total_groups"] == 1:
                 result = [row for row in served if row["bucket"] != "__serving__"]
         if result is None:
+            stored = getattr(reader, "bill_stored", False)
+            indexed = getattr(reader, "bill_indexed", False)
             result = reader.rows(_statement_sql(
-                window, reader.bill, stored=getattr(reader, "bill_stored", False),
-                indexed=getattr(reader, "bill_indexed", False)), 20000)
+                window, reader.bill, stored=stored, indexed=indexed,
+                materialize=bool(stored and not indexed and scopes
+                                 and any(value and value.strip()
+                                         for value in (filters or {}).get("service", [])))), 20000)
         if len(result) >= 20000:
             raise ValueError("Too many Billing currency groups; narrow the subscription scope.")
     daily = [row for row in result if row["bucket"] == "daily"]

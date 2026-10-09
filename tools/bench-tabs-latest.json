@@ -1,37 +1,86 @@
 [
   {
+    "path": "/api/overview",
+    "cold": 27.216,
+    "warm": 0.083,
+    "status": 200,
+    "bytes": 529
+  },
+  {
+    "path": "/api/dashboard/executive?days=30",
+    "cold": 2.103,
+    "warm": 0.018,
+    "status": 200,
+    "bytes": 17019
+  },
+  {
+    "path": "/api/dashboard/billing?days=30",
+    "cold": 1.912,
+    "warm": 0.041,
+    "status": 200,
+    "bytes": 384949
+  },
+  {
+    "path": "/api/dashboard/billing/opportunities?days=30",
+    "cold": 27.908,
+    "warm": 0.041,
+    "status": 200,
+    "bytes": 21180
+  },
+  {
+    "path": "/api/dashboard/uptime?days=30",
+    "cold": 18.589,
+    "warm": 0.186,
+    "status": 200,
+    "bytes": 5794667
+  },
+  {
+    "path": "/api/dashboard/tags?days=30",
+    "cold": 14.619,
+    "warm": 0.567,
+    "status": 200,
+    "bytes": 8035618
+  },
+  {
+    "path": "/api/budgets?days=30",
+    "cold": 0.037,
+    "warm": 0.01,
+    "status": 200,
+    "bytes": 291
+  },
+  {
     "path": "/api/dashboard/resources?days=30",
-    "cold": 7.706,
-    "warm": 7.431,
+    "cold": 15.25,
+    "warm": 8.961,
     "status": 200,
     "bytes": 15336752
   },
   {
     "path": "/api/dashboard/resources?days=30&page=1&page_size=100",
-    "cold": 0.027,
-    "warm": 0.033,
+    "cold": 0.514,
+    "warm": 0.022,
     "status": 200,
     "bytes": 144604
   },
   {
     "path": "/api/dashboard/resources?days=30&page=200&page_size=100&sort=delta",
-    "cold": 0.818,
-    "warm": 0.026,
+    "cold": 4.966,
+    "warm": 0.031,
     "status": 200,
     "bytes": 235533
   },
   {
-    "path": "/api/dashboard/resources?days=7&page=1&page_size=100",
-    "cold": 0.019,
-    "warm": 0.018,
+    "path": "/api/dashboard/aks?days=30",
+    "cold": 4.258,
+    "warm": 0.017,
     "status": 200,
-    "bytes": 156048
+    "bytes": 75585
   },
   {
-    "path": "/api/dashboard/resources?days=30&page=1&page_size=100&q=databricks",
-    "cold": 5.938,
-    "warm": 0.031,
+    "path": "/api/dashboard/ai-billing?days=30",
+    "cold": 44.589,
+    "warm": 0.281,
     "status": 200,
-    "bytes": 194545
+    "bytes": 105541
   }
 ]

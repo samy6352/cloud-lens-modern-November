@@ -71,8 +71,17 @@ def test_tag_currency_is_selected_before_detail_limits(tag_reader):
     assert result["mixed"] and result["currency"] == "EUR"
     detail = [q for q in tag_reader.queries if "AS name" in q or "AS day" in q]
     assert len(detail) == 2
-    assert all('AND COALESCE(NULLIF("BillingCurrency", \'\'), \'unknown\') = \'EUR\'' in q
-               for q in detail)
+    # The bare column comparison: identical to the normalised one for any code but
+    # "unknown", and the only one of the two the planner has statistics for.
+    assert all('AND "BillingCurrency" = \'EUR\'' in q for q in detail)
+
+
+def test_tag_currency_predicate_is_exact_for_every_code():
+    assert tags._currency_predicate("EUR") == '"BillingCurrency" = \'EUR\''
+    assert tags._currency_predicate("O'K") == '"BillingCurrency" = \'O\'\'K\''
+    # Blank and NULL currencies are "unknown", so that code keeps the normalised form.
+    assert tags._currency_predicate("unknown") == (
+        'COALESCE(NULLIF("BillingCurrency", \'\'), \'unknown\') = \'unknown\'')
 
 
 def test_tag_resource_and_daily_costs_retain_precision_for_client_totals(tag_reader):

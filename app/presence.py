@@ -207,9 +207,14 @@ def index_sql(schema: str, table: str = TABLE) -> list[str]:
     from . import read_indexes
 
     return [
-        # Every query against it is bounded by a date window, as with the rollup.
+        # Every query against it is bounded by a date window, as with the rollup. The
+        # subscription rides along so a scoped month is filtered inside the index: the
+        # planner costs this and `_sub_idx` alike for a scope array it cannot see, and
+        # a period-only choice fetched every subscription's rows (270ms vs 57ms for
+        # two of six subscriptions). An existing side keeps its period-only
+        # definition until the next full rebuild recreates the table.
         f'CREATE INDEX IF NOT EXISTS {table}_period_idx '
-        f'ON "{schema}".{table} ("{PERIOD}")',
+        f'ON "{schema}".{table} ("{PERIOD}", lower("SubAccountId"))',
         # And then usually narrowed to a set of subscriptions.
         f'CREATE INDEX IF NOT EXISTS {table}_sub_idx '
         f'ON "{schema}".{table} (lower("SubAccountId"), "{PERIOD}")',

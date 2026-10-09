@@ -286,8 +286,15 @@ def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
         display_window = window
         if mixed:
             # Select the displayed currency before fetching bounded resource/day detail.
-            code = currency.replace("'", "''")
-            display_window += f' AND COALESCE(NULLIF("BillingCurrency", \'\'), \'unknown\') = \'{code}\''
+            display_window += " AND " + _currency_predicate(currency)
+
+        # Over MAX_DAILY_CELLS the per-resource daily detail is dropped below, so it is only
+        # computed when it can be kept. Every resource active in the window owns at least one
+        # cell, so a resource count over the cap proves the answer is "dropped" without building
+        # 2.7M cells to find out -- measured 50.7 s of the tab's 77 s on the 16.9M-row estate.
+        over_cap = _daily_cells_exceed_cap(r, named, display_window, start,
+                                           currency if mixed else None)
+        daily: list[dict[str, Any]] | None = None
 
         identity = """
               COALESCE(NULLIF("ResourceId", ''), "ResourceName", '(unnamed)') AS id,
@@ -360,6 +367,8 @@ def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
                 else:
                     log.info("cost_by_tag: ranked candidates cannot prove the top %d; "
                              "using the full query", MAX_RESOURCES)
+            if rows is None and not over_cap:
+                rows, daily = _resources_and_cells(r, agg, named, display_window, lateral)
             if rows is None:
                 rows = r.rows(
                     f"""
@@ -405,16 +414,9 @@ def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
         # driven entirely client-side: the whole point of the tab is that changing the tag
         # selection re-answers instantly, and a daily series fetched per selection would put a
         # round trip behind every click.
-        #
-        # Over MAX_DAILY_CELLS the detail is dropped below, so it is only computed when it can
-        # be kept. Every resource active in the window owns at least one cell, so a resource
-        # count over the cap proves the answer is "dropped" without building 2.7M cells to
-        # find out -- measured 50.7 s of the tab's 77 s on the 16.9M-row estate.
-        over_cap = _daily_cells_exceed_cap(r, named, display_window, start,
-                                           currency if mixed else None)
         if over_cap:
             daily = []
-        else:
+        elif daily is None:
             daily = r.rows(
                 f"""
                 SELECT
@@ -468,13 +470,21 @@ def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
     # Dates come from the data, not from a generated range. A day Azure never billed should not
     # appear as a zero on the chart -- that reads as "we spent nothing", when the truth is that
     # nothing was recorded. A gap stays a gap.
-    dates = sorted({str(c["day"]) for c in daily})
+    #
+    # Each distinct day is formatted once. `str()` of a date per cell was a fifth of this
+    # function on a 30,000-cell month, for the same few dozen answers.
+    labels: dict[Any, str] = {}
+    for cell in daily:
+        day = cell["day"]
+        if day not in labels:
+            labels[day] = str(day)
+    dates = sorted(set(labels.values()))
     index = {d: i for i, d in enumerate(dates)}
 
     per_resource: dict[str, list[list[float]]] = {}
     daily_total = [0.0] * len(dates)
     for cell in daily:
-        i = index[str(cell["day"])]
+        i = index[labels[cell["day"]]]
         cost = float(cell.get("cost") or 0.0)
         per_resource.setdefault(cell["id"], []).append([i, cost])
         daily_total[i] += cost
@@ -595,6 +605,82 @@ def _build(r: Any, days: int, currency: str | None = None) -> dict[str, Any]:
     }
 
 
+def _currency_predicate(code: str) -> str:
+    """`COALESCE(NULLIF("BillingCurrency", ''), 'unknown') = code`, in a form the planner can estimate.
+
+    For any code other than "unknown" the two are the same predicate -- a blank or NULL
+    currency becomes "unknown", which never equals another code -- but only the bare column
+    comparison has statistics. The expression was estimated at 0.5% of rows (205 for 29,481),
+    so a scoped month grouped its resources by sorting their identifiers rather than hashing.
+    """
+    escaped = code.replace("'", "''")
+    if code == "unknown":
+        return f'COALESCE(NULLIF("BillingCurrency", \'\'), \'unknown\') = \'{escaped}\''
+    return f'"BillingCurrency" = \'{escaped}\''
+
+
+def _resources_and_cells(r: Any, agg: str, named: str, window: str, lateral: str
+                         ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The top resources and their per-day cells, from one pass over the window.
+
+    The same two answers the full resource query and the daily query give separately --
+    every figure is still a SUM over the source rows, per resource and per resource-day --
+    but the window is read and grouped once rather than twice. Identifiers are grouped
+    bytewise: the database collation is deterministic, so its groups are exactly those, and
+    a locale-aware comparison per row was most of the grouping time. They are ordered and
+    tag-matched in the database collation, as before. "Exactly one subscription" compares the
+    smallest and largest spelling bytewise, which is the distinct count of one it replaces.
+    """
+    resource_id = """COALESCE(NULLIF("ResourceId", ''), "ResourceName", '(unnamed)')"""
+    found = r.rows(
+        f"""
+        WITH names AS (
+          SELECT "SubAccountId" AS name_sub, MAX("SubAccountName") AS name_text
+          FROM {agg} WHERE {window} GROUP BY 1
+        ), grouped AS MATERIALIZED (
+          SELECT {resource_id} COLLATE "C"                            AS idc,
+                 COALESCE(NULLIF("BillingCurrency", ''), 'unknown')    AS currency,
+                 "ChargePeriodStart"                                   AS day,
+                 GROUPING("ChargePeriodStart")                         AS whole,
+                 MAX(COALESCE(NULLIF("ResourceName", ''), '(unnamed)')) AS name,
+                 MAX(COALESCE("ServiceName", ''))                      AS service,
+                 MAX(COALESCE(name_text, ''))                          AS subscription,
+                 MAX(COALESCE("ResourceGroup", ''))                    AS resource_group,
+                 SUM(COALESCE("BilledCost", 0))                        AS cost,
+                 CASE WHEN MIN(COALESCE("SubAccountId", '') COLLATE "C")
+                           = MAX(COALESCE("SubAccountId", '') COLLATE "C")
+                      THEN MAX(NULLIF("SubAccountId", '')) END        AS subscription_id
+          FROM {named} LEFT JOIN names ON name_sub = "SubAccountId"
+          WHERE {window}
+          GROUP BY GROUPING SETS ((1, 2), (1, 2, "ChargePeriodStart"))
+        ), ranked AS (
+          SELECT idc COLLATE "default" AS id, name, service, subscription, resource_group,
+                 currency, cost, subscription_id
+          FROM grouped WHERE whole = 1
+          ORDER BY cost DESC, 1, currency
+          LIMIT {MAX_RESOURCES + 1}
+        ), top AS (
+          SELECT ranked.*, row_number() OVER (ORDER BY cost DESC, id, currency) AS seq FROM ranked
+        )
+        SELECT 0 AS part, top.seq, top.id, top.name, top.service, top.subscription,
+               top.resource_group, top.currency, top.cost, top.subscription_id,
+               tg.tags, NOT tg.unknown AS tags_available, NULL::date AS day
+        FROM top
+        {lateral}
+        UNION ALL
+        (SELECT 1, NULL, idc COLLATE "default", NULL, NULL, NULL, NULL, currency, cost,
+                NULL, NULL, NULL, day
+         FROM grouped WHERE whole = 0
+         LIMIT {MAX_DAILY_CELLS + 1})
+        """,
+        limit=None,
+    )
+    rows = sorted((row for row in found if row["part"] == 0), key=lambda row: row["seq"])
+    cells = [{"id": row["id"], "day": row["day"], "currency": row["currency"], "cost": row["cost"]}
+             for row in found if row["part"] == 1]
+    return rows, cells
+
+
 def _daily_cells_exceed_cap(r: Any, source: str, window: str, start: str,
                             currency: str | None) -> bool:
     """Whether the per-resource daily detail would exceed MAX_DAILY_CELLS -- only when provable.
@@ -609,15 +695,15 @@ def _daily_cells_exceed_cap(r: Any, source: str, window: str, start: str,
       proves the detail would be dropped. Identities without a `ResourceId` may collapse
       under the tab's name fallback, so they are left out of that lower bound.
     """
+    counts = getattr(r, "counts", None)
+    if not counts or currency == "unknown":
+        return False
     from . import reporting, resource_counts
 
     rows = r.rows(f"SELECT count(*) AS n FROM (SELECT 1 FROM {source} WHERE {window} "
                   f"LIMIT {MAX_DAILY_CELLS + 1}) capped", None)
     found = rows[0].get("n") if rows else None
     if not isinstance(found, int) or found <= MAX_DAILY_CELLS:
-        return False
-    counts = getattr(r, "counts", None)
-    if not counts or currency == "unknown":
         return False
     month = reporting.month_bounds()
     served = r.rows(resource_counts.window_sql(counts, start, month[0] if month else None,

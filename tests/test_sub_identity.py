@@ -159,7 +159,7 @@ check("the export path does too", "rec[i_sid] = canonical_sub_id(rec[i_sid])" in
 check("the replace-delete matches on the canonical id",
       "[canonical_sub_id(sub_id), start, end]" in wh)
 check("scope filtering compares canonically",
-      'lower("SubAccountId") IN' in wh)
+      'lower("SubAccountId") = ANY (ARRAY(SELECT id FROM _scope))' in wh)
 check("budget trends select canonically",
       "params: list[Any] = [canonical_sub_id(sub_id), start, end]" in wh)
 check("the repair runs on boot",

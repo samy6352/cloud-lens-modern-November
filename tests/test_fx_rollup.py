@@ -15,6 +15,8 @@ def test_gate_and_cache_identity(monkeypatch):
     from app import currency, fx_rollup
 
     monkeypatch.delenv("CLOUDLENS_FX_ROLLUP", raising=False)
+    assert fx_rollup.enabled()
+    monkeypatch.setenv("CLOUDLENS_FX_ROLLUP", "false")
     assert not fx_rollup.enabled()
     monkeypatch.setenv("CLOUDLENS_FX_ROLLUP", "true")
     assert fx_rollup.enabled()
@@ -47,6 +49,29 @@ def _insert(wh, overrides):
     }
     with wh.connect() as con:
         insert_rows(con, [[{**base, **values}.get(c) for c in COLUMNS] for values in overrides])
+
+
+@pytest.mark.postgres
+def test_raw_converted_rollup_is_reader_local_and_pool_scope_safe(postgres_warehouse, monkeypatch):
+    from app import fx_rollup
+
+    wh = postgres_warehouse
+    monkeypatch.setattr(fx_rollup, "ENABLED", False)
+    monkeypatch.setenv("FX_RATES", '{"EUR":0.5}')
+    _insert(wh, [{"BilledCost": 10}, {"BilledCost": -2}, {"BilledCost": 10},
+                 {"SubAccountId": "sub-b", "BilledCost": 40}])
+    wh.refresh_rollup(strict=True)
+    with wh.connect(read_only=True, scope=["sub-a"], currency="USD") as con:
+        assert con.execute("SELECT relkind FROM pg_class WHERE oid=to_regclass('costs_rollup')").fetchone()[0] == "r"
+        # Provider invoice FX (0.8 EUR per USD) takes precedence over pinned display FX.
+        assert con.execute('SELECT sum("BilledCost") FROM costs_rollup').fetchone()[0] == 22.5
+        assert con.execute('SELECT sum("BilledCost") FROM costs').fetchone()[0] == 22.5
+        assert con.execute('SELECT sum("BilledCost") FROM costs_rollup').fetchone()[0] == 22.5
+    with wh.connect(read_only=True, scope=["sub-b"], currency="USD") as con:
+        assert con.execute('SELECT sum("BilledCost") FROM costs_rollup').fetchone()[0] == 50
+    with wh.connect(read_only=True, scope=["sub-a"]) as con:
+        assert con.execute("SELECT relkind FROM pg_class WHERE oid=to_regclass('costs_rollup')").fetchone()[0] == "v"
+        assert con.execute('SELECT sum("BilledCost") FROM costs_rollup').fetchone()[0] == 18
 
 
 @pytest.fixture

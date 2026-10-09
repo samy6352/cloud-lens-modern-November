@@ -52,6 +52,12 @@ def test_ingest_progress_does_not_expose_unscoped_financials(monkeypatch):
                     "ingest": {"status": "ready", "progress": 1.0}}
 
 
+# A bound membership test against the scope table: a scalar InitPlan for one spelling, an
+# array InitPlan for several. Never a comparison against a display name.
+SCOPE_MEMBERSHIP = ('lower("SubAccountId") = (SELECT id FROM _scope)',
+                    'lower("SubAccountId") = ANY (ARRAY(SELECT id FROM _scope))')
+
+
 def test_scope_predicate_never_matches_display_names(monkeypatch):
     from app import (
         billing_rollup,
@@ -122,7 +128,7 @@ def test_scope_predicate_never_matches_display_names(monkeypatch):
     assert any("billing_rollup" in view for view in views)
     assert any(billing_serving.TABLE in view for view in views)
     for view in views:
-        assert 'lower("SubAccountId") IN' in view
+        assert any(form in view for form in SCOPE_MEMBERSHIP)
         assert "SubAccountName" not in view
 
     # The opt-in usage summaries hold every subscription too, so a reader asking for them
@@ -133,7 +139,7 @@ def test_scope_predicate_never_matches_display_names(monkeypatch):
     views = [statement for statement in statements if "CREATE TEMP VIEW" in statement]
     for table in (hourly_usage.TABLE, usage_signals.TABLE, resource_tags.TABLE):
         view = next(v for v in views if f"CREATE TEMP VIEW {table} " in v)
-        assert 'lower("SubAccountId") IN' in view, table
+        assert any(form in view for form in SCOPE_MEMBERSHIP), table
         assert "SubAccountName" not in view.split("WHERE", 1)[-1], table
 
 

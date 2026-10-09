@@ -1,9 +1,14 @@
-"""Opt-in native FX sufficient statistics; never persist display-rate money.
+"""Native FX sufficient statistics; never persist display-rate money.
 
 The ordinary cost grain loses invoice FX provenance. This companion keeps each
 provider exchange rate and eligible legacy USD ratio separate, so the warehouse's
 row-aware conversion can run on aggregates without substituting today's rates for
 invoice rates. Resource money and Billing's independent measures still fall back.
+
+On by default: without it every converted read scans the raw month three times
+(authority check, scoped rollup, the report itself). `CLOUDLENS_FX_ROLLUP=false`
+opts out. An estate that predates it keeps exact raw conversion until its next
+full derived rebuild fills the table; nothing is read from it before then.
 """
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from . import derived, environment, rollup
 
 
 def enabled() -> bool:
-    value = os.getenv("CLOUDLENS_FX_ROLLUP", "false").strip().lower()
+    value = os.getenv("CLOUDLENS_FX_ROLLUP", "true").strip().lower()
     if value not in {"true", "false"}:
         raise ValueError("CLOUDLENS_FX_ROLLUP must be true or false")
     return value == "true"

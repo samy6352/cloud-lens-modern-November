@@ -371,14 +371,27 @@ def _cells(cells: list[dict[str, Any]], keep: set[str],
 
     index = {d: i for i, d in enumerate(labels)}
     out: dict[str, list[list[float]]] = {}
+    # The meter key and day position are properties of the (id, meter) pair and of the day, not
+    # of each cell, so each is worked out once and reused across the month's thousands of cells.
+    keys: dict[tuple[Any, Any], str | None] = {}
+    positions: dict[Any, int | None] = {}
     for cell in cells:
-        key = f"{cell.get('id')}\u0000{cell.get('meter')}"
+        pair = (cell.get("id"), cell.get("meter"))
+        try:
+            key = keys[pair]
+        except KeyError:
+            key = f"{pair[0]}\u0000{pair[1]}"
+            keys[pair] = key = key if key in keep else None
         # A meter dropped by the row cap has no line in the table, so its cells would be
         # invisible weight in the payload and would push the "all" charts above the table
         # they are meant to describe.
-        if key not in keep:
+        if key is None:
             continue
-        position = index.get(str(cell.get("day")))
+        day = cell.get("day")
+        try:
+            position = positions[day]
+        except KeyError:
+            positions[day] = position = index.get(str(day))
         if position is None:
             continue
         out.setdefault(key, []).append([

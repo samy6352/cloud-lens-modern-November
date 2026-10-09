@@ -64,7 +64,12 @@ if environment.ENABLED:
 PERIOD = DIMENSIONS[0]
 MEASURES = ["BilledCost", "PricingQuantity"]
 FILTERABLE = derived.filterable(DIMENSIONS)
-PREDICATE = f"lower(trim(COALESCE(\"UnitOfMeasure\", ''))) ~ '{HOUR_UNIT}'"
+# Expose common exact units to column statistics; regex-only estimates can put
+# scope filtering after a wide sort. The regex retains every other valid duration.
+PREDICATE = (
+    """("UnitOfMeasure" IN ('1 Hour', '1 Hours', 'Hour', 'Hours', 'hour', 'hours', '1 hour', '1 hours') """
+    f"""OR lower(trim(COALESCE("UnitOfMeasure", ''))) ~ '{HOUR_UNIT}')"""
+)
 
 
 def serves_filters(filters: dict[str, list[str]] | None) -> bool:

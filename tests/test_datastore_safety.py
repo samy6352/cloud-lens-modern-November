@@ -19,6 +19,94 @@ import pytest
 pytestmark = pytest.mark.offline
 
 
+def test_hourly_raw_index_uses_complete_duration_predicate(offline_warehouse):
+    connection = Mock()
+    offline_warehouse.Warehouse._create_indexes(None, connection)
+    statements = [call.args[0] for call in connection.execute.call_args_list]
+    hourly = [statement for statement in statements if "costs_hourly_sub_period_idx" in statement]
+    assert len(hourly) == 1
+    assert 'ON costs (lower("SubAccountId"), "ChargePeriodStart")' in hourly[0]
+    assert hourly[0].endswith("WHERE " + offline_warehouse.hourly_usage.PREDICATE)
+    assert "COALESCE" in hourly[0] and " ~ " in hourly[0]
+
+
+def test_scoped_period_index_is_built_by_its_own_helper(offline_warehouse):
+    connection = Mock()
+    offline_warehouse.Warehouse._create_indexes(None, connection)
+    statements = [call.args[0] for call in connection.execute.call_args_list]
+    assert not any("costs_period_sub_idx" in statement for statement in statements)
+    assert any("costs_period_idx" in statement for statement in statements)
+
+
+class _FakeCosts:
+    """Records statements; answers the catalog lookups the helper makes."""
+
+    def __init__(self, relkind="r", index_valid=None, timeout="2min"):
+        self.relkind, self.index_valid, self.timeout = relkind, index_valid, timeout
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        self.statements.append((statement, params))
+        answer = None
+        if "FROM pg_class c" in statement:
+            answer = (self.relkind, "public")
+        elif "indisvalid" in statement:
+            answer = None if self.index_valid is None else (self.index_valid,)
+        elif "current_setting" in statement:
+            answer = (self.timeout,)
+        return SimpleNamespace(fetchone=lambda: answer)
+
+    def sql(self):
+        return [statement for statement, _ in self.statements]
+
+
+def test_flat_costs_builds_the_scoped_index_concurrently_without_a_timeout(offline_warehouse):
+    con = _FakeCosts()
+    offline_warehouse._create_period_sub_index(con)
+    built = [s for s in con.sql() if s.startswith("CREATE INDEX")]
+    assert built == ['CREATE INDEX CONCURRENTLY IF NOT EXISTS costs_period_sub_idx '
+                     'ON costs ("ChargePeriodStart", lower("SubAccountId"))']
+    limits = [params for statement, params in con.statements if "set_config" in statement]
+    assert limits == [None, ["2min"]]
+
+
+def test_the_statement_timeout_is_restored_when_the_build_fails(offline_warehouse):
+    class Failing(_FakeCosts):
+        def execute(self, statement, params=None):
+            if statement.startswith("CREATE INDEX CONCURRENTLY"):
+                self.statements.append((statement, params))
+                raise RuntimeError("canceled")
+            return super().execute(statement, params)
+
+    con = Failing()
+    with pytest.raises(RuntimeError):
+        offline_warehouse._create_period_sub_index(con)
+    assert [p for s, p in con.statements if "set_config" in s][-1] == ["2min"]
+
+
+def test_an_invalid_leftover_is_dropped_and_rebuilt(offline_warehouse):
+    con = _FakeCosts(index_valid=False)
+    offline_warehouse._create_period_sub_index(con)
+    assert "DROP INDEX IF EXISTS costs_period_sub_idx" in con.sql()
+    assert any(s.startswith("CREATE INDEX CONCURRENTLY") for s in con.sql())
+    assert con.sql().index("DROP INDEX IF EXISTS costs_period_sub_idx") < next(
+        i for i, s in enumerate(con.sql()) if s.startswith("CREATE INDEX CONCURRENTLY"))
+
+
+def test_a_valid_index_is_left_alone(offline_warehouse):
+    con = _FakeCosts(index_valid=True)
+    offline_warehouse._create_period_sub_index(con)
+    assert not any(s.startswith(("CREATE", "DROP")) for s in con.sql())
+
+
+def test_partitioned_costs_keeps_the_plain_build(offline_warehouse):
+    con = _FakeCosts(relkind="p")
+    offline_warehouse._create_period_sub_index(con)
+    built = [s for s in con.sql() if s.startswith("CREATE INDEX")]
+    assert len(built) == 1 and "CONCURRENTLY" not in built[0]
+    assert 'ON costs ("ChargePeriodStart", lower("SubAccountId"))' in built[0]
+
+
 @pytest.fixture(scope="module")
 def offline_warehouse():
     path = Path(__file__).resolve().parents[1] / "app" / "warehouse.py"
@@ -218,8 +306,10 @@ def test_statement_timeout_is_reader_scoped_and_reset_on_release(offline_warehou
 
 @pytest.mark.parametrize("failure", [
     "rate", "period", "projection", "CREATE TEMP TABLE _scope", "INSERT INTO _scope",
-    "CREATE TEMP TABLE _filter", "INSERT INTO _filter", "currency-sql",
+    "CREATE TEMP TABLE _filter", "INSERT INTO _filter", "ANALYZE _scope",
+    "ANALYZE _filter", "currency-sql",
     'SELECT DISTINCT "BillingCurrency"', "unknown-currency", "CREATE TEMP VIEW costs",
+    "CREATE TEMP TABLE costs_rollup",
     "cancelled",
 ])
 def test_every_setup_failure_returns_the_pool_slot(offline_warehouse, monkeypatch, failure):
@@ -277,3 +367,84 @@ def test_model_query_timeout_can_only_tighten_the_database_limit(offline_warehou
     assert "current_setting('statement_timeout')" in sql
     assert "make_interval(secs => ? / 1000.0)" in sql
     assert parameters == [offline_warehouse.QUERY_TIMEOUT_MS]
+
+
+def test_reader_budget_precedes_converted_aggregate_setup(offline_warehouse, monkeypatch):
+    from app import currency, reporting
+
+    wh = offline_warehouse.Warehouse.__new__(offline_warehouse.Warehouse)
+    con = Mock()
+    con.execute.return_value = SimpleNamespace(fetchone=lambda: None)
+    wh._store = SimpleNamespace(statement_timeout="30s", connect=lambda: con)
+    wh._pg_table = "fixture.costs"
+    monkeypatch.setattr(reporting, "view_predicate", lambda: "")
+    monkeypatch.setattr(currency, "rate_to", lambda _: 1)
+    monkeypatch.setattr(wh, "_columns_sql", lambda *args: "*")
+    monkeypatch.setattr(wh, "_currency_sql", lambda *args, **kwargs: ("1", "1"))
+    for name in ("_shadow_presence", "_shadow_billing_rollup", "_shadow_billing_serving"):
+        monkeypatch.setattr(wh, name, lambda *args, **kwargs: False)
+    monkeypatch.setattr(wh, "_shadow_usage", lambda *args, **kwargs: None)
+    wh.connect(read_only=True, scope=["sub-a"], currency="USD", budget_ms=25)
+    calls = [call.args for call in con.execute.call_args_list]
+    budget = next(i for i, call in enumerate(calls) if len(call) == 2 and call[1] == [25])
+    aggregate = next(i for i, call in enumerate(calls)
+                     if call[0].startswith("CREATE TEMP TABLE costs_rollup"))
+    assert budget < aggregate
+    assert "LEAST(" in calls[budget][0]
+    assert "current_setting('statement_timeout')" in calls[budget][0]
+
+
+def test_scope_and_filter_statistics_follow_bound_values(offline_warehouse, monkeypatch):
+    from app import reporting
+
+    wh = offline_warehouse.Warehouse.__new__(offline_warehouse.Warehouse)
+    wh._store = SimpleNamespace(statement_timeout="30s")
+    wh._pg_table = "fixture.costs"
+    monkeypatch.setattr(reporting, "view_predicate", lambda: "")
+    monkeypatch.setattr(wh, "_columns_sql", lambda *args: "*")
+    for name in ("_shadow_rollup", "_shadow_presence", "_shadow_billing_rollup",
+                 "_shadow_billing_serving"):
+        monkeypatch.setattr(wh, name, lambda *args, **kwargs: False)
+    con = Mock()
+    hostile = "Storage'); DROP TABLE costs; --"
+    wh._prepare_connection(con, True, ["SUB-A"], None, {"service": [hostile]})
+    calls = [call.args for call in con.execute.call_args_list]
+    statements = [call[0] for call in calls]
+    for relation in ("_scope", "_filter"):
+        inserted = next(i for i, text in enumerate(statements)
+                        if text.startswith(f"INSERT INTO {relation} "))
+        assert statements[inserted + 1] == f"ANALYZE {relation}"
+    assert not any(hostile in text for text in statements)
+    assert any(len(call) > 1 and hostile.lower() in call[1] for call in calls)
+    assert statements.index("ANALYZE _filter") < next(
+        i for i, text in enumerate(statements) if text.startswith("CREATE TEMP VIEW costs"))
+
+
+@pytest.mark.parametrize(("scope", "ids", "scalar"), [
+    (["sub-a"], ["sub-a"], True),
+    (["sub-a", "sub-a"], ["sub-a"], True),
+    (["SUB-A"], ["sub-a", "SUB-A"], False),
+    (["/subscriptions/SUB-A"], ["sub-a", "/subscriptions/SUB-A"], False),
+    (["sub-a", "sub-b"], ["sub-a", "sub-b"], False),
+])
+def test_singleton_scope_lookup_preserves_all_bound_spellings(
+        offline_warehouse, monkeypatch, scope, ids, scalar):
+    from app import reporting
+
+    wh = offline_warehouse.Warehouse.__new__(offline_warehouse.Warehouse)
+    wh._store = SimpleNamespace(statement_timeout="30s")
+    wh._pg_table = "fixture.costs"
+    monkeypatch.setattr(reporting, "view_predicate", lambda: "")
+    monkeypatch.setattr(wh, "_columns_sql", lambda *args: "*")
+    for name in ("_shadow_rollup", "_shadow_presence", "_shadow_billing_rollup",
+                 "_shadow_billing_serving"):
+        monkeypatch.setattr(wh, name, lambda *args, **kwargs: False)
+    con = Mock()
+    wh._prepare_connection(con, True, scope, None, None)
+    calls = [call.args for call in con.execute.call_args_list]
+    inserted = next(call for call in calls if call[0].startswith("INSERT INTO _scope "))
+    assert inserted[1] == ids
+    view = next(call[0] for call in calls if call[0].startswith("CREATE TEMP VIEW costs "))
+    assert ('= (SELECT id FROM _scope)' in view) == scalar
+    assert ('= ANY (ARRAY(SELECT id FROM _scope))' in view) != scalar
+    assert not any(identifier in view for identifier in ids)

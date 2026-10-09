@@ -364,12 +364,29 @@ class MoneySafety(unittest.TestCase):
         with warehouse.connect() as con:
             con.execute("DELETE FROM costs")
             insert_rows(con, records([charge(), charge("unknown", 8000, "ZZZ")]))
-        with self.assertRaisesRegex(ValueError, "no authoritative exchange rate"), \
-                warehouse.reader(currency="USD"):
-            self.fail("A reader must not silently sum only the convertible rows")
-        with warehouse.reader(scope=["sub-a"], currency="USD") as reader:
-            self.assertEqual(reader.rows('SELECT sum("BilledCost") AS cost FROM costs')[0]["cost"],
-                             100)
+        warehouse.refresh_rollup()
+        from app import fx_rollup
+        fresh = warehouse._rollup_fresh
+        answers = []
+
+        def spy(con, table=None):
+            answer = fresh(con, table)
+            if table == fx_rollup.TABLE:
+                answers.append(answer)
+            return answer
+
+        # Both authority checks: the native FX rollup's nonzero counts, and the raw rows.
+        for served in (True, False):
+            answers.clear()
+            with self.subTest(fx_rollup=served), patch.object(fx_rollup, "ENABLED", served), \
+                    patch.object(warehouse, "_rollup_fresh", spy):
+                with self.assertRaisesRegex(ValueError, "no authoritative exchange rate"), \
+                        warehouse.reader(currency="USD"):
+                    self.fail("A reader must not silently sum only the convertible rows")
+                with warehouse.reader(scope=["sub-a"], currency="USD") as reader:
+                    self.assertEqual(
+                        reader.rows('SELECT sum("BilledCost") AS cost FROM costs')[0]["cost"], 100)
+                self.assertEqual(answers, [True, True] if served else [])
 
     def test_per_opportunity_conversion_precedes_aggregation(self):
         data = {"rightsizing": {"currency": "USD", "vms": [

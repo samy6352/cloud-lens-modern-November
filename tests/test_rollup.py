@@ -320,7 +320,45 @@ def test_a_full_rebuild_keeps_the_indexes_it_is_read_through(loaded):
             active = derived.active_table(con, loaded._rollup_schema, module)  # noqa: SLF001
             assert f"{active}_period_idx" in found
             assert f"{active}_sub_idx" in found
+        # A scoped month filters subscriptions inside the presence period index.
+        active = derived.active_table(con, loaded._rollup_schema, presence)  # noqa: SLF001
+        definition = con.execute(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = ?",
+            [loaded._rollup_schema, f"{active}_period_idx"]).fetchone()[0]  # noqa: SLF001
+        assert definition.endswith('("ChargePeriodStart", lower("SubAccountId"))')
 
+
+def test_the_scoped_costs_index_is_built_valid_and_recovers_from_an_interrupted_build(loaded):
+    """`costs_period_sub_idx` exists, is valid, and a failed concurrent build is repaired.
+
+    A UNIQUE concurrent build over duplicated subscription ids fails the way an interrupted
+    build does: it leaves an INVALID index of the same name behind, which `IF NOT EXISTS`
+    would otherwise accept forever.
+    """
+    import psycopg
+
+    from app import warehouse as module
+
+    def state(con):
+        return con.execute(
+            "SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) FROM pg_index i "
+            "WHERE i.indexrelid = to_regclass('costs_period_sub_idx')").fetchone()
+
+    with loaded.connect() as con:
+        valid, definition = state(con)
+        assert valid and definition.endswith('("ChargePeriodStart", lower("SubAccountId"))')
+        con.execute("DROP INDEX costs_period_sub_idx")
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            con.execute('CREATE UNIQUE INDEX CONCURRENTLY costs_period_sub_idx '
+                        'ON costs (lower("SubAccountId"))')
+        assert state(con)[0] is False
+        before = con.execute("SELECT current_setting('statement_timeout')").fetchone()[0]
+        module._create_period_sub_index(con)
+        valid, definition = state(con)
+        assert valid and definition.endswith('("ChargePeriodStart", lower("SubAccountId"))')
+        assert con.execute("SELECT current_setting('statement_timeout')").fetchone()[0] == before
+        module._create_period_sub_index(con)
+        assert state(con)[0]
 
 def test_a_full_rebuild_retires_the_side_it_replaced(loaded):
     """Exactly one side survives a rebuild, so the copies cannot accumulate.

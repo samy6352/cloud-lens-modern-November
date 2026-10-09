@@ -155,6 +155,35 @@ def test_computed_source_keeps_original_aggregation():
     assert "resource_selected AS MATERIALIZED" in candidate
     assert "CROSS JOIN LATERAL" in candidate
     assert f"LIMIT {billing.BREAKDOWN_LIMIT}" in candidate
+    assert "billing_input AS MATERIALIZED" not in billing._statement_sql(
+        window, "billing_rollup", materialize=True)
+    assert "billing_input AS MATERIALIZED" not in billing._statement_sql(
+        window, "billing_rollup", stored=True, indexed=True, materialize=True)
+
+
+@pytest.mark.postgres
+def test_scoped_service_materialized_source_matches_complete_statement(estate, monkeypatch):
+    from app import read_indexes
+
+    monkeypatch.setattr(read_indexes, "ENABLED", False)
+    monkeypatch.setattr(currency, "_cache", {"at": 0, "rates": {}, "date": None, "source": None})
+    monkeypatch.setenv("FX_RATES", '{"EUR": 0.8}')
+    scope, filters = ["sub-a"], {"service": ["Storage"]}
+    window = billing.period("2026-08", date(2026, 9, 6))
+    with estate.reader(scope, None, filters) as reader:
+        before = reader.rows(billing._statement_sql(window, reader.bill, stored=True), 20000)
+        after = reader.rows(billing._statement_sql(
+            window, reader.bill, stored=True, materialize=True), 20000)
+    def key(row):
+        return tuple(str(row.get(k)) for k in (
+            "bucket", "day", "currency", "basis", "id", "subscription_id"))
+    _equivalent(sorted(before, key=key), sorted(after, key=key))
+    actual = billing.build(scope, "USD", "2026-08", filters, warehouse=estate)
+    original = billing._statement_sql
+    monkeypatch.setattr(billing, "_statement_sql", lambda w, s, **kw: original(
+        w, s, stored=kw.get("stored", False), indexed=kw.get("indexed", False)))
+    expected = billing.build(scope, "USD", "2026-08", filters, warehouse=estate)
+    _equivalent(actual, expected)
 
 
 @pytest.mark.postgres
@@ -168,9 +197,9 @@ def test_build_uses_only_certified_stored_plan(estate, monkeypatch, mode, scope)
     selected = []
     original_sql = billing._statement_sql
 
-    def capture(window, source, *, stored=False, indexed=False):
+    def capture(window, source, *, stored=False, indexed=False, materialize=False):
         selected.append(stored)
-        return original_sql(window, source, stored=stored, indexed=indexed)
+        return original_sql(window, source, stored=stored, indexed=indexed, materialize=materialize)
 
     monkeypatch.setattr(billing, "_statement_sql", capture)
     if mode == "stale":
