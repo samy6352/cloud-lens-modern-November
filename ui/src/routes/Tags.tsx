@@ -4,20 +4,15 @@ import { Search } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
-import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
+import { ErrorState, KpiTile, PageHeader } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { tagsQuery, liveTagKeysQuery, type TagReport, type TagResource } from "@/lib/queries";
+import { tagsQuery, liveTagKeysQuery, windowDays, type TagReport, type TagResource } from "@/lib/queries";
 
-const WINDOWS = [
-  { value: "30", label: "30 days" },
-  { value: "60", label: "60 days" },
-  { value: "90", label: "90 days" },
-];
 const NO_VALUE = "(not set)";
 const EMPTY_VALUE = "(empty)";
 const KEY_LIMIT = 80;
@@ -53,8 +48,8 @@ function breakdown(data: TagReport, key: string): ValueRow[] {
 export function TagsPage() {
   const search = useSearch({ from: "__root__" });
   const { numbers } = usePrefs();
-  const [days, setDays] = useState("30");
-  const query = useQuery(tagsQuery(search, Number(days)));
+  const days = windowDays(search);
+  const query = useQuery(tagsQuery(search, days));
   const data = query.data;
   const live = useQuery(liveTagKeysQuery(search));
   const uncosted = live.data?.keys.filter(k => !data?.keys.some(costed => costed.key === k.key)) ?? [];
@@ -189,7 +184,6 @@ export function TagsPage() {
             <Skeleton className="h-4 w-72" />
           )
         }
-        actions={<Segmented label="Window" value={days} onChange={setDays} options={WINDOWS} />}
       />
 
       {data?.tags_not_loaded && (

@@ -51,6 +51,7 @@ async function mount(route: string, options: { demo?: boolean; note?: string; pa
     if (path === "auth/me") data = { authenticated: true, mode: "local", user: { name: "Fixture", admin: true, source: "file" } };
     else if (path === "subscriptions") data = { subscriptions: [{ id: first, name: "First", azure_access: true }, { id: second, name: "Second", azure_access: true }], count: 2 };
     else if (path === "reporting-period") data = { available_months: ["2026-09", "2026-08"] };
+    else if (path === "currency") data = { supported: ["USD"], source: "Fixture", as_of: null, note: null };
     else if (path === "dashboard/resources") data = resources(url);
     else if (path === "budgets") {
       if (options.error) { await intercepted.fulfill({ status: 503, contentType: "application/json", body: '{"detail":"Fixture budget source unavailable"}' }); return; }
@@ -94,7 +95,9 @@ describe("resource currency facets", () => {
   it("uses a separate minimal unfiltered query with the exact period/scope cache partition", async () => {
     const scope = { month: "2026-09", scope: first };
     const facets = resourceCurrenciesQuery(scope);
-    expect(facets.queryKey).toEqual(["resources", "2026-09", first, 1, 1, "cost", true, "", "", ""]);
+    expect(facets.queryKey).toEqual(["resources", "2026-09", first, 30, "", 1, 1, "cost", true, "", "", ""]);
+    expect(resourceCurrenciesQuery({ ...scope, days: 7 }).queryKey).not.toEqual(facets.queryKey);
+    expect(resourceCurrenciesQuery({ ...scope, currency: "EUR" }).queryKey).not.toEqual(facets.queryKey);
     expect(facets.queryKey).not.toEqual(resourcesQuery(scope, { page: 2, pageSize: 100, sort: "delta", desc: false, q: "Group", currency: "USD", change: "increased" }).queryKey);
     expect(resourceCurrenciesQuery({ month: "2026-08", scope: second }).queryKey).not.toEqual(facets.queryKey);
     const { page, requests, errors } = await mount(`/explore/resources?scope=${first}&month=2026-09`);

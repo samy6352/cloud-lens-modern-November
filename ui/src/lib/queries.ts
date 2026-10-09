@@ -109,11 +109,17 @@ export interface Billing {
   definitions: Array<{ label: string; explanation: string }>;
 }
 
-/** Global filters carried in the URL: ?month=2026-08&scope=<id>,<id> */
+/** Global filters carried in the URL: ?month=2026-08&scope=<id>,<id>&days=7&currency=EUR */
 export interface Scope {
   month?: string;
   scope?: string;
+  /** Look-back window; ignored by the server while a month is selected. */
+  days?: number;
+  /** Display currency to convert into; absent means native, per-currency figures. */
+  currency?: string;
 }
+
+export const windowDays = (s: Scope): number => s.days ?? 30;
 
 export interface ResourceRow {
   id: string;
@@ -235,8 +241,8 @@ export const periodQuery = (s: Scope) =>
 
 export const executiveQuery = (s: Scope) =>
   queryOptions({
-    queryKey: ["executive", s.month ?? "", s.scope ?? ""],
-    queryFn: () => api<Executive>("dashboard/executive", { days: 30, ...scopeParams(s) }),
+    queryKey: ["executive", s.month ?? "", s.scope ?? "", windowDays(s), s.currency ?? ""],
+    queryFn: () => api<Executive>("dashboard/executive", { days: windowDays(s), currency: s.currency, ...scopeParams(s) }),
   });
 
 export const billingQuery = (s: Scope) =>
@@ -249,10 +255,11 @@ export const billingQuery = (s: Scope) =>
 /** One server-sorted, server-filtered page of every billed resource. */
 export const resourcesQuery = (s: Scope, r: ResourceQuery) =>
   queryOptions({
-    queryKey: ["resources", s.month ?? "", s.scope ?? "", r.page, r.pageSize, r.sort, r.desc, r.q, r.currency, r.change],
+    queryKey: ["resources", s.month ?? "", s.scope ?? "", windowDays(s), s.currency ?? "", r.page, r.pageSize, r.sort, r.desc, r.q, r.currency, r.change],
     queryFn: () =>
       api<ResourcePage>("dashboard/resources", {
-        days: 30,
+        days: windowDays(s),
+        currency: s.currency,
         ...scopeParams(s),
         page: r.page,
         page_size: r.pageSize,
@@ -353,10 +360,10 @@ export interface TagReport {
 }
 
 /** Heavy on purpose (every tagged resource, filtered in the browser), so cached for minutes. */
-export const tagsQuery = (s: Scope, days: number) =>
+export const tagsQuery = (s: Scope, days: number = windowDays(s)) =>
   queryOptions({
-    queryKey: ["tags", s.scope ?? "", days, "warehouse"],
-    queryFn: () => api<TagReport>("dashboard/tags", { days, scope: s.scope, include_live: false }),
+    queryKey: ["tags", s.scope ?? "", days, s.currency ?? "", "warehouse"],
+    queryFn: () => api<TagReport>("dashboard/tags", { days, currency: s.currency, scope: s.scope, include_live: false }),
     staleTime: 5 * 60_000,
   });
 
@@ -423,10 +430,10 @@ export interface UptimeReport {
 }
 
 /** Hour-meter billing quantities (not monitored availability). Heavy: cached for minutes. */
-export const uptimeQuery = (s: Scope, days: number) =>
+export const uptimeQuery = (s: Scope, days: number = windowDays(s)) =>
   queryOptions({
-    queryKey: ["uptime", s.scope ?? "", days],
-    queryFn: () => api<UptimeReport>("dashboard/uptime", { days, scope: s.scope }),
+    queryKey: ["uptime", s.scope ?? "", days, s.currency ?? ""],
+    queryFn: () => api<UptimeReport>("dashboard/uptime", { days, currency: s.currency, scope: s.scope }),
     staleTime: 5 * 60_000,
   });
 
@@ -486,4 +493,20 @@ export const archiveCompareQuery = (s: Scope, p: { dataset: string; earlier: str
     queryKey: ["archive-compare", s.scope ?? "", p.dataset, p.earlier, p.later, p.groupBy],
     queryFn: () => api<ArchiveComparison>("archive/compare", { dataset: p.dataset, earlier: p.earlier, later: p.later, group_by: p.groupBy, top: 20, scope: s.scope }),
     staleTime: 5 * 60_000,
+  });
+
+export interface CurrencyOptions {
+  base: string;
+  supported: string[];
+  as_of: string | null;
+  source: string;
+  note: string | null;
+}
+
+/** Which display currencies this deployment can honestly offer, with the rate source and date. */
+export const currencyOptionsQuery = () =>
+  queryOptions({
+    queryKey: ["currency-options"],
+    queryFn: () => api<CurrencyOptions>("currency"),
+    staleTime: 60 * 60_000,
   });

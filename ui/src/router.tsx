@@ -3,20 +3,27 @@ import { createRootRouteWithContext, createRoute, createRouter, Link, lazyRouteC
 import { AppShell } from "./components/AppShell";
 import { ClassicPage } from "./routes/Classic";
 import { OverviewPage } from "./routes/Overview";
+import { DEFAULT_DAYS, WINDOW_DAYS, type WindowDays } from "./lib/period";
 
 /** Global view state lives in the URL, so every view is shareable and Back/Forward just work. */
 export interface GlobalSearch {
   month?: string;
   scope?: string;
+  days?: WindowDays;
+  currency?: string;
 }
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const SCOPE = /^[A-Za-z0-9-]+(,[A-Za-z0-9-]+)*$/;
+const CURRENCY = /^[A-Za-z]{3}$/;
 
 export function validateGlobalSearch(raw: Record<string, unknown>): GlobalSearch {
   const month = typeof raw.month === "string" && MONTH.test(raw.month) ? raw.month : undefined;
   const scope = typeof raw.scope === "string" && SCOPE.test(raw.scope) ? raw.scope : undefined;
-  return { month, scope };
+  const parsed = Number(raw.days);
+  const days = WINDOW_DAYS.find((d) => d === parsed && d !== DEFAULT_DAYS);
+  const currency = typeof raw.currency === "string" && CURRENCY.test(raw.currency) ? raw.currency.toUpperCase() : undefined;
+  return { month, scope, days, currency };
 }
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({

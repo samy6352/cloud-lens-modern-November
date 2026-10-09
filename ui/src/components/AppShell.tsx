@@ -25,6 +25,7 @@ import { meQuery } from "@/lib/queries";
 import { signOut } from "@/lib/session";
 import { WORKSPACES, SCREENS } from "@/nav";
 import { CommandPalette } from "./CommandPalette";
+import { CurrencyPicker } from "./CurrencyPicker";
 import { MonthPicker } from "./MonthPicker";
 import { ScopePicker } from "./ScopePicker";
 import { Button } from "./ui/button";
@@ -234,6 +235,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
       <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-1 pb-0.5 sm:order-3 sm:ml-auto sm:w-auto sm:gap-2 sm:pb-0">
         <MonthPicker />
+        <CurrencyPicker />
         <ScopePicker />
       </div>
       <div className="order-3 ml-auto flex items-center gap-1 sm:order-4 sm:ml-0 sm:gap-2">

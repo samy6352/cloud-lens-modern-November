@@ -9,13 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { anomaliesQuery, type AnomalyIncident, type AnomalyReport } from "@/lib/queries";
+import { anomaliesQuery, windowDays, type AnomalyIncident, type AnomalyReport } from "@/lib/queries";
 
-const WINDOWS = [
-  { value: "30", label: "30 days" },
-  { value: "60", label: "60 days" },
-  { value: "90", label: "90 days" },
-];
 
 const SEVERITY_CLASS: Record<string, string> = {
   high: "bg-bad/10 text-bad",
@@ -48,9 +43,8 @@ function trendOption(report: AnomalyReport, incidents: AnomalyIncident[]) {
 export function AnomaliesPage() {
   const search = useSearch({ from: "__root__" });
   const { numbers } = usePrefs();
-  const [days, setDays] = useState("60");
   const [currency, setCurrency] = useState("");
-  const query = useQuery({ ...anomaliesQuery(search, Number(days), currency), placeholderData: keepPreviousData });
+  const query = useQuery({ ...anomaliesQuery(search, windowDays(search), currency), placeholderData: keepPreviousData });
   const data = query.data;
   const money = (v: number | null | undefined, c: string | null | undefined) => formatMoney(v, c ?? null, { system: numbers });
 
@@ -150,7 +144,6 @@ export function AnomaliesPage() {
             {currencies.length > 1 && (
               <Segmented label="Display currency" value={currency} onChange={setCurrency} options={[{ value: "", label: "All" }, ...currencies.map((c) => ({ value: c, label: c.toUpperCase() }))]} />
             )}
-            <Segmented label="Window" value={days} onChange={setDays} options={WINDOWS} />
           </>
         }
       />

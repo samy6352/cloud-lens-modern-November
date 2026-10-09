@@ -10,13 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { uptimeQuery, type UptimeMeter, type UptimeReport } from "@/lib/queries";
+import { uptimeQuery, windowDays, type UptimeMeter, type UptimeReport } from "@/lib/queries";
 
-const WINDOWS = [
-  { value: "30", label: "30 days" },
-  { value: "60", label: "60 days" },
-  { value: "90", label: "90 days" },
-];
 type Focus = "" | "always" | "schedulable";
 const FOCUS: Array<{ value: Focus; label: string }> = [
   { value: "", label: "All" },
@@ -54,11 +49,11 @@ function weekdayOption(d: UptimeReport) {
 export function UptimePage() {
   const search = useSearch({ from: "__root__" });
   const { numbers } = usePrefs();
-  const [days, setDays] = useState("30");
+  const days = windowDays(search);
   const [focus, setFocus] = useState<Focus>("");
   const [text, setText] = useState("");
   const q = useDeferredValue(text.trim().toLowerCase());
-  const query = useQuery(uptimeQuery(search, Number(days)));
+  const query = useQuery(uptimeQuery(search, days));
   const data = query.data;
   const money = (v: number | null | undefined) => formatMoney(v, data?.currency ?? null, { system: numbers, compact: true });
 
@@ -147,7 +142,6 @@ export function UptimePage() {
             <Skeleton className="h-4 w-80" />
           )
         }
-        actions={<Segmented label="Window" value={days} onChange={setDays} options={WINDOWS} />}
       />
 
       {data?.tags_not_loaded && (
