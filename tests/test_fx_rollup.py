@@ -74,23 +74,6 @@ def test_raw_converted_rollup_is_reader_local_and_pool_scope_safe(postgres_wareh
         assert con.execute('SELECT sum("BilledCost") FROM costs_rollup').fetchone()[0] == 18
 
 
-@pytest.mark.postgres
-def test_converted_raw_read_raises_work_mem_only_for_its_checkout(postgres_warehouse, monkeypatch):
-    wh = postgres_warehouse
-    monkeypatch.setenv("FX_RATES", '{"EUR":0.5}')
-    monkeypatch.delenv("CLOUDLENS_CONVERTED_WORK_MEM", raising=False)
-    _insert(wh, [{"BilledCost": 10}])
-    with wh.connect(read_only=True) as con:
-        baseline = con.execute("SHOW work_mem").fetchone()[0]
-    with wh.connect(read_only=True, scope=["sub-a"], currency="USD") as con:
-        assert con.execute("SHOW work_mem").fetchone()[0] == "64MB"
-    with wh.connect(read_only=True, scope=["sub-a"]) as con:
-        assert con.execute("SHOW work_mem").fetchone()[0] == baseline
-    monkeypatch.setenv("CLOUDLENS_CONVERTED_WORK_MEM", "0")
-    with wh.connect(read_only=True, scope=["sub-a"], currency="USD") as con:
-        assert con.execute("SHOW work_mem").fetchone()[0] == baseline
-
-
 @pytest.fixture
 def fx_warehouse(monkeypatch, postgres_warehouse):
     from app import currency, fx_rollup

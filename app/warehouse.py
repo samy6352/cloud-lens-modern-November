@@ -1108,8 +1108,6 @@ class Warehouse:
         con.execute(f"CREATE TEMP VIEW costs AS SELECT {select} FROM {self._pg_table} {where}")
         self._shadow_rollup(con, where, rate, filters, target=target, fx_source=fx_source)
         con.presence_stored = self._shadow_presence(con, where, rate, target, filters)
-        if rate is not None and not con.presence_stored:
-            self._raise_work_mem_for_raw_scan(con)
         con.bill_stored = self._shadow_billing_rollup(con, where, rate, filters)
         con.bill_serving = self._shadow_billing_serving(con, where, rate, filters)
         if include_commitments:
@@ -1117,25 +1115,6 @@ class Warehouse:
             self._shadow_auxiliary_rollup(con, where, rate, filters, spot_rates)
         self._shadow_usage(con, usage, where, scope_where, rate, target, filters)
         return con
-
-    def _raise_work_mem_for_raw_scan(self, con: Any) -> None:
-        """Let one converted raw-`costs` read sort in memory instead of spilling.
-
-        A converted read cannot use `resource_presence`, so it groups the raw rows
-        through the FX CASE; at the default 16MB that sort and the grouped CTE each
-        spill ~24MB to temp files. This lasts for the checkout only -- the pool
-        restores the configured value on release. `CLOUDLENS_CONVERTED_WORK_MEM=0`
-        turns it off.
-        """
-        value = os.getenv("CLOUDLENS_CONVERTED_WORK_MEM", "64MB").strip()
-        if value in ("", "0"):
-            return
-        if not re.match(r"^\d+(kB|MB|GB)$", value, re.IGNORECASE):
-            raise ValueError("CLOUDLENS_CONVERTED_WORK_MEM must look like 64MB, or be 0")
-        try:
-            con.execute("SELECT set_config('work_mem', ?, false)", [value])
-        except Exception:  # noqa: BLE001 - a slower read is better than a failed one
-            log.warning("could not raise work_mem for a converted read", exc_info=True)
 
     def _shadow_usage(self, con: Any, usage: tuple[str, ...], where: str, scope_where: str,
                       rate: float | None, target: str,

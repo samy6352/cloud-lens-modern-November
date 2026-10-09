@@ -483,10 +483,6 @@ class PostgresStore:
             with conn.cursor() as cur:
                 cur.execute("DISCARD TEMP")
                 cur.execute("RESET statement_timeout")
-                if self.work_mem:
-                    cur.execute("SELECT set_config('work_mem', %s, false)", (self.work_mem,))
-                else:
-                    cur.execute("RESET work_mem")
         except Exception:  # noqa: BLE001 - a connection we cannot reset is discarded
             try:
                 conn.close()
