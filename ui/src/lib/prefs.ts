@@ -13,7 +13,7 @@ export interface Prefs {
 
 // public/theme.js reads the same key before first paint; keep the two in step.
 const KEY = "cl.v3.prefs";
-const DEFAULTS: Prefs = { theme: "system", density: "comfortable", numbers: "indian", sidebarCollapsed: false };
+const DEFAULTS: Prefs = { theme: "system", density: "compact", numbers: "indian", sidebarCollapsed: false };
 
 function read(): Prefs {
   try {

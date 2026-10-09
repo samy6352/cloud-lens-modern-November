@@ -21,7 +21,7 @@ export function AuditPage() {
     const h = columnHelper<AuditEntry>();
     return [
       h.accessor("at", { header: "When (server timestamp)", meta: { width: "minmax(190px,1fr)" } }),
-      h.accessor("user", { header: "Actor", cell: c => <div><div>{c.getValue()}</div><div className="text-xs text-muted">{c.row.original.email ?? "No email recorded"}</div></div>, meta: { width: "minmax(220px,1.4fr)" } }),
+      h.accessor("user", { header: "Actor", cell: c => <div className="flex min-w-0 items-baseline gap-2"><div className="min-w-0 shrink truncate">{c.getValue()}</div><div className="min-w-0 shrink-[2] truncate text-xs text-muted">{c.row.original.email ?? "No email recorded"}</div></div>, meta: { width: "minmax(220px,1.4fr)" } }),
       h.accessor("tab", { header: "Route / tab", meta: { width: "minmax(200px,1.2fr)" } }),
       h.accessor("source", { header: "Identity source" }),
       h.accessor("admin", { header: "Role", cell: c => c.getValue() ? "Administrator" : "Member" }),

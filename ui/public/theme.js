@@ -9,8 +9,8 @@
       (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     var root = document.documentElement;
     root.classList.toggle("dark", dark);
-    root.dataset.density = prefs.density === "compact" ? "compact" : "comfortable";
+    root.dataset.density = prefs.density === "comfortable" ? "comfortable" : "compact";
   } catch (e) {
-    /* storage blocked: fall back to the light, comfortable default */
+    /* storage blocked: fall back to the light, compact default */
   }
 })();

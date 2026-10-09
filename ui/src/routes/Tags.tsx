@@ -129,9 +129,9 @@ export function TagsPage() {
         header: "Resource",
         enableSorting: false,
         cell: (c) => (
-          <div className="min-w-0 leading-tight" title={c.row.original.id}>
-            <div className="truncate font-medium">{c.getValue()}</div>
-            <div className="truncate text-xs text-muted">{c.row.original.service ?? "—"}</div>
+          <div className="flex min-w-0 items-baseline gap-2" title={c.row.original.id}>
+            <div className="min-w-0 shrink truncate font-medium">{c.getValue()}</div>
+            <div className="min-w-0 shrink-[2] truncate text-xs text-muted">{c.row.original.service ?? "—"}</div>
           </div>
         ),
         meta: { width: "minmax(240px, 2.2fr)" },

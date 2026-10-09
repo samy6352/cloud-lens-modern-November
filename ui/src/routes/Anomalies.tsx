@@ -63,9 +63,9 @@ export function AnomaliesPage() {
         cell: (c) => {
           const r = c.row.original;
           return (
-            <div className="leading-tight">
-              <div className="num">{r.first_day === r.last_day ? r.first_day : `${r.first_day} → ${r.last_day}`}</div>
-              <div className="text-xs text-muted">{r.duration_days === 1 ? "1 day" : `${r.duration_days} days`}</div>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <div className="min-w-0 shrink num">{r.first_day === r.last_day ? r.first_day : `${r.first_day} → ${r.last_day}`}</div>
+              <div className="min-w-0 shrink-[2] text-xs text-muted">{r.duration_days === 1 ? "1 day" : `${r.duration_days} days`}</div>
             </div>
           );
         },
@@ -75,9 +75,9 @@ export function AnomaliesPage() {
         header: "What changed",
         enableSorting: false,
         cell: (c) => (
-          <div className="min-w-0 leading-tight" title={c.getValue()}>
-            <div className="truncate font-medium">{c.getValue()}</div>
-            <div className="truncate text-xs text-muted">{c.row.original.dimension}</div>
+          <div className="flex min-w-0 items-baseline gap-2" title={c.getValue()}>
+            <div className="min-w-0 shrink truncate font-medium">{c.getValue()}</div>
+            <div className="min-w-0 shrink-[2] truncate text-xs text-muted">{c.row.original.dimension}</div>
           </div>
         ),
         meta: { width: "minmax(240px, 2.2fr)" },

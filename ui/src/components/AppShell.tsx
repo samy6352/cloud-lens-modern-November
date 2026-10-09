@@ -208,8 +208,8 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-canvas/80 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-6 xl:py-0">
-      <div className="flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-sm">
+    <header className="z-30 flex min-h-11 sm:sticky sm:top-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-canvas/80 px-3 py-1.5 backdrop-blur-md sm:gap-x-3 sm:px-5 xl:py-0">
+      <div className="order-1 flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-sm">
         {workspace && workspace.screens.length > 1 && (
           <>
             <span className="text-muted">{workspace.label}</span>
@@ -222,7 +222,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       <button
         type="button"
         onClick={onOpenPalette}
-        className="ml-2 hidden h-9 shrink-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-sm text-muted transition-colors hover:border-accent/40 md:flex xl:ml-4 xl:w-72"
+        className="order-2 ml-2 hidden h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-muted transition-colors hover:border-accent/40 md:flex xl:ml-4 xl:w-72"
       >
         <Search className="size-4" />
         <span className="sr-only xl:not-sr-only">Search or jump to…</span>
@@ -232,9 +232,11 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         </span>
       </button>
 
-      <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1 sm:gap-2">
+      <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-1 pb-0.5 sm:order-3 sm:ml-auto sm:w-auto sm:gap-2 sm:pb-0">
         <MonthPicker />
         <ScopePicker />
+      </div>
+      <div className="order-3 ml-auto flex items-center gap-1 sm:order-4 sm:ml-0 sm:gap-2">
         <Button variant="ghost" size="icon" onClick={() => void refresh()} aria-label="Refresh data" title="Refresh data">
           <RefreshCw className={cn(spinning && "animate-spin")} />
         </Button>
@@ -279,7 +281,7 @@ export function AppShell() {
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-4 sm:px-6 sm:py-6"
+          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-3 sm:px-5 sm:py-4"
         >
           <Outlet />
         </m.main>

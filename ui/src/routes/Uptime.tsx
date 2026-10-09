@@ -78,9 +78,9 @@ export function UptimePage() {
       h.accessor("name", {
         header: "Resource / meter",
         cell: (c) => (
-          <div className="min-w-0 leading-tight" title={c.row.original.id}>
-            <div className="truncate font-medium">{c.getValue()}</div>
-            <div className="truncate text-xs text-muted">{c.row.original.meter ?? c.row.original.service ?? "—"}</div>
+          <div className="flex min-w-0 items-baseline gap-2" title={c.row.original.id}>
+            <div className="min-w-0 shrink truncate font-medium">{c.getValue()}</div>
+            <div className="min-w-0 shrink-[2] truncate text-xs text-muted">{c.row.original.meter ?? c.row.original.service ?? "—"}</div>
           </div>
         ),
         meta: { width: "minmax(260px, 2.4fr)" },
@@ -89,9 +89,9 @@ export function UptimePage() {
         id: "resource_group",
         header: "Group / region",
         cell: (c) => (
-          <div className="min-w-0 leading-tight">
-            <div className="truncate">{c.row.original.resource_group ?? "—"}</div>
-            <div className="truncate text-xs text-muted">{c.row.original.region ?? "—"}</div>
+          <div className="flex min-w-0 items-baseline gap-2">
+            <div className="min-w-0 shrink truncate">{c.row.original.resource_group ?? "—"}</div>
+            <div className="min-w-0 shrink-[2] truncate text-xs text-muted">{c.row.original.region ?? "—"}</div>
           </div>
         ),
         meta: { width: "minmax(170px, 1.4fr)" },

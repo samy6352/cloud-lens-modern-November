@@ -32,21 +32,21 @@ export function KpiTile({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
     >
-      <Card className="h-full p-[var(--cl-pad)]">
-        <div className="text-xs font-medium text-muted">{label}</div>
+      <Card className="h-full px-3 py-2.5">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</div>
         {loading ? (
           <>
-            <Skeleton className="mt-3 h-8 w-32" />
-            <Skeleton className="mt-2 h-4 w-24" />
+            <Skeleton className="mt-2 h-6 w-28" />
+            <Skeleton className="mt-1.5 h-3 w-20" />
           </>
         ) : (
           <>
-            <div className="num mt-2 text-[1.75rem] font-semibold leading-tight tracking-tight">{value}</div>
-            <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
+            <div className="num mt-0.5 text-xl font-semibold leading-tight tracking-tight">{value}</div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
               {changePct != null && (
                 <span
                   className={cn(
-                    "num inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-medium",
+                    "num inline-flex items-center gap-0.5 rounded px-1 py-px font-medium",
                     good === true && "bg-good/10 text-good",
                     good === false && "bg-bad/10 text-bad",
                     good === null && "bg-surface-2",
@@ -124,10 +124,10 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
       <div>
-        <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
-        {subtitle && <div className="mt-1 text-sm text-muted">{subtitle}</div>}
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>

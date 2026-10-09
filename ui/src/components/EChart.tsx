@@ -2,9 +2,12 @@ import { useEffect, useRef } from "react";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart, PieChart } from "echarts/charts";
 import {
+  DataZoomComponent,
   DatasetComponent,
   GridComponent,
   LegendComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   TooltipComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
@@ -18,9 +21,12 @@ echarts.use([
   BarChart,
   LineChart,
   PieChart,
+  DataZoomComponent,
   DatasetComponent,
   GridComponent,
   LegendComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   TooltipComponent,
   CanvasRenderer,
 ]);
@@ -53,7 +59,7 @@ export interface EChartProps {
   option: EChartsCoreOption;
   height?: number;
   className?: string;
-  onClick?: (params: { name: string; seriesName?: string; value: unknown; dataIndex: number }) => void;
+  onClick?: (params: { name: string; seriesName?: string; value: unknown; dataIndex: number; data?: unknown }) => void;
 }
 
 export default function EChart({ option, height = 280, className, onClick }: EChartProps) {

@@ -11,7 +11,11 @@ export default defineConfig({
   base: "/v2/",
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // Natural Earth geometry generated once by tools/build_worldmap.py and shared with the classic UI.
+      "@cl/worldmap": fileURLToPath(new URL("../web/assets/worldmap.js", import.meta.url)),
+    },
   },
   build: {
     outDir: "../web/v2",
