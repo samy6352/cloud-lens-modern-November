@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
-import { ErrorState, PageHeader, Segmented } from "@/components/blocks";
+import { ErrorState, PageHeader } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -15,7 +15,6 @@ const BLOCKS: Record<string, string> = { trend: "Daily trend", services: "By ser
 type Content = Pick<ReportSelection, "summary" | "sections" | "blocks" | "live">;
 
 export function ReportsPage() {
-  const [workflow, setWorkflow] = useState<"report" | "raw">("report");
   const search = useSearch({ strict: false });
   const scope: Scope = { month: search.month, from: search.from, to: search.to, scope: search.scope };
   const [days, setDays] = useState(30);
@@ -81,11 +80,6 @@ export function ReportsPage() {
   const saveReason = rawStatus.data?.read_only ? "This deployment is read-only; local downloads remain available." : !archive.data?.enabled ? "Archive storage is not configured. Download locally instead." : !rawStatus.data ? "Read deployment policy and choose subscriptions before saving." : "";
   return <>
     <PageHeader title="Export data" subtitle="Build a report for the selected period and subscriptions, or export underlying FOCUS rows." />
-    <div className="cl-export-switch mb-4">
-      <Segmented label="Export workflow" value={workflow} onChange={setWorkflow} options={[{ value: "report", label: "Financial report" }, { value: "raw", label: "Raw cost export" }]} />
-      <p className="mt-2 text-xs text-muted">{workflow === "report" ? "Choose report content, then download. Live findings are opt-in." : "Select independent subscriptions and dates. Saving to storage always requires review."}</p>
-    </div>
-    <div hidden={workflow !== "report"}>
     {options.isError ? <ErrorState error={options.error} onRetry={() => void options.refetch()} /> : <Card className="mb-5">
       <CardHeader title="Report builder" subtitle="Warehouse content is the default. Live findings query Azure only when explicitly selected." />
       <CardBody>
@@ -102,7 +96,7 @@ export function ReportsPage() {
           <AdminChecks title="Area details / dimensions" options={options.data?.blocks.map(id => ({ id, label: BLOCKS[id] ?? id })) ?? []} selected={content.blocks} onChange={blocks => update({ blocks })} />
           <AdminChecks title="Live findings (slower, Azure reads)" options={options.data?.live ?? []} selected={content.live} onChange={live => update({ live })} />
         </div>
-        <div className="cl-workflow-actions mt-5 flex flex-wrap items-center gap-3">
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           <select aria-label="Report file format" className={`${adminInput} w-auto`} value={format} onChange={e => setFormat(e.target.value)}>{options.data?.formats.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}</select>
           <Button asChild variant="primary" className={reportDisabled ? "opacity-50" : ""}><a href={reportDisabled ? undefined : reportHref} aria-disabled={reportDisabled} target="_blank" rel="noopener" onClick={e => { if (reportDisabled) { e.preventDefault(); return; } setNotice("Report requested. The browser handles the download; check its downloads or the server response in the new tab."); }}><Download />Download report</a></Button>
           <span className="text-xs text-muted">{content.summary ? "Summary · " : ""}{content.sections.length} areas · {content.blocks.length} detail blocks · {content.live.length} live findings</span>
@@ -110,8 +104,6 @@ export function ReportsPage() {
         {reportReason && <p className="mt-2 text-xs text-muted">{reportReason}</p>}
       </CardBody>
     </Card>}
-    </div>
-    <div hidden={workflow !== "raw"}>
     <Card><CardHeader title="Custom cost export" subtitle="Independent subscription selection. Same FOCUS columns and order as Azure exports; these are raw rows, not report presentation columns." /><CardBody>
       {catalog.isError ? <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} /> : <AdminChecks title="Export subscriptions" options={catalog.data?.subscriptions.map(s => ({ id: s.id, label: s.name })) ?? []} selected={selected} onChange={setRawScope} />}
       <div className="mt-5 grid gap-4 sm:grid-cols-3">
@@ -124,11 +116,10 @@ export function ReportsPage() {
       </div>
       <p className="mt-3 text-xs text-muted">Warehouse: {warehouse.data?.from ?? "no data"} → {warehouse.data?.to ?? "no data"}. Azure may restate costs between snapshot dates. Raw exports preserve source currencies.</p>
       {[warehouse.error, archive.error, rawStatus.error].filter(Boolean).map((e, i) => <div key={i} className="mt-3"><ErrorState error={e} /></div>)}
-      <div className="cl-workflow-actions mt-5 flex flex-wrap gap-3"><Button asChild variant="primary" className={busy || !rawHref ? "opacity-50" : ""}><a href={busy ? undefined : rawHref} aria-disabled={busy || !rawHref} target="_blank" rel="noopener" onClick={e => { if (busy || !rawHref) { e.preventDefault(); return; } setNotice("Raw export requested. The browser handles the download; check its downloads or the server response in the new tab."); }}><Download />Download raw data</a></Button><Button disabled={busy || !selected.length || !canSave} onClick={reviewStorage}>Review save to storage</Button></div>
+      <div className="mt-5 flex flex-wrap gap-3"><Button asChild variant="primary" className={busy || !rawHref ? "opacity-50" : ""}><a href={busy ? undefined : rawHref} aria-disabled={busy || !rawHref} target="_blank" rel="noopener" onClick={e => { if (busy || !rawHref) { e.preventDefault(); return; } setNotice("Raw export requested. The browser handles the download; check its downloads or the server response in the new tab."); }}><Download />Download raw data</a></Button><Button disabled={busy || !selected.length || !canSave} onClick={reviewStorage}>Review save to storage</Button></div>
       {rawReason && <p className="mt-2 text-xs text-warn">{rawReason}</p>}
       {saveReason && <p className="mt-2 text-xs text-muted">{saveReason}</p>}
     </CardBody></Card>
-    </div>
     {error != null && <div className="mt-4" role="alert"><ErrorState error={error} /></div>}
     <p role="status" className="mt-3 text-sm text-muted">{notice}</p>
     {storageReview && <AdminConfirm title="Save custom export to storage?" confirm={() => void saveStorage()} cancel={() => { session.current.cancel(); setStorageReview(null); setNotice("Cancelled. No storage changes made."); }} busy={busy} disabled={!canSave}>

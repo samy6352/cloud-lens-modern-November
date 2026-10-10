@@ -396,10 +396,10 @@ async function renderOverview(token) {
           <span class="overview-footprint" title="Subscriptions, services and regions represented in these cost records">${esc(footprint)}</span>
         </div>
         <nav class="overview-actions" aria-label="Overview actions">
-          <button type="button" class="primary" id="overviewAnalysis">AI Analysis</button>
-          <button type="button" class="ghost" data-overview-tab="savings">Savings</button>
-          <button type="button" class="ghost" data-overview-tab="budgets">Budgets</button>
-          <button type="button" class="ghost" data-overview-tab="report">Export</button>
+          <button type="button" class="primary" id="overviewAnalysis">${railIcon("anomalies")}AI Analysis</button>
+          <button type="button" class="ghost" data-overview-tab="savings">${railIcon("savings")}Savings</button>
+          <button type="button" class="ghost" data-overview-tab="budgets">${railIcon("budgets")}Budgets</button>
+          <button type="button" class="ghost" data-overview-tab="report">${railIcon("report")}Export</button>
         </nav>
       </div>
       ${kpiRow([

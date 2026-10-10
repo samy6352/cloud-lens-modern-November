@@ -1,11 +1,10 @@
 import { ArrowDownRight, ArrowUpRight, TriangleAlert } from "lucide-react";
 import * as m from "motion/react-m";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/lib/api";
 import { Card } from "./ui/card";
 import { Skeleton } from "./ui/skeleton";
-import { Button } from "./ui/button";
 
 export function KpiTile({
   label,
@@ -33,7 +32,7 @@ export function KpiTile({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
     >
-      <Card className="cl-kpi h-full px-3 py-2.5">
+      <Card className="h-full px-3 py-2.5">
         <div className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</div>
         {loading ? (
           <>
@@ -42,8 +41,8 @@ export function KpiTile({
           </>
         ) : (
           <>
-            <div className="cl-kpi-value num mt-0.5 text-xl font-semibold leading-tight tracking-tight">{value}</div>
-            <div className="mt-1 flex flex-wrap items-start gap-2 text-xs text-muted">
+            <div className="num mt-0.5 text-xl font-semibold leading-tight tracking-tight">{value}</div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
               {changePct != null && (
                 <span
                   className={cn(
@@ -57,7 +56,7 @@ export function KpiTile({
                   {Math.abs(changePct).toFixed(1)}%
                 </span>
               )}
-              {hint && <span className="min-w-0">{hint}</span>}
+              {hint && <span className="truncate">{hint}</span>}
             </div>
           </>
         )}
@@ -77,10 +76,9 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   label: string;
 }) {
-  const id = useId();
   return (
-    <div role="radiogroup" aria-label={label} className="cl-segmented inline-flex">
-      {options.map((o, index) => {
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+      {options.map((o) => {
         const active = o.value === value;
         return (
           <button
@@ -88,21 +86,12 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={active}
-            tabIndex={active || (!options.some(option => option.value === value) && index === 0) ? 0 : -1}
             onClick={() => onChange(o.value)}
-            onKeyDown={(event) => {
-              if (!["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
-                : (index + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
-              onChange(options[next]!.value);
-              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
-            }}
             className={cn("relative h-7 rounded-md px-2.5 text-xs font-medium transition-colors", active ? "text-fg" : "text-muted hover:text-fg")}
           >
             {active && (
               <m.span
-                layoutId={`seg-${id}`}
+                layoutId={`seg-${label}`}
                 className="absolute inset-0 rounded-md bg-surface-2 ring-1 ring-border"
                 transition={{ type: "spring", stiffness: 500, damping: 40 }}
               />
@@ -118,7 +107,7 @@ export function Segmented<T extends string>({
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof ApiError || error instanceof Error ? error.message : "Something went wrong.";
   return (
-    <Card role="alert" className="cl-error flex flex-wrap items-start gap-3 p-5">
+    <Card className="flex items-start gap-3 p-5">
       <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium">This view could not be loaded</div>
@@ -135,62 +124,12 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="cl-page-header mb-4 flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0 flex-1">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <div className="mt-1 max-w-3xl text-xs leading-relaxed text-muted">{subtitle}</div>}
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
       </div>
       {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
-}
-
-/** Operational filters are separate from evidence panels; clearing never changes global scope. */
-export function FilterBar({ children, title = "Filter records", summary, onReset, active = false }: {
-  children: ReactNode; title?: string; summary?: ReactNode; onReset?: () => void; active?: boolean;
-}) {
-  return <section className="cl-filter-bar" aria-label={title}>
-    <div className="cl-filter-heading">
-      <h2>{title}</h2>
-      {summary && <span role="status" className="num text-xs text-muted">{summary}</span>}
-      {onReset && <Button size="sm" variant="ghost" disabled={!active} onClick={onReset}>Clear filters</Button>}
-    </div>
-    <div className="cl-filter-fields">{children}</div>
-  </section>;
-}
-
-export function SectionHeading({ title, note }: { title: string; note?: string }) {
-  return <div className="cl-section-heading"><h2>{title}</h2>{note && <p>{note}</p>}</div>;
-}
-
-/** Inline evidence keeps table context while bringing a newly opened review into view. */
-export function EvidencePanel({ title, children, onClose }: { title: ReactNode; children: ReactNode; onClose: () => void }) {
-  const ref = useRef<HTMLElement>(null);
-  const returnFocus = useRef(typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null);
-  const returnTable = useRef(returnFocus.current?.closest<HTMLElement>('[role="table"]') ?? null);
-  const returnRow = useRef(returnFocus.current?.closest<HTMLElement>('[data-row-id]')?.dataset.rowId);
-  const returnText = useRef(returnFocus.current?.textContent);
-  const id = useId();
-  useEffect(() => {
-    const panel = ref.current;
-    panel?.focus({ preventScroll: true });
-    panel?.scrollIntoView({ block: "nearest", behavior: "instant" });
-    return () => {
-      const previous = returnFocus.current;
-      if (panel?.contains(document.activeElement) && previous?.isConnected) previous.focus({ preventScroll: true });
-    };
-  }, []);
-  return <Card ref={ref} tabIndex={-1} aria-labelledby={id} className="cl-evidence mt-4">
-    <div className="cl-evidence-header"><h2 id={id} className="min-w-0 break-words text-sm font-semibold">{title}</h2><Button variant="ghost" onClick={() => {
-      onClose();
-      // Closing can also replace virtual cells. Restore focus after that commit, not before it.
-      requestAnimationFrame(() => {
-        const row = returnRow.current ? returnTable.current?.querySelector(`[data-row-id="${CSS.escape(returnRow.current)}"]`) : null;
-        const replacement = Array.from(row?.querySelectorAll<HTMLElement>("button, a") ?? []).find(element => element.textContent === returnText.current);
-        const target = returnFocus.current?.isConnected ? returnFocus.current : replacement ?? returnTable.current;
-        if (target?.isConnected) target.focus({ preventScroll: true });
-      });
-    }}>Close details</Button></div>
-    <div className="space-y-3 p-[var(--cl-pad)]">{children}</div>
-  </Card>;
 }

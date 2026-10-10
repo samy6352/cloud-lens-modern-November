@@ -4,7 +4,7 @@ import { ChevronDown, Info, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
-import { ErrorState, FilterBar, KpiTile, PageHeader, Segmented } from "@/components/blocks";
+import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatMoney, formatNumber } from "@/lib/format";
@@ -169,27 +169,38 @@ export function BillingPage() {
         />
       </div>
 
-      <div className="mt-4">
-        <FilterBar title="Statement breakdown" summary={`${rows.length} matching rows`} active={!!filter} onReset={() => setFilter("")}>
-          <div className="flex items-end"><Segmented label="Breakdown" value={dimension} onChange={setDimension} options={DIMENSIONS} /></div>
-          <label className="relative">
-            <span className="sr-only">Filter rows</span>
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
-            <input type="search" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Name or resource group…" aria-label="Filter rows" className="h-9 w-full rounded-md border border-border bg-surface pl-8 pr-3 text-sm" />
-          </label>
-        </FilterBar>
-      </div>
-      <div className="cl-billing-analysis mt-3">
-      <Card>
+      <Card className="mt-4">
+        <CardHeader
+          title="Largest contributors"
+          subtitle="Recorded cost against list price"
+          actions={<Segmented label="Breakdown" value={dimension} onChange={setDimension} options={DIMENSIONS} />}
+        />
+        <CardBody>
+          {data ? <Chart height={360} option={barOption(rows, currency, numbers)} /> : <Skeleton className="h-[360px] w-full" />}
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
         <CardHeader
           title={DIMENSIONS.find((d) => d.value === dimension)!.label}
-          subtitle="Recorded, effective and retail cost reconciled at the selected level."
+          subtitle={<><span className="sm:hidden">Use Sort to reorder.</span><span className="hidden sm:inline">Click a column to sort.</span> Every row is here; only the visible ones are drawn.</>}
+          actions={
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter…"
+                aria-label="Filter rows"
+                className="h-9 w-56 rounded-lg border border-border bg-surface pl-8 pr-3 text-sm outline-none focus:border-accent/60"
+              />
+            </label>
+          }
         />
         <CardBody>
           {data ? (
             <DataTable
               key={dimension}
-              label={`Billing by ${dimension}`}
               data={rows}
               columns={columns}
               rowKey={(r) => `${r.id}|${r.currency ?? ""}`}
@@ -202,13 +213,6 @@ export function BillingPage() {
           )}
         </CardBody>
       </Card>
-      <Card>
-        <CardHeader title="Largest contributors" subtitle="Top 12 matching rows · recorded cost against list price" />
-        <CardBody>
-          {data ? <Chart height={360} option={barOption(rows, currency, numbers)} /> : <Skeleton className="h-[360px] w-full" />}
-        </CardBody>
-      </Card>
-      </div>
 
       {data && data.warnings.length > 0 && (
         <Card className="mt-4">

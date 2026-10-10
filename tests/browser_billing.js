@@ -136,12 +136,6 @@ async (page, { stylesheetUrl, assetOrigin } = {}) => {
     const narrow = [];
     for (const width of [2000, 1500, 1200, 800, 390, 320]) {
       await test.setViewportSize({ width, height: 844 });
-      await test.locator("#billMomChart").scrollIntoViewIfNeeded();
-      await test.waitForFunction(() => [...document.querySelectorAll(".bill-chart-grid canvas")].every(canvas => {
-        const rect = canvas.getBoundingClientRect();
-        return rect.width <= canvas.parentElement.getBoundingClientRect().width + 1
-          && rect.right <= document.documentElement.clientWidth + 1;
-      }));
       narrow.push(await test.evaluate(() => {
         const cards = [...document.querySelectorAll(".bill-answer, .bill-chip")];
         const rects = cards.map(card => card.getBoundingClientRect());
@@ -150,16 +144,12 @@ async (page, { stylesheetUrl, assetOrigin } = {}) => {
           overflow: document.documentElement.scrollWidth > innerWidth + 1,
           answers: document.querySelectorAll(".bill-answer").length, cards: cards.length,
           columns: getComputedStyle(document.querySelector(".bill-answers")).gridTemplateColumns.split(" ").length,
-          leadWidth: document.querySelector("#billSpent").getBoundingClientRect().width,
-          supportingWidth: document.querySelector(".bill-chip").getBoundingClientRect().width,
           widthDifference: spread("width"), heightDifference: spread("height"),
           clipped: cards.some(card => card.scrollWidth > card.clientWidth + 1 || card.scrollHeight > card.clientHeight + 1) };
       }));
     }
     if (charts.some(chart => !chart.unclipped) || narrow.some(row => row.overflow || row.answers !== 3
-      || row.cards !== 6 || (row.width <= 1400 && row.widthDifference > 1)
-      || (row.width > 1400 && row.leadWidth <= row.supportingWidth)
-      || row.heightDifference > 1 || row.clipped
+      || row.cards !== 6 || row.widthDifference > 1 || row.heightDifference > 1 || row.clipped
       || row.columns !== (row.width > 1400 ? 6 : row.width > 900 ? 3 : row.width > 360 ? 2 : 1)) || errors.length) {
       throw new Error(JSON.stringify({ charts, narrow, errors }));
     }

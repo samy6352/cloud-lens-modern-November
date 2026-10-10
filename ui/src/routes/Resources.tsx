@@ -3,7 +3,7 @@ import { useSearch } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { columnHelper, DataTable } from "@/components/DataTable";
-import { ErrorState, FilterBar, KpiTile, PageHeader, Segmented } from "@/components/blocks";
+import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -220,8 +220,11 @@ export function ResourcesPage() {
         />
       </div>
 
-      <div className="mt-4">
-        <FilterBar title="Resource search" summary={query.isFetching ? "Updating results…" : `${data?.total ?? 0} matching resources`} active={!!text || !!state.change || !!state.currency} onReset={() => { setText(""); set({ change: "", currency: "" }); }}>
+      <Card className="mt-4">
+        <CardHeader
+          title="Resources"
+          subtitle="Sorted and filtered on the server; pages load as you go."
+          actions={
             <div className="flex flex-wrap items-center gap-2">
               <Segmented label="Cost change" value={state.change} onChange={(v) => set({ change: v })} options={CHANGES} />
               <label className="relative">
@@ -236,14 +239,11 @@ export function ResourcesPage() {
                 />
               </label>
             </div>
-        </FilterBar>
-      </div>
-      <Card className="mt-3">
-        <CardHeader title="Resource ledger" subtitle="Server-ranked inventory · currency amounts remain separate." />
+          }
+        />
         <CardBody>
           {data ? (
             <DataTable
-              label="Billed resource ledger"
               data={data.resources}
               columns={columns}
               rowKey={(r) => `${r.subscription_id ?? ""}|${r.id}|${r.currency}`}

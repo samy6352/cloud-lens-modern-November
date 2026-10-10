@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/cn";
 
 const button = cva(
-  "cl-button inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors " +
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-colors " +
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:pointer-events-none disabled:opacity-50 " +
     "[&_svg]:size-4 [&_svg]:shrink-0",
   {
@@ -31,5 +31,5 @@ export interface ButtonProps extends ComponentProps<"button">, VariantProps<type
 
 export function Button({ className, variant, size, asChild, ...props }: ButtonProps) {
   const Comp = asChild ? Slot.Root : "button";
-  return <Comp {...(!asChild ? { type: "button" as const } : {})} className={cn(button({ variant, size }), className)} {...props} />;
+  return <Comp className={cn(button({ variant, size }), className)} {...props} />;
 }

@@ -152,19 +152,9 @@ async function palette(screen) {
   await selected.click();
   await page.waitForURL(url => url.pathname === `/v2${screen.route}` || (screen.route === "/" && url.pathname === "/v2"), { timeout: 15000 });
 }
-async function navigateScreen(screen) {
-  if (page.viewportSize().width < 640) {
-    await page.getByRole("button", { name: "Open navigation", exact: true }).click();
-    await page.getByRole("dialog", { name: "CloudLens navigation" })
-      .getByRole("link", { name: screen.label, exact: true }).click();
-  } else {
-    await page.getByRole("navigation", { name: "Workspaces" })
-      .getByRole("link", { name: screen.label, exact: true }).click();
-  }
-}
 async function readOnlyActions(screen) {
   if (["billing", "resources"].includes(screen.id)) {
-    const rows = page.locator('[role="table"] [role="row"][data-index]');
+    const rows = page.locator('[role="table"] [role="row"][aria-rowindex]');
     if (!await rows.count()) {
       check(false, `live row actions available ${screen.label}`, "No live rows: cannot establish sorting/detail functionality");
       return;
@@ -227,7 +217,6 @@ async function readOnlyActions(screen) {
       check(await field.isChecked() !== before, "Reports selection changes from actual checkbox click");
       await field.setChecked(before);
     }
-    await page.getByRole("radio", { name: "Raw cost export", exact: true }).click();
     const exportSubscriptions = page.locator("fieldset").filter({ has: page.locator("legend", { hasText: "Export subscriptions" }) });
     const subscription = exportSubscriptions.getByRole("checkbox").first();
     if (await subscription.count()) {
@@ -264,9 +253,9 @@ try {
     const exceptionStart = evidence.exceptions.length;
     const start = Date.now();
     try {
-      await navigateScreen(screen);
+      await nav.getByRole("link", { name: screen.label, exact: true }).click();
       await page.waitForURL(url => url.pathname === `/v2${screen.route}` || (screen.route === "/" && url.pathname === "/v2"), { timeout: 15000 });
-      await page.locator("main h1").waitFor({ timeout: 15000 });
+      await page.getByRole("heading", { level: 1, name: screen.label, exact: true }).waitFor({ timeout: 15000 });
       if (screen.id === "performance" && !new URL(page.url()).searchParams.has("scope")) {
         const catalog = await context.request.get(`${base}/api/cost-data/subscriptions`, { timeout });
         if (!catalog.ok()) throw new Error(`Current subscription catalog failed HTTP ${catalog.status()}`);
@@ -376,9 +365,9 @@ try {
       await page.setViewportSize({ width, height: 1000 });
       for (const screen of selectedRoutes) {
         active = `${screen.id}-${width}-${theme}`;
-        await navigateScreen(screen);
+        await nav.getByRole("link", { name: screen.label, exact: true }).click();
         await page.waitForURL(url => url.pathname === `/v2${screen.route}` || (screen.route === "/" && url.pathname === "/v2"), { timeout: 15000 });
-        const heading = page.locator("main h1");
+        const heading = page.getByRole("heading", { level: 1, name: screen.label, exact: true });
         await heading.waitFor({ state: "attached", timeout: 15000 });
         await settle();
         const visibleHeading = await heading.isVisible();

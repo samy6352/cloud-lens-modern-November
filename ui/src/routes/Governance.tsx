@@ -3,8 +3,9 @@ import { useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
-import { EvidencePanel, FilterBar, KpiTile, PageHeader } from "@/components/blocks";
+import { KpiTile, PageHeader } from "@/components/blocks";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { GovernDetails, GovernError, GovernField, GovernLink, GovernLoading, GovernNotice, GovernRefresh, GovernSelect, governInput } from "@/components/GovernControls";
 import { globalScope, governanceFindings, governanceQuery, nativeMoney, type GovernanceFinding } from "@/lib/govern-queries";
 
@@ -41,7 +42,7 @@ export function GovernancePage() {
       <KpiTile label="Networking candidates" value={data?.accelerated_networking.error ? "Unavailable" : data?.accelerated_networking.eligible?.length ?? "—"} hint={data?.accelerated_networking.catalogue ? "Verified SKU catalogue" : "SKU eligibility unverified"} />
       <KpiTile label="Empty groups listed" value={data?.orphaned_resource_groups.error ? "Unavailable" : data?.orphaned_resource_groups.groups?.length ?? "—"} hint={data?.orphaned_resource_groups.truncated ? "Partial inventory" : "Roles and locks not checked"} /></div>
     {data && [data.tagging, data.accelerated_networking, data.orphaned_resource_groups].map((section, i) => section.error || section.reason ? <GovernNotice key={i} warning>{["Tag coverage", "Accelerated networking", "Empty resource groups"][i]}: {section.error || section.reason}</GovernNotice> : null)}
-    <FilterBar title="Triage findings" summary={`${rows.length} of ${all.length} loaded findings`} active={!!q || !!category || !!severity || !!subscription || !!group || !!region || !!type} onReset={() => { setQ(""); setCategory(""); setSeverity(""); setSubscription(""); setGroup(""); setRegion(""); setType(""); }}><GovernField label="Search findings"><input className={governInput} type="search" value={q} onChange={e => setQ(e.target.value)} /></GovernField>
+    <Card className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4"><GovernField label="Search findings"><input className={governInput} type="search" value={q} onChange={e => setQ(e.target.value)} /></GovernField>
       <GovernSelect label="Finding" value={category} onChange={setCategory} options={all.map(r => r.category)} />
       <GovernSelect label="Review priority" value={severity} onChange={setSeverity} options={all.map(r => r.severity)} />
       <GovernSelect label="Subscription sub-scope" value={subscription} onChange={setSubscription} options={all.map(r => r.subscription).filter(Boolean)} />
@@ -50,14 +51,14 @@ export function GovernancePage() {
       <GovernSelect label="Resource type" value={type} onChange={setType} options={all.map(r => r.resourceType)} />
       <GovernField label="Cost lookback"><select className={governInput} value={days} onChange={e => setDays(e.target.value)}>{["30", "60", "90"].map(d => <option key={d} value={d}>{d} days</option>)}</select></GovernField>
       <GovernField label="Group findings"><select className={governInput} value={view} onChange={e => setView(e.target.value)}>{["Resource", "Severity", "Resource group", "Finding"].map(v => <option key={v}>{v}</option>)}</select></GovernField>
-    </FilterBar>
+    </Card>
     {query.isError ? <GovernError error={query.error} retry={() => void query.refetch()} /> : query.isPending ? <GovernLoading /> : view === "Resource" ?
       <DataTable data={rows} columns={columns} rowKey={r => r.id} height={410} empty="No findings match these filters. Check independent source warnings before concluding compliance." /> :
       <div className="space-y-4">{groups.length ? groups.map(g => <GovernDetails key={g} title={`${g} · ${rows.filter(r => (view === "Severity" ? r.severity : view === "Resource group" ? r.group || "Not supplied" : r.category) === g).length} findings`}>
         <DataTable data={rows.filter(r => (view === "Severity" ? r.severity : view === "Resource group" ? r.group || "Not supplied" : r.category) === g)} columns={columns} rowKey={r => r.id} height={260} /></GovernDetails>) : <GovernNotice>No findings match these filters.</GovernNotice>}</div>}
-    {selected && <EvidencePanel key={selected.id} title={selected.resource} onClose={() => setPicked(null)}>
+    {selected && <Card className="space-y-3 p-5"><div className="flex items-start justify-between"><h3 className="font-semibold">{selected.resource}</h3><Button onClick={() => setPicked(null)}>Close details</Button></div>
       <p className="text-sm text-muted">{selected.category} · {selected.severity} · {selected.subscription}</p><p>{selected.evidence}</p><p className="break-all text-xs text-muted">{selected.resourceId}</p>
-      <GovernLink resourceId={selected.resourceId} /><p className="text-sm">Billed context over {days} days: {nativeMoney(selected.cost, selected.currency)}. Never add different currencies.</p></EvidencePanel>}
+      <GovernLink resourceId={selected.resourceId} /><p className="text-sm">Billed context over {days} days: {nativeMoney(selected.cost, selected.currency)}. Never add different currencies.</p></Card>}
     {typeRows.length > 0 && <div className="grid gap-4 lg:grid-cols-2"><Card className="p-5"><h3 className="mb-3 font-semibold">Untagged resources by type</h3><Chart height={280} onClick={p => { const picked = typeRows.find(r => r.type === p.name); if (picked) { setCategory("Tag coverage"); setType(picked.full_type); } }} option={{
       tooltip: { trigger: "axis", renderMode: "richText" }, grid: { left: 130, right: 20, top: 15, bottom: 30 }, xAxis: { type: "value" }, yAxis: { type: "category", data: typeRows.slice(0, 10).map(r => r.type), inverse: true },
       series: [{ type: "bar", data: typeRows.slice(0, 10).map(r => r.untagged), barMaxWidth: 22 }],

@@ -1,4 +1,4 @@
-async (page, { assetOrigin } = {}) => {
+async (page) => {
   const origin = page.url().match(/^https?:\/\/[^/]+/)?.[0];
   if (!origin) throw new Error("Open CloudLens before running the appearance checks.");
   const context = await page.context().browser().newContext({
@@ -9,12 +9,6 @@ async (page, { assetOrigin } = {}) => {
   const errors = [];
   test.on("pageerror", error => errors.push(error.message));
   try {
-    if (assetOrigin) await context.route("**/assets/**", async route => {
-      const path = route.request().url().split("/assets/")[1].replace(/^v\/[a-f0-9]{64}\//, "");
-      const response = await page.request.get(`${assetOrigin}/assets/${path}`);
-      if (!response.ok()) throw new Error(`Missing candidate asset: ${path}`);
-      await route.fulfill({ response });
-    });
     await test.goto(origin);
     await test.waitForFunction(() => document.documentElement.dataset.dashboardReady === "true");
     const results = [];
@@ -26,8 +20,6 @@ async (page, { assetOrigin } = {}) => {
       }, theme);
       for (const size of [{ width: 1600, height: 1050 }, { width: 1200, height: 800 }, { width: 390, height: 844 }]) {
         await test.setViewportSize(size);
-        await test.evaluate(() => new Promise(resolve =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve))));
         results.push(await test.evaluate(() => {
           const style = getComputedStyle(document.documentElement);
           const luminance = name => {
@@ -58,7 +50,7 @@ async (page, { assetOrigin } = {}) => {
       }
     }
     const failures = results.filter(result => result.overflow || !result.railAligned
-      || result.boardHeight < 200 || result.cardRadius < 2 || result.cardRadius > 4
+      || result.boardHeight < 200 || result.cardRadius < 8 || result.cardRadius > 12
       || Object.values(result.contrast).some(value => !Number.isFinite(value) || value < 4.5));
     if (failures.length || errors.length) throw new Error(JSON.stringify({ failures, errors }));
     return { results, errors };

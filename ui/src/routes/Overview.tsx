@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowDownRight, ArrowUpRight, CalendarDays } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Boxes, CalendarDays, Layers3, Sparkles, TrendingUp } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Chart, InsightChart } from "@/components/Chart";
-import { CountUp, cssVar, escapeHtml, Sparkline } from "@/components/premium";
+import { CountUp, cssVar, escapeHtml, RadialGauge, Sparkline } from "@/components/premium";
 import { RegionSpend } from "@/components/RegionSpend";
 import { orderCurrencyViews } from "@/components/RegionSpendModel";
-import { ErrorState, PageHeader, SectionHeading, Segmented } from "@/components/blocks";
+import { ErrorState, PageHeader, Segmented } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
@@ -32,7 +32,7 @@ function useChartColors() {
     const dark = isDark();
     return {
       dark,
-      accent: cssVar("--cl-accent", "#096b87"),
+      accent: cssVar("--cl-accent", "#4f46e5"),
       good: cssVar("--cl-good", "#047857"),
       bad: cssVar("--cl-bad", "#b91c1c"),
       muted: cssVar("--cl-muted", "#56627a"),
@@ -86,7 +86,7 @@ function RankedBars({ rows, money, onPick, empty = "Nothing to show for this per
                 className="h-full rounded-full motion-safe:transition-[width] motion-safe:duration-700"
                 style={{
                   width: `${(Math.abs(r.cost) / max) * 100}%`,
-                  background: r.cost < 0 ? "var(--cl-good)" : PALETTE[i % PALETTE.length],
+                  background: r.cost < 0 ? "var(--cl-good)" : `linear-gradient(90deg, ${PALETTE[i % PALETTE.length]}, color-mix(in srgb, ${PALETTE[i % PALETTE.length]} 45%, transparent))`,
                 }}
               />
             </div>
@@ -126,9 +126,9 @@ function trendOption(view: ExecutiveView, money: Money, c: Colors, style: "area"
             symbol: "circle",
             symbolSize: 6,
             showSymbol: false,
-            lineStyle: { width: 2, color: c.accent },
+            lineStyle: { width: 3, color: c.accent, shadowBlur: 12, shadowColor: hex(0.45), shadowOffsetY: 6 },
             itemStyle: { color: c.accent },
-            areaStyle: { color: hex(0.08) },
+            areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: hex(0.35) }, { offset: 1, color: hex(0) }] } },
             markPoint: {
               symbol: "pin",
               symbolSize: 44,
@@ -209,13 +209,13 @@ function mixHex(from: string, to: string, t: number) {
   if ([...a, ...b].some((n) => !Number.isFinite(n))) return to;
   return `#${a.map((v, i) => Math.round(v + (b[i]! - v) * t).toString(16).padStart(2, "0")).join("")}`;
 }
-const TREND_NEUTRAL = "#70838f";
+const TREND_NEUTRAL = "#6366f1";
 const TREND_UP = "#e11d48";
 const TREND_DOWN = "#059669";
 
-/** A diverging scale: falling spend through neutral to rising spend. */
+/** Blends falling (emerald) through neutral (indigo) to rising (rose) so colour carries the period change. */
 function changeColor(pct: number | null, c: Colors) {
-  if (pct == null || !Number.isFinite(pct)) return c.dark ? "#435964" : "#94a3b8";
+  if (pct == null || !Number.isFinite(pct)) return c.dark ? "#3b4261" : "#94a3b8";
   const t = Math.max(-1, Math.min(1, pct / 25));
   return mixHex(TREND_NEUTRAL, t > 0 ? TREND_UP : TREND_DOWN, Math.abs(t) * 0.85 + 0.15);
 }
@@ -312,7 +312,7 @@ function calendarOption(view: ExecutiveView, money: Money, c: Colors) {
       show: false,
       min: Math.min(...values, 0),
       max: Math.max(...values, 1),
-      inRange: { color: c.dark ? ["#1c2d38", "#315869", "#47879c", "#71c8e2"] : ["#edf1f3", "#b9d6df", "#559fb4", "#096b87"] },
+      inRange: { color: c.dark ? ["#1e2340", "#4338ca", "#818cf8", "#f472b6"] : ["#eef2ff", "#a5b4fc", "#6366f1", "#db2777"] },
     },
     calendar: {
       range: [first, last],
@@ -352,10 +352,11 @@ function monthlyOption(view: ExecutiveView, money: Money, c: Colors) {
   };
 }
 
-function StatTile({ label, children, loading }: { label: string; children: ReactNode; loading?: boolean }) {
+function StatTile({ icon, label, children, loading }: { icon: ReactNode; label: string; children: ReactNode; loading?: boolean }) {
   return (
-    <Card className="cl-kpi h-full px-3 py-2.5">
+    <Card className="h-full px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+        <span className="text-accent">{icon}</span>
         {label}
       </div>
       {loading ? (
@@ -390,7 +391,7 @@ function SummaryBar({ view, money, numbers, loading }: { view: ExecutiveView | u
       ]
     : [];
   return (
-    <section aria-label="Spend summary" className="cl-spend-summary border-y border-border bg-surface px-4 py-4">
+    <section aria-label="Spend summary" className="rounded-card border border-border bg-surface px-3 py-2.5 shadow-card">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Total spend</p>
@@ -412,22 +413,23 @@ function SummaryBar({ view, money, numbers, loading }: { view: ExecutiveView | u
           )}
         </div>
         <dl className="grid w-full min-w-0 grid-cols-2 gap-x-4 gap-y-2 sm:w-auto sm:flex-1 sm:grid-cols-4">
-          {(stats.length ? stats : ["Daily average", "Peak day", "Subscriptions", "Footprint"]
-            .map(label => [label, "", ""] as [string, string, string])).map(([label, value, hint]) => (
-            <div key={label} className="min-w-0 border-l border-border pl-3">
-              <dt className="text-[10px] font-medium uppercase tracking-wide text-muted">{label}</dt>
-              <dd>
-                {stats.length ? <>
-                  <span className="num block truncate text-sm font-semibold">{value}</span>
-                  {hint && <span className="num block truncate text-[10px] text-muted">{hint}</span>}
-                </> : <Skeleton className="h-9 w-full" />}
-              </dd>
+          {(stats.length ? stats : Array.from({ length: 4 }, () => ["", "", ""] as [string, string, string])).map(([label, value, hint], i) => (
+            <div key={label || i} className="min-w-0 border-l border-border pl-3">
+              {label ? (
+                <>
+                  <dt className="text-[10px] font-medium uppercase tracking-wide text-muted">{label}</dt>
+                  <dd className="num truncate text-sm font-semibold">{value}</dd>
+                  {hint && <p className="num truncate text-[10px] text-muted">{hint}</p>}
+                </>
+              ) : (
+                <Skeleton className="h-9 w-full" />
+              )}
             </div>
           ))}
         </dl>
         {view && view.trend.values.length > 1 && (
           <div className="hidden w-44 shrink-0 lg:block" aria-hidden="true">
-            <Sparkline values={view.trend.values} stroke="var(--cl-accent)" height={36} fill={false} />
+            <Sparkline values={view.trend.values} stroke={TREND_NEUTRAL} height={36} highlightMax />
           </div>
         )}
       </div>
@@ -521,21 +523,22 @@ export function OverviewPage() {
       {view && ordered.length > 1 && <p className="mt-1 text-right text-[11px] text-muted">One currency at a time. Totals are never combined or converted.</p>}
 
       <div className="mt-3 grid grid-cols-1 gap-3 [&>*]:min-w-0 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile loading={loading} label="Resources billed">
+        <StatTile loading={loading} icon={<Boxes className="size-3.5" />} label="Resources billed">
           <div className="num mt-1 text-xl font-semibold leading-tight tracking-tight">
             <CountUp value={view?.kpis.resources} format={(v) => formatNumber(Math.round(v), { system: numbers, compact: true })} />
           </div>
           <p className="text-xs text-muted">{view ? `${view.kpis.services ?? "Unavailable"} services · ${view.kpis.regions ?? "Unavailable"} regions` : null}</p>
         </StatTile>
-        <StatTile loading={loading} label="Top-5 service concentration">
+        <StatTile loading={loading} icon={<Layers3 className="size-3.5" />} label="Top-5 service concentration">
           <div className="mt-1 flex items-center gap-2">
+            <RadialGauge pct={view?.kpis.top5_share_pct} size={36} />
             <div>
               <div className="num text-xl font-semibold leading-tight tracking-tight">{view?.kpis.top5_share_pct != null ? `${view.kpis.top5_share_pct.toFixed(1)}%` : "Unavailable"}</div>
               <p className="text-[11px] text-muted">of spend in the five largest services</p>
             </div>
           </div>
         </StatTile>
-        <StatTile loading={loading} label="Largest area">
+        <StatTile loading={loading} icon={<Sparkles className="size-3.5" />} label="Largest area">
           <div className="mt-1 truncate text-base font-semibold leading-tight tracking-tight">{topArea ? topArea.label ?? topArea.name : "Unavailable"}</div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
             <span className="num font-semibold text-fg">{money(topArea?.cost)}</span>
@@ -543,7 +546,7 @@ export function OverviewPage() {
             <span>of period spend</span>
           </div>
         </StatTile>
-        <StatTile loading={loading} label="Biggest mover">
+        <StatTile loading={loading} icon={<TrendingUp className="size-3.5" />} label="Biggest mover">
           <div className="mt-1 truncate text-base font-semibold leading-tight tracking-tight" title={topMover?.name}>{topMover?.name ?? "No movement"}</div>
           {topMover && (
             <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
@@ -555,8 +558,7 @@ export function OverviewPage() {
         </StatTile>
       </div>
 
-      <SectionHeading title="Spend trajectory" note="Compare the period before inspecting individual contributors." />
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
         <Card className="min-w-0 xl:col-span-2">
           <CardHeader
             title="Daily spend"
@@ -619,8 +621,9 @@ export function OverviewPage() {
         </Card>
       </div>
 
-      <SectionHeading title="Contributors & movement" note="Ranked evidence and the largest changes against the prior period." />
-      <div className="grid grid-cols-1 gap-3 [&>*]:min-w-0 xl:grid-cols-3">
+      {view ? <RegionSpend key={`${currency}-${periodParam(search) ?? ""}-${search.scope ?? ""}`} rows={view.regions ?? []} currency={currency} /> : loading ? <Skeleton className="mt-3 h-[380px] w-full" /> : null}
+
+      <div className="mt-3 grid grid-cols-1 gap-3 [&>*]:min-w-0 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader
             title="Spend landscape"
@@ -709,8 +712,6 @@ export function OverviewPage() {
           </CardBody>
         </Card>
       )}
-      <SectionHeading title="Geographic exposure" note="Regional attribution retains the selected billing currency." />
-      {view ? <RegionSpend key={`${currency}-${periodParam(search) ?? ""}-${search.scope ?? ""}`} rows={view.regions ?? []} currency={currency} /> : loading ? <Skeleton className="mt-3 h-[380px] w-full" /> : null}
     </div>
   );
 }

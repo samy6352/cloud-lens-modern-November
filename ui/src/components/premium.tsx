@@ -86,8 +86,8 @@ export function Sparkline({
         </linearGradient>
       </defs>
       {fill && <path d={area} fill={`url(#spark-${id})`} />}
-      <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      {highlightMax && peak >= 0 && <circle cx={x(peak)} cy={y(max)} r="3.5" fill={stroke} vectorEffect="non-scaling-stroke" />}
+      <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className="cl-draw" />
+      {highlightMax && peak >= 0 && <circle cx={x(peak)} cy={y(max)} r="3.5" fill={stroke} className="cl-pulse" vectorEffect="non-scaling-stroke" />}
     </svg>
   );
 }

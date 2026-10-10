@@ -2,15 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { Newspaper, Radio, ShieldCheck } from "lucide-react";
-import { FilterBar, KpiTile, PageHeader } from "@/components/blocks";
+import { KpiTile, PageHeader } from "@/components/blocks";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { evidenceDate, GovernDetails, GovernError, GovernField, GovernLink, GovernLoading, GovernNotice, GovernRefresh, GovernSelect, governInput } from "@/components/GovernControls";
 import { emptyFeedFilters, explicitScopes, feedQuery, filterArticles, globalScope, needsAttention, type AzureArticle, type FeedSource } from "@/lib/govern-queries";
 import type { Scope } from "@/lib/queries";
 
 function Article({ item }: { item: AzureArticle }) {
-  return <details className={`cl-article group overflow-hidden border-b bg-surface ${needsAttention(item) ? "border-l-2 border-warn/40" : "border-border"}`}>
-    <summary className="cursor-pointer list-none p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+  return <details className={`group overflow-hidden rounded-xl border bg-surface ${needsAttention(item) ? "border-warn/40" : "border-border"}`}>
+    <summary className="cursor-pointer list-none p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted"><span className="rounded-full bg-accent/10 px-2 py-1 font-medium text-accent">{item.category || item.type || "Other"}</span>
         {item.status && <span>{item.status}</span>}{item.level && <span>{item.level}</span>}<time>{evidenceDate(item.updated_at || item.published_at)}</time>{needsAttention(item) && <span className="font-medium text-warn">Customer attention</span>}</div>
       <h3 className="text-base font-semibold tracking-tight">{item.title || "Untitled notice"}</h3>
@@ -51,18 +52,18 @@ function FeedPanel({ source, scope, active }: { source: FeedSource; scope: Scope
         <KpiTile label="Customer attention" value={all.filter(needsAttention).length} /><KpiTile label="Matching notices" value={rows.length} hint={`Page ${current + 1} of ${pages}`} /></div>
       {freshness && <GovernNotice warning={!!stale}>{stale ? "Stale" : freshness.cached ? "Cached" : "Fetched"} · {evidenceDate(freshness.fetched_at)}. Results describe the retrieved listing, not real-time universal availability.</GovernNotice>}
       {data?.notice && <GovernNotice>{data.notice}</GovernNotice>}
-      <FilterBar title="Filter this source" summary={`${rows.length} of ${all.length} loaded notices`} active={!!filters.query || !!filters.category || !!filters.service || !!filters.region || !!filters.status || filters.attention} onReset={() => { setFilters(emptyFeedFilters()); setPage(0); }}>
+      <Card className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
         <GovernField label="Search news, impact and actions"><input className={governInput} type="search" maxLength={200} value={filters.query} onChange={e => set("query", e.target.value)} /></GovernField>
         <GovernSelect label="Category" value={filters.category} onChange={v => set("category", v)} options={all.map(i => i.category || i.type || "Other")} />
         <GovernSelect label="Service / product" value={filters.service} onChange={v => set("service", v)} options={[...all.flatMap(i => i.services ?? []), ...(all.some(i => !i.services?.length) ? ["__missing"] : [])]} />
         <GovernSelect label="Region" value={filters.region} onChange={v => set("region", v)} options={[...all.flatMap(i => i.regions ?? []), ...(all.some(i => !i.regions?.length) ? ["__missing"] : [])]} />
         <GovernSelect label="Status" value={filters.status} onChange={v => set("status", v)} options={all.map(i => i.status || "").filter(Boolean)} />
-        <div className="flex flex-wrap items-end gap-3"><label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" checked={filters.attention} onChange={e => set("attention", e.target.checked)} />Customer attention</label></div>
-      </FilterBar>
+        <div className="flex flex-wrap items-end gap-3"><label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" checked={filters.attention} onChange={e => set("attention", e.target.checked)} />Customer attention</label><Button onClick={() => { setFilters(emptyFeedFilters()); setPage(0); }}>Clear filters</Button></div>
+      </Card>
       {query.isError ? <GovernError error={query.error} retry={() => void query.refetch()} /> : query.isPending ? <GovernLoading /> : null}
       {data?.error || data?.status === "error" ? <GovernNotice warning>{data.error || "Source retrieval failed."} This is not an empty feed. {all.length ? "The last retrieved listing may be stale." : "Retry this source independently."}</GovernNotice> : null}
       {!query.isPending && !query.isError && !rows.length && data?.status !== "error" && <GovernNotice>{all.length ? "No notices match these filters." : source === "status" ? "No active public incidents returned. This does not guarantee every service or subscription is unaffected." : "No notices returned for this retrieved source and scope."}</GovernNotice>}
-      <section aria-label="Azure articles" className="cl-article-list">{rows.slice(current * 10, (current + 1) * 10).map(i => <Article item={i} key={i.id} />)}</section>
+      <section aria-label="Azure articles" className="grid items-start gap-4 lg:grid-cols-2">{rows.slice(current * 10, (current + 1) * 10).map(i => <Article item={i} key={i.id} />)}</section>
       {rows.length > 10 && <div className="flex items-center justify-between"><Button disabled={current === 0} onClick={() => setPage(current - 1)}>Previous</Button><span className="text-sm text-muted" aria-live="polite">Page {current + 1} of {pages} · {rows.length} matches</span><Button disabled={current >= pages - 1} onClick={() => setPage(current + 1)}>Next</Button></div>}
     </>}
   </div>;
@@ -73,7 +74,7 @@ export function AzureUpdatesPage() {
   const [source, setSource] = useState<FeedSource>("updates");
   const sources = [{ id: "updates", label: "Azure Updates", Icon: Newspaper }, { id: "status", label: "Azure Status", Icon: Radio }, { id: "health", label: "Service Health", Icon: ShieldCheck }] as const;
   return <div className="space-y-5"><PageHeader title="Azure updates & health" subtitle="Official product news, public incidents and scoped private Service Health. Every refresh is a read-only GET; no Azure resources change." />
-    <div role="tablist" aria-label="Azure sources" className="cl-source-tabs flex flex-wrap gap-2">{sources.map(({ id, label, Icon }, index) => <Button role="tab" id={`source-${id}`} aria-controls={`panel-${id}`} aria-selected={source === id} tabIndex={source === id ? 0 : -1} variant={source === id ? "primary" : "outline"} key={id} onClick={() => setSource(id)} onKeyDown={e => {
+    <div role="tablist" aria-label="Azure sources" className="flex flex-wrap gap-2">{sources.map(({ id, label, Icon }, index) => <Button role="tab" id={`source-${id}`} aria-controls={`panel-${id}`} aria-selected={source === id} tabIndex={source === id ? 0 : -1} variant={source === id ? "primary" : "outline"} key={id} onClick={() => setSource(id)} onKeyDown={e => {
       if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) return;
       e.preventDefault(); const next = e.key === "Home" ? 0 : e.key === "End" ? 2 : (index + (e.key === "ArrowRight" ? 1 : 2)) % 3;
       const id = sources[next]!.id; setSource(id); document.getElementById(`source-${id}`)?.focus();

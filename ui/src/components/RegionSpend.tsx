@@ -47,9 +47,9 @@ export function RegionSpend({ rows, currency }: { rows: Ranked[]; currency: stri
   const colors = useMemo(() => {
     const dark = isDark();
     return {
-      land: dark ? "#2a3c46" : "#cbd7dd",
-      landBorder: dark ? "#435964" : "#aebec7",
-      accent: cssVar("--cl-accent", "#096b87"),
+      land: dark ? "#262c45" : "#cfd5e6",
+      landBorder: dark ? "#363e60" : "#b8c0d6",
+      accent: cssVar("--cl-accent", "#4f46e5"),
       glow: cssVar("--cl-surface", "#ffffff"),
       text: cssVar("--cl-fg", "#0f172a"),
       palette: PALETTE,
@@ -88,7 +88,7 @@ export function RegionSpend({ rows, currency }: { rows: Ranked[]; currency: stri
   return (
     <Card className="mt-4 min-w-0 overflow-hidden">
       <CardHeader
-        title="Regional spend"
+        title={<span className="inline-flex items-center gap-2"><Globe2 className="size-4 text-accent" aria-hidden="true" />Regional spend</span>}
         subtitle={`Global footprint · billing locations · ${currency ?? "currency unspecified"} · current date and subscription scope`}
         actions={
           rows.length ? (
@@ -119,7 +119,7 @@ export function RegionSpend({ rows, currency }: { rows: Ranked[]; currency: stri
                       </Suspense>
                     </div>
                   </div>
-                  <div className="pointer-events-none absolute left-2 top-2 max-w-[60%] rounded border border-border bg-surface px-2.5 py-1.5">
+                  <div className="pointer-events-none absolute left-2 top-2 max-w-[60%] rounded-lg border border-border bg-surface/90 px-2.5 py-1.5 backdrop-blur">
                     <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted"><MapPin className="size-3" aria-hidden="true" />Top region</p>
                     <p className="flex flex-wrap items-baseline gap-x-2">
                       <span className="break-words text-sm font-semibold tracking-tight">{top ? friendlyName(top) : "Unavailable"}</span>
@@ -127,8 +127,9 @@ export function RegionSpend({ rows, currency }: { rows: Ranked[]; currency: stri
                     </p>
                     <p className="hidden text-[11px] text-muted sm:block">{top ? `${percent(top.share_pct)} share of period spend` : "No usable regional cost values"}</p>
                   </div>
-                  <div className="pointer-events-none absolute bottom-2 left-2 hidden items-center gap-2 border border-border bg-surface px-2.5 py-0.5 text-[11px] text-muted sm:flex">
-                    Bubble area follows spend · labels mark the five largest · drag to pan
+                  <div className="pointer-events-none absolute bottom-2 left-2 hidden items-center gap-2 rounded-full border border-border bg-surface/90 px-2.5 py-0.5 text-[11px] text-muted backdrop-blur sm:flex">
+                    <span className="cl-live-dot inline-block size-2 rounded-full bg-accent text-accent" aria-hidden="true" />
+                    Bubble area follows spend · ripples mark the five largest · drag to pan
                   </div>
                 </div>
                 {unplaced.length > 0 && (

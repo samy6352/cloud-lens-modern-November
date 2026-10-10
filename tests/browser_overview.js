@@ -139,9 +139,7 @@ async (page) => {
                 rows.get(key).push(card);
               }
               return [...rows.values()].every(row=>row.every(card=>
-                (innerWidth>1150||Math.abs(card.width-row[0].width)<2)
-                &&Math.abs(card.height-row[0].height)<2))
-                &&(innerWidth<=1150||cards[0].width>cards[1].width);
+                Math.abs(card.width-row[0].width)<2&&Math.abs(card.height-row[0].height)<2));
             })(),
             primaryAligned:Math.abs(chart.top-focus.top)>2||Math.abs(chart.height-focus.height)<2,
             chartClipped:canvas.bottom>chart.bottom+2,

@@ -223,8 +223,8 @@ export function TagsPage() {
         <KpiTile index={3} loading={!data} label="Tagged share" value={taggedShare == null ? "—" : `${taggedShare.toFixed(1)}%`} hint={`${formatNumber(data?.keys.length, { system: numbers, digits: 0 })} tag keys in use`} />
       </div>
 
-      <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
-        <Card className="lg:sticky lg:top-28">
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+        <Card>
           <CardHeader title="Tag keys" subtitle="Pick a key to group cost by its values." />
           <CardBody>
             <label className="relative block">
