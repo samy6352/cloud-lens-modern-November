@@ -732,7 +732,8 @@ async function loadGlance(attempt = 0) {
 
     const budget = budgetPresentation(o);
     setKpi(tiles[4], {
-      key: "Budget", value: budget.value, tone: budget.tone, sub: budget.sub,
+      key: budget.percent != null && o.budget.over > 1 ? "Highest budget used" : "Budget",
+      value: budget.value, tone: budget.tone, sub: budget.sub,
       ...(budget.percent == null ? {} : {
         bar: { pct: budget.percent, tone: o.budget.status === "over" ? "bad" : budget.tone,
           label: `${budget.percent}% of budget used` },
