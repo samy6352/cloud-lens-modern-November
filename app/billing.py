@@ -68,7 +68,8 @@ def statement_period(month: str | None = None, today: date | None = None) -> dic
     from . import reporting
 
     selected = reporting.selected_month()
-    if month or not selected:
+    # A custom range is not a calendar statement, so Billing keeps its own latest-month default.
+    if month or not selected or reporting.selected_range():
         return period(month, today)
     start, end = reporting.month_bounds()
     # Reuse Billing's completed-month calculation, including the preceding calendar month.

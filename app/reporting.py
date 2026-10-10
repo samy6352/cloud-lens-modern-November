@@ -22,9 +22,39 @@ def today() -> date:
     return datetime.now(UTC).date()
 
 
+_RANGE = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})\.\.([0-9]{4}-[0-9]{2}-[0-9]{2})")
+MAX_RANGE_DAYS = 366
+
+
+def parse_range(value: str | None) -> tuple[date, date] | None:
+    """`YYYY-MM-DD..YYYY-MM-DD` as inclusive bounds, or None when `value` is not a range."""
+    match = _RANGE.fullmatch(value or "")
+    if not match:
+        return None
+    try:
+        start, end = date.fromisoformat(match[1]), date.fromisoformat(match[2])
+    except ValueError as exc:
+        raise ValueError("period_month range must use valid YYYY-MM-DD dates.") from exc
+    if start.year < 2 or start > today():
+        raise ValueError("period_month range must start in year 0002 or later and cannot start in the future.")
+    if end < start:
+        raise ValueError("period_month range must end on or after its start.")
+    if (end - start).days + 1 > MAX_RANGE_DAYS:
+        raise ValueError(f"period_month range cannot span more than {MAX_RANGE_DAYS} days.")
+    return start, end
+
+
+def selected_range() -> tuple[date, date] | None:
+    """The custom range in force, clipped to today; None for a month or a rolling window."""
+    bounds = parse_range(_month.get())
+    return (bounds[0], min(bounds[1], today())) if bounds else None
+
+
 def validate_month(value: str | None) -> str | None:
     if value is None:
         return None
+    if parse_range(value):
+        return value
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", value):
         raise ValueError("period_month must be YYYY-MM.")
     try:
@@ -66,6 +96,9 @@ def month_bounds(month: str | None = None) -> tuple[date, date] | None:
     value = validate_month(month) if month is not None else selected_month()
     if value is None:
         return None
+    custom = parse_range(value)
+    if custom:
+        return custom[0], min(custom[1], today())
     start = date.fromisoformat(value + "-01")
     end = start.replace(day=calendar.monthrange(start.year, start.month)[1])
     return start, min(end, today())
@@ -136,6 +169,7 @@ def metadata(warehouse: Any, scope: list[str] | None, days: int = 30,
             f'FROM {source} WHERE "ChargePeriodStart" IS NOT NULL '
             'ORDER BY month DESC', 12000)
     bounds = month_bounds(month) if month else None
+    custom = bool(month and parse_range(month))
     if bounds:
         start, end = bounds
     elif latest:
@@ -148,13 +182,14 @@ def metadata(warehouse: Any, scope: list[str] | None, days: int = 30,
     return {
         "from": start.isoformat() if start else None,
         "to": end.isoformat() if end else None,
-        "month": month,
+        "month": None if custom else month,
         "days": (end - start).days + 1 if start and end else days,
-        "mode": "calendar_month" if month else "rolling",
+        "mode": "custom_range" if custom else "calendar_month" if month else "rolling",
         "anchor": "calendar" if month else "latest_scoped_data",
         "as_of": latest,
         "available_months": available,
-        "partial": bool(month and month == today().strftime("%Y-%m")),
-        "empty": month not in available if month else latest is None,
+        "partial": bool(end and end >= today()) if custom else bool(month and month == today().strftime("%Y-%m")),
+        "empty": (latest is None or start > date.fromisoformat(latest)) if custom
+                 else month not in available if month else latest is None,
         "timezone": "UTC", "bounds": "inclusive", "live_note": LIVE_NOTE,
     }

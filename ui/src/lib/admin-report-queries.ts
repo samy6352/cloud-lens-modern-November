@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, ApiError, toSearch, type Query } from "./api";
+import { periodParam } from "./period";
 import type { Scope } from "./queries";
 
 export type Cadence = "Daily" | "Weekly" | "Monthly";
@@ -106,8 +107,8 @@ export const singleJobQuery = (id: string, scope: string[]) => queryOptions({
   refetchInterval: q => pollInterval(activeStatus(q.state.data?.status ?? ""), q.state.dataUpdateCount, q.state.error),
 });
 export const reportOptionsQuery = (scope: Scope, days: number, currency: string) => queryOptions({
-  queryKey: ["admin-report-options", scope.scope ?? "", scope.month ?? "", days, currency],
-  queryFn: ({ signal }) => api<ReportOptions>("report/options", { scope: scope.scope, period_month: scope.month, days, currency }, { signal }),
+  queryKey: ["admin-report-options", scope.scope ?? "", periodParam(scope) ?? "", days, currency],
+  queryFn: ({ signal }) => api<ReportOptions>("report/options", { scope: scope.scope, period_month: periodParam(scope), days, currency }, { signal }),
 });
 export const auditQuery = (limit: number, enabled: boolean) => queryOptions({
   queryKey: ["admin-audit", limit], enabled, retry: false,

@@ -3,7 +3,7 @@ import { createRootRouteWithContext, createRoute, createRouter, Link, lazyRouteC
 import { AppShell } from "./components/AppShell";
 import { ClassicPage } from "./routes/Classic";
 import { OverviewPage } from "./routes/Overview";
-import { DEFAULT_DAYS, WINDOW_DAYS, type WindowDays } from "./lib/period";
+import { DEFAULT_DAYS, validRange, WINDOW_DAYS, type WindowDays } from "./lib/period";
 
 /** Global view state lives in the URL, so every view is shareable and Back/Forward just work. */
 export interface GlobalSearch {
@@ -11,6 +11,8 @@ export interface GlobalSearch {
   scope?: string;
   days?: WindowDays;
   currency?: string;
+  from?: string;
+  to?: string;
 }
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -23,7 +25,11 @@ export function validateGlobalSearch(raw: Record<string, unknown>): GlobalSearch
   const parsed = Number(raw.days);
   const days = WINDOW_DAYS.find((d) => d === parsed && d !== DEFAULT_DAYS);
   const currency = typeof raw.currency === "string" && CURRENCY.test(raw.currency) ? raw.currency.toUpperCase() : undefined;
-  return { month, scope, days, currency };
+  // A month and a custom range are alternatives; the month wins if a hand-edited URL carries both.
+  const from = typeof raw.from === "string" ? raw.from : undefined;
+  const to = typeof raw.to === "string" ? raw.to : undefined;
+  const range = !month && validRange(from, to) ? { from, to } : {};
+  return { month, scope, days: range.from ? undefined : days, currency, ...range };
 }
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({

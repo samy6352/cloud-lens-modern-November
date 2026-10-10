@@ -3,7 +3,8 @@ import { api, type Query } from "./api";
 import type { Me, Scope, Subscription } from "./queries";
 
 export function globalScope(search: { scope?: unknown; month?: unknown }): Scope {
-  return { scope: typeof search.scope === "string" ? search.scope : undefined, month: typeof search.month === "string" ? search.month : undefined };
+  const text = (v: unknown) => (typeof v === "string" ? v : undefined);
+  return { scope: text(search.scope), month: text(search.month), from: text((search as { from?: unknown }).from), to: text((search as { to?: unknown }).to) };
 }
 
 export function explicitScopes(scope?: string): string[] {

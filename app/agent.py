@@ -759,7 +759,8 @@ class CostAgent:
             start, end = reporting.month_bounds()
             prompt += (
                 f"\n\n## Active reporting calendar\nThe user selected "
-                f"{reporting.selected_month()}: {start} through {end}, inclusive. "
+                f"{'custom range' if reporting.selected_range() else reporting.selected_month()}: "
+                f"{start} through {end}, inclusive. "
                 "Warehouse queries are constrained to this period; do not add a relative "
                 "'last N days' predicate or substitute another month. Empty results mean no "
                 "loaded charges in this selection, not permission to change the period. "

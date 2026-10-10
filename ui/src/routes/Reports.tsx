@@ -6,6 +6,7 @@ import { ErrorState, PageHeader } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { periodParam } from "@/lib/period";
 import { meQuery, type Scope } from "@/lib/queries";
 import { AdminChecks, AdminConfirm, AdminField, adminInput } from "@/lib/helpersAdmin";
 import { ApprovalSession, catalogQuery, costStatusQuery, postAdmin, rawDownloadHref, rawParams, reportDownloadHref, reportOptionsQuery, type ArchiveCatalog, type RawSelection, type ReportSelection, type Warehouse } from "@/lib/admin-report-queries";
@@ -15,7 +16,7 @@ type Content = Pick<ReportSelection, "summary" | "sections" | "blocks" | "live">
 
 export function ReportsPage() {
   const search = useSearch({ strict: false });
-  const scope: Scope = { month: search.month, scope: search.scope };
+  const scope: Scope = { month: search.month, from: search.from, to: search.to, scope: search.scope };
   const [days, setDays] = useState(30);
   const [currency, setCurrency] = useState("");
   const options = useQuery(reportOptionsQuery(scope, days, currency));
@@ -55,7 +56,7 @@ export function ReportsPage() {
     current.cancel(); setBusy(false); setStorageReview(null); setError(null);
     return () => current.cancel();
   }, [fingerprint]);
-  const report: ReportSelection = { ...content, sections: content.sections.filter(id => options.data?.areas.some(a => a.id === id)), format, days, period_month: scope.month, scope: scope.scope?.split(",").filter(Boolean) ?? [], currency };
+  const report: ReportSelection = { ...content, sections: content.sections.filter(id => options.data?.areas.some(a => a.id === id)), format, days, period_month: periodParam(scope), scope: scope.scope?.split(",").filter(Boolean) ?? [], currency };
   let reportHref: string | undefined;
   let rawHref: string | undefined;
   let rawReason = "";
@@ -83,8 +84,8 @@ export function ReportsPage() {
       <CardHeader title="Report builder" subtitle="Warehouse content is the default. Live findings query Azure only when explicitly selected." />
       <CardBody>
         <div className="mb-5 grid gap-4 sm:grid-cols-3">
-          <AdminField label="Period"><div className="mt-2 text-sm">{scope.month ? `Calendar month ${scope.month}` : "Latest reporting window"} · {scope.scope ? `${scope.scope.split(",").length} subscriptions` : "All entitled subscriptions"}</div></AdminField>
-          <AdminField label="Window days"><input className={adminInput} type="number" min={1} max={365} value={days} disabled={!!scope.month} onChange={e => setDays(Math.min(365, Math.max(1, Number(e.target.value) || 30)))} /></AdminField>
+          <AdminField label="Period"><div className="mt-2 text-sm">{scope.month ? `Calendar month ${scope.month}` : periodParam(scope) ? `Custom range ${periodParam(scope)}` : "Latest reporting window"} · {scope.scope ? `${scope.scope.split(",").length} subscriptions` : "All entitled subscriptions"}</div></AdminField>
+          <AdminField label="Window days"><input className={adminInput} type="number" min={1} max={365} value={days} disabled={!!periodParam(scope)} onChange={e => setDays(Math.min(365, Math.max(1, Number(e.target.value) || 30)))} /></AdminField>
           <AdminField label="Report currency"><select className={adminInput} value={currency} onChange={e => setCurrency(e.target.value)}><option value="">Billed currency</option>{currencies.data?.supported.map(c => <option key={c}>{c}</option>)}</select></AdminField>
         </div>
         <p className="mb-4 text-xs text-muted">As of {options.data?.as_of ?? "not reported"} · {options.data?.currency ?? "billed currencies"} · {currencies.data?.source}</p>

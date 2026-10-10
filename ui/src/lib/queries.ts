@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "./api";
+import { periodParam } from "./period";
 
 export interface Me {
   authenticated: boolean;
@@ -112,6 +113,9 @@ export interface Billing {
 /** Global filters carried in the URL: ?month=2026-08&scope=<id>,<id>&days=7&currency=EUR */
 export interface Scope {
   month?: string;
+  /** Inclusive custom range, YYYY-MM-DD; only meaningful when `month` is absent. */
+  from?: string;
+  to?: string;
   scope?: string;
   /** Look-back window; ignored by the server while a month is selected. */
   days?: number;
@@ -175,7 +179,7 @@ export interface ResourceQuery {
   change: ResourceChange;
 }
 
-const scopeParams = ({ month, scope }: Scope) => ({ period_month: month, scope });
+const scopeParams = (s: Scope) => ({ period_month: periodParam(s), scope: s.scope });
 
 export type SetupState = "queued" | "running" | "landed" | "loaded" | "failed" | "none";
 
@@ -234,14 +238,14 @@ export const subscriptionsQuery = queryOptions({
 
 export const periodQuery = (s: Scope) =>
   queryOptions({
-    queryKey: ["reporting-period", s.month ?? "", s.scope ?? ""],
+    queryKey: ["reporting-period", periodParam(s) ?? "", s.scope ?? ""],
     queryFn: () => api<ReportingPeriod>("reporting-period", scopeParams(s)),
     staleTime: 10 * 60_000,
   });
 
 export const executiveQuery = (s: Scope) =>
   queryOptions({
-    queryKey: ["executive", s.month ?? "", s.scope ?? "", windowDays(s), s.currency ?? ""],
+    queryKey: ["executive", periodParam(s) ?? "", s.scope ?? "", windowDays(s), s.currency ?? ""],
     queryFn: () => api<Executive>("dashboard/executive", { days: windowDays(s), currency: s.currency, ...scopeParams(s) }),
   });
 
@@ -255,7 +259,7 @@ export const billingQuery = (s: Scope) =>
 /** One server-sorted, server-filtered page of every billed resource. */
 export const resourcesQuery = (s: Scope, r: ResourceQuery) =>
   queryOptions({
-    queryKey: ["resources", s.month ?? "", s.scope ?? "", windowDays(s), s.currency ?? "", r.page, r.pageSize, r.sort, r.desc, r.q, r.currency, r.change],
+    queryKey: ["resources", periodParam(s) ?? "", s.scope ?? "", windowDays(s), s.currency ?? "", r.page, r.pageSize, r.sort, r.desc, r.q, r.currency, r.change],
     queryFn: () =>
       api<ResourcePage>("dashboard/resources", {
         days: windowDays(s),
@@ -316,8 +320,8 @@ export interface AnomalyReport {
 /** Days that did not look like the others, collapsed into incidents. Warehouse-only on the server. */
 export const anomaliesQuery = (s: Scope, days: number, currency: string) =>
   queryOptions({
-    queryKey: ["anomalies", s.scope ?? "", days, currency],
-    queryFn: () => api<AnomalyReport>("dashboard/anomalies", { days, scope: s.scope, currency }),
+    queryKey: ["anomalies", periodParam(s) ?? "", s.scope ?? "", days, currency],
+    queryFn: () => api<AnomalyReport>("dashboard/anomalies", { days, currency, ...scopeParams(s) }),
     staleTime: 60_000,
   });
 
@@ -362,8 +366,8 @@ export interface TagReport {
 /** Heavy on purpose (every tagged resource, filtered in the browser), so cached for minutes. */
 export const tagsQuery = (s: Scope, days: number = windowDays(s)) =>
   queryOptions({
-    queryKey: ["tags", s.scope ?? "", days, s.currency ?? "", "warehouse"],
-    queryFn: () => api<TagReport>("dashboard/tags", { days, currency: s.currency, scope: s.scope, include_live: false }),
+    queryKey: ["tags", periodParam(s) ?? "", s.scope ?? "", days, s.currency ?? "", "warehouse"],
+    queryFn: () => api<TagReport>("dashboard/tags", { days, currency: s.currency, ...scopeParams(s), include_live: false }),
     staleTime: 5 * 60_000,
   });
 
@@ -432,8 +436,8 @@ export interface UptimeReport {
 /** Hour-meter billing quantities (not monitored availability). Heavy: cached for minutes. */
 export const uptimeQuery = (s: Scope, days: number = windowDays(s)) =>
   queryOptions({
-    queryKey: ["uptime", s.scope ?? "", days, s.currency ?? ""],
-    queryFn: () => api<UptimeReport>("dashboard/uptime", { days, currency: s.currency, scope: s.scope }),
+    queryKey: ["uptime", periodParam(s) ?? "", s.scope ?? "", days, s.currency ?? ""],
+    queryFn: () => api<UptimeReport>("dashboard/uptime", { days, currency: s.currency, ...scopeParams(s) }),
     staleTime: 5 * 60_000,
   });
 

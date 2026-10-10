@@ -47,6 +47,56 @@ def test_invalid_and_future_fail_closed(value):
     assert reporting.selected_month() is None
 
 
+def test_custom_range_bounds_are_inclusive_clipped_and_period_length_driven():
+    with reporting.select("2024-01-31..2024-02-15"):
+        assert tuple(map(str, reporting.month_bounds())) == ("2024-01-31", "2024-02-15")
+        assert tuple(map(str, reporting.selected_range())) == ("2024-01-31", "2024-02-15")
+        assert reporting.period_days(7) == 16
+        assert "2024-01-31" in reporting.view_predicate() and "2024-02-15" in reporting.view_predicate()
+        assert reporting.since_date("2026-08-01") == "2024-01-31"
+    with reporting.select("2026-09-01..2026-09-30"):
+        assert str(reporting.month_bounds()[1]) == "2026-09-06"
+    with reporting.select("2026-09"):
+        assert reporting.selected_range() is None
+    assert reporting.selected_range() is None
+
+
+@pytest.mark.parametrize("value", [
+    "2024-02-15..2024-01-31", "2026-09-07..2026-09-30", "0001-01-01..0001-01-02",
+    "2024-02-30..2024-03-01", "2023-01-01..2024-02-01", "2024-02-01..", "..2024-02-01",
+    "2024-02-01..2024-02-05' OR 1=1--", "2024-02-01...2024-02-05",
+])
+def test_invalid_custom_ranges_fail_closed(value):
+    with pytest.raises(ValueError), reporting.select(value):
+        pytest.fail("Invalid range entered the request context")
+    assert reporting.selected_month() is None
+
+
+def test_custom_range_metadata_and_billing_stay_honest():
+    from app import billing
+
+    class Reader:
+        def rows(self, sql, limit=200):
+            return ([{"month": "2026-09"}, {"month": "2024-02"}]
+                    if "DISTINCT" in sql else [{"hi": "2026-09-04", "lo": "2024-02-01"}])
+
+    class Warehouse:
+        @contextmanager
+        def reader(self, scope, filters=None):
+            yield Reader()
+
+    with reporting.select("2024-02-05..2024-02-09"):
+        result = reporting.metadata(Warehouse(), [SUB_A], 30)
+        assert (result["from"], result["to"], result["days"]) == ("2024-02-05", "2024-02-09", 5)
+        assert result["month"] is None and result["mode"] == "custom_range"
+        assert not result["empty"] and not result["partial"]
+        assert billing.statement_period()["month"] != "2024-02"
+    with reporting.select("2026-09-05..2026-09-06"):
+        assert reporting.metadata(Warehouse(), [SUB_A], 30)["partial"]
+    with reporting.select("2026-09-05..2026-09-06"):
+        assert reporting.metadata(Warehouse(), None, 30)["empty"]
+
+
 def test_metadata_exact_rolling_scope_and_empty():
     calls = []
 
@@ -183,6 +233,30 @@ def test_postgres_old_month_all_edges_scope_and_helpers(database):
     with reporting.select("2024-01"):
         assert Dashboard().sections([SUB_A], days=1)["total"] == 30
     assert Dashboard().sections([SUB_A], days=30)["total"] == 620
+
+
+@pytest.mark.postgres
+def test_postgres_custom_range_matches_exact_edges(database):
+    from app.dashboard import Dashboard
+    from app.resources import Resources
+
+    with reporting.select("2024-01-31..2024-02-15"):
+        assert Dashboard().sections([SUB_A], days=1)["total"] == 36
+        assert Dashboard().executive([SUB_A], days=1)["days"] == 16
+        assert Resources().inventory([SUB_A], days=1)["total_cost"] == 36
+    with reporting.select("2024-02-01..2024-02-29"), pytest.raises(AssertionError):
+        assert Dashboard().sections([SUB_A], days=1)["total"] == 36
+
+
+@pytest.mark.postgres
+def test_authenticated_custom_range_header_and_validation(client):
+    ok = client.get(f"/api/reporting-period?scope={SUB_A}&period_month=2024-01-31..2024-02-15")
+    assert ok.status_code == 200
+    body = ok.json()
+    assert (body["from"], body["to"], body["days"], body["mode"]) == ("2024-01-31", "2024-02-15", 16, "custom_range")
+    assert ok.headers["X-Reporting-Month"] == "2024-01-31..2024-02-15"
+    for bad in ("2024-02-15..2024-01-31", "2026-10-01..2026-10-05", "2023-01-01..2024-06-01"):
+        assert client.get(f"/api/reporting-period?period_month={bad}").status_code == 400
 
 
 @pytest.mark.postgres

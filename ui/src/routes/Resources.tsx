@@ -132,7 +132,7 @@ export function ResourcesPage() {
   });
   // Any change of what matches starts again from the first page.
   useEffect(() => setState((s) => ({ ...s, page: 1 })), [q]);
-  useEffect(() => setState((s) => ({ ...s, page: 1, currency: "" })), [search.month, search.scope]);
+  useEffect(() => setState((s) => ({ ...s, page: 1, currency: "" })), [search.month, search.from, search.to, search.scope]);
 
   const query = useQuery({ ...resourcesQuery(search, { ...state, q }), placeholderData: keepPreviousData });
   const currencyInventory = useQuery(resourceCurrenciesQuery(search));

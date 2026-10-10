@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { formatMoney, formatMonth, formatNumber, type NumberSystem } from "@/lib/format";
 import { isDark, usePrefs } from "@/lib/prefs";
 import { chipOn, PALETTE } from "@/lib/palette";
+import { formatRange, periodParam, validRange } from "@/lib/period";
 import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked } from "@/lib/queries";
 
 /** A mixed-currency estate has no honest single total, so the page shows one currency at a time. */
@@ -466,7 +467,7 @@ export function OverviewPage() {
   const currency = view?.currency ?? null;
   const money: Money = (v, compact = true) =>
     v == null || !Number.isFinite(v) ? "Unavailable" : formatMoney(v, currency, { system: numbers, compact });
-  const period = search.month ? formatMonth(search.month) : `Last ${view?.days ?? 30} days`;
+  const period = search.month ? formatMonth(search.month) : validRange(search.from, search.to) ? formatRange(search.from, search.to!) : `Last ${view?.days ?? 30} days`;
   const scopeTo = (r: Ranked) => {
     const id = subIds.get(r.name);
     if (id) void navigate({ to: ".", search: { ...search, scope: id } });
@@ -620,7 +621,7 @@ export function OverviewPage() {
         </Card>
       </div>
 
-      {view ? <RegionSpend key={`${currency}-${search.month ?? ""}-${search.scope ?? ""}`} rows={view.regions ?? []} currency={currency} /> : loading ? <Skeleton className="mt-3 h-[380px] w-full" /> : null}
+      {view ? <RegionSpend key={`${currency}-${periodParam(search) ?? ""}-${search.scope ?? ""}`} rows={view.regions ?? []} currency={currency} /> : loading ? <Skeleton className="mt-3 h-[380px] w-full" /> : null}
 
       <div className="mt-3 grid grid-cols-1 gap-3 [&>*]:min-w-0 xl:grid-cols-3">
         <Card className="xl:col-span-2">

@@ -5143,7 +5143,7 @@ class ReportRequest(BaseModel):
 
     format: str = Field("xlsx", max_length=8)
     days: int = Field(30, ge=1, le=365)
-    period_month: str | None = Field(None, max_length=7)
+    period_month: str | None = Field(None, max_length=21)
     scope: list[str] = Field(default_factory=list)
     summary: bool = True
     sections: list[str] | None = None       # None = every area
