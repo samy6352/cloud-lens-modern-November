@@ -1845,6 +1845,13 @@ body.rail-mini .shell { grid-template-columns: var(--nav-w-mini) minmax(0, 1fr);
   .bar-right .currency { min-width: 92px; flex: 0 0 auto; }
   .bar-right .picker { flex: 1 1 120px; }
   #refreshBtn, #refreshBtn #refreshLabel { white-space: nowrap; }
+  /* The analysis overlay is positioned against .board. Once the board grows with the page,
+     that overlay stretches to the full document and the ask bar leaves the screen. Pin it
+     to the viewport so its own scroller keeps the ask bar in reach. */
+  body.analysing { overflow: hidden; }
+  body.analysing .analysis-view {
+    position: fixed; inset: 0; height: 100dvh; max-height: 100dvh;
+  }
 }
 
 /* ---------------------------------------------------------------- skeletons */

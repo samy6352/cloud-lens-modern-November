@@ -30,6 +30,9 @@ def test_phone_layout_scrolls_the_page_instead_of_a_nested_board():
     assert "body { overflow-y: auto; }" in block
     assert ".board-body { flex: none; overflow: visible; }" in block
     assert ".bar-right { flex-wrap: wrap;" in block
+    assert "body.analysing { overflow: hidden; }" in block
+    assert "body.analysing .analysis-view" in block
+    assert "position: fixed; inset: 0; height: 100dvh;" in block
 
 
 def test_azure_updates_links_and_customer_filters():
