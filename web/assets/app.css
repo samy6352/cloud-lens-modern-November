@@ -60,7 +60,7 @@
   --text-dim: #D1D7DE;
   --muted: #A3ADB9;
   --faint: #929DAA;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, .16), 0 8px 24px rgba(0, 0, 0, .08);
+  --shadow-card: none;
 
   /* One blue, used sparingly: selection, focus, the one number that matters. When everything is
      accented nothing is, so this appears far less than you would expect.
@@ -144,9 +144,9 @@
      costs them the crisp text that zooming out throws away. */
   --ui-scale: .8;
 
-  --radius: 10px;
-  --radius-sm: 8px;
-  --radius-xs: 4px;
+  --radius: 4px;
+  --radius-sm: 3px;
+  --radius-xs: 2px;
 
   /* One spacing scale, so gaps are chosen rather than guessed. */
   --s1: calc(4px * var(--ui-scale));
@@ -163,20 +163,22 @@
   /* Keep labels readable, with a separate compact width for icon-only navigation. */
   --nav-w: calc(200px * var(--ui-scale));
   --nav-w-mini: calc(60px * var(--ui-scale));
-  --rail-bg: #171b21;
-  --rail-depth: #13171d;
-  --rail-surface: #222a35;
-  --rail-raised: #2a3543;
-  --rail-border: #3b485a;
-  --rail-text: #eef2f8;
-  --rail-label: #cbd5e2;
-  --rail-muted: #a3b2c6;
-  --rail-icon: #a8c8ee;
-  --rail-accent: #83bbff;
-  --rail-accent-edge: #42658a;
-  --rail-selected: #203b58;
-  --rail-glow: rgba(94, 165, 250, .14);
-  --rail-sheen: rgba(185, 210, 244, .06);
+  /* The rail is the same instrument as the page, not a second product. Accent is spent on the
+     selection mark, not washed across the chrome. */
+  --rail-bg: #111315;
+  --rail-depth: #111315;
+  --rail-surface: #1B1E21;
+  --rail-raised: #23272B;
+  --rail-border: #30363D;
+  --rail-text: #F2F4F7;
+  --rail-label: #D1D7DE;
+  --rail-muted: #A3ADB9;
+  --rail-icon: #A3ADB9;
+  --rail-accent: #479EF5;
+  --rail-accent-edge: #30363D;
+  --rail-selected: #23272B;
+  --rail-glow: transparent;
+  --rail-sheen: transparent;
   --rail-shadow: rgba(0, 0, 0, .28);
 
   --pad-x: 16px;
@@ -252,7 +254,7 @@
      error wash behind the anomaly line -- and those are darker than white. On #E6F2FB it came
      to 4.39:1 against the 4.5:1 AA minimum. This clears it on the washes as well as on white. */
   --faint: #5F6C84;
-  --shadow-card: 0 1px 2px rgba(29, 43, 68, .04), 0 8px 24px rgba(29, 43, 68, .035);
+  --shadow-card: none;
 
   --accent-fill: #185AB0;
   --accent-fill-hover: #124A92;
@@ -283,20 +285,20 @@
   --err-line: rgba(164, 38, 44, .32);
   --warn-line: rgba(138, 97, 0, .32);
 
-  --rail-bg: #f7f9fc;
-  --rail-depth: #eef2f7;
-  --rail-surface: #ffffff;
-  --rail-raised: #edf2f8;
-  --rail-border: #ccd6e3;
-  --rail-text: #192c42;
-  --rail-label: #374a62;
+  --rail-bg: #F4F5F7;
+  --rail-depth: #F4F5F7;
+  --rail-surface: #FFFFFF;
+  --rail-raised: #F8F9FB;
+  --rail-border: #DDE3EB;
+  --rail-text: #172233;
+  --rail-label: #364459;
   --rail-muted: #566a82;
-  --rail-icon: #456b95;
+  --rail-icon: #566a82;
   --rail-accent: #185ab0;
-  --rail-accent-edge: #96b4df;
-  --rail-selected: #e4efff;
-  --rail-glow: rgba(24, 90, 176, .09);
-  --rail-sheen: rgba(255, 255, 255, .65);
+  --rail-accent-edge: #DDE3EB;
+  --rail-selected: #EBEEF3;
+  --rail-glow: transparent;
+  --rail-sheen: transparent;
   --rail-shadow: rgba(28, 49, 77, .12);
 }
 
@@ -323,7 +325,7 @@
   --text-dim: #CAE3DA;
   --muted: #A4C5BB;
   --faint: #8AB0A4;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, .14), 0 8px 24px rgba(0, 0, 0, .10);
+  --shadow-card: none;
 
   /* Teal in place of Fluent blue — the one substitution that makes every other surface in the
      app (buttons, the selected rail row, focus rings, the brand mark) read as a different,
@@ -605,7 +607,7 @@ body {
   border: 1px solid var(--accent-line); border-radius: 10px;
 }
 .brand-wordmark { display: flex; flex-direction: column; gap: 2px; }
-.brand-caption { font-size: 9px; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }
+.brand-caption { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 /* The Microsoft logo, and the rule that separates it from the product mark. The rule is what
    stops the two reading as one lockup — without it the four squares look like part of the
    CloudLens mark rather than a statement of who runs it. */
@@ -832,10 +834,15 @@ button.ghost, a.btn.ghost { background: transparent; }
    between tiles reads as a seam, whereas a rule reads as a table. */
 .glance {
   flex: none;
-  display: grid; gap: 8px; padding: 6px var(--pad-x); background: var(--bg);
+  display: grid; gap: 1px; margin: 8px var(--pad-x); padding: 0;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  overflow: clip;
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
-.glance .tile { border: 1px solid var(--border); border-radius: var(--radius); text-align: left; font-weight: inherit; }
+.glance .tile {
+  border: 0; border-radius: 0; box-shadow: none; background: var(--surface);
+  text-align: left; font-weight: inherit;
+}
 /* Phones: one scrollable row instead of three stacked rows eating the viewport. */
 @media (max-width: 620px) {
   .glance {
@@ -1237,7 +1244,7 @@ figure.chart:focus-within .chart-actions { opacity: 1; }
 .shell[hidden] { display: none; }
 .sidebar {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: linear-gradient(160deg, var(--rail-bg), var(--rail-depth));
+  background: var(--rail-bg);
   border-right: 1px solid var(--rail-border); color: var(--rail-text);
 }
 .sidebar > .rail { flex: 1; min-height: 0; border-right: 0; }
@@ -1386,7 +1393,7 @@ tr[data-explore-row]:hover { background: var(--hover); }
   /* Centre rather than baseline: an icon has no baseline to share with the text beside it, and
      aligning on one drops the glyph low against the row. */
   display: flex; align-items: center; gap: 8px;
-  width: 100%; background: none; border: 1px solid transparent; border-radius: 8px;
+  width: 100%; background: none; border: 1px solid transparent; border-radius: var(--radius-xs);
   padding: 5px 8px; min-height: 40px;
   color: var(--rail-label);
   font-size: var(--t-sm); font-weight: var(--w-medium); letter-spacing: var(--tr-base);
@@ -1395,18 +1402,18 @@ tr[data-explore-row]:hover { background: var(--hover); }
 }
 .rail-icon-frame {
   display: grid; place-items: center; flex: none; width: 28px; height: 28px;
-  border: 1px solid var(--rail-border); border-radius: 7px;
-  background: linear-gradient(145deg, var(--rail-raised), var(--rail-surface));
-  box-shadow: inset 0 1px 0 var(--rail-sheen);
+  border: 1px solid var(--rail-border); border-radius: var(--radius-xs);
+  background: var(--rail-raised);
+  box-shadow: none;
   color: var(--rail-icon);
 }
 .rail-icon {
   flex: none; width: 18px; height: 18px;
 }
 .rail-item.on .rail-icon-frame {
-  color: var(--rail-accent); border-color: var(--rail-accent-edge);
-  background: linear-gradient(145deg, var(--rail-selected), var(--rail-surface));
-  box-shadow: inset 0 1px 0 var(--rail-glow), 0 0 8px var(--rail-glow);
+  color: var(--rail-accent); border-color: var(--rail-border);
+  background: var(--rail-selected);
+  box-shadow: none;
 }
 .rail-chevron { flex: none; width: 12px; height: 12px; color: var(--rail-muted); }
 .rail-item.on .rail-chevron { color: var(--rail-accent); }
@@ -1414,17 +1421,17 @@ tr[data-explore-row]:hover { background: var(--hover); }
    centre when it appears instead of blinking on, and so the label never shifts by a pixel. */
 .rail-item::before {
   content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
-  background: var(--rail-accent); border-radius: 3px;
-  box-shadow: 0 0 8px var(--rail-accent);
+  background: var(--rail-accent); border-radius: 1px;
+  box-shadow: none;
   transform: scaleY(0); transform-origin: center;
   transition: transform var(--med) var(--ease);
 }
 .rail-item:hover { background: var(--rail-surface); color: var(--rail-text); }
 .rail-item:active:not(:disabled) { transform: none; }   /* navigation, not a push-button */
 .rail-item.on {
-  background: linear-gradient(100deg, var(--rail-surface), var(--rail-selected));
-  color: var(--rail-text); border-color: var(--rail-accent-edge); font-weight: var(--w-semi);
-  box-shadow: inset 0 1px 0 var(--rail-glow);
+  background: var(--rail-selected);
+  color: var(--rail-text); border-color: transparent; font-weight: var(--w-semi);
+  box-shadow: none;
 }
 .rail-item.on::before { transform: scaleY(1); }
 .rail-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1450,9 +1457,9 @@ tr[data-explore-row]:hover { background: var(--hover); }
 }
 .rail-mini-btn {
   display: flex; align-items: center; gap: 8px;
-  width: 116px; max-width: 100%; border: 1px solid var(--rail-border); border-radius: 999px;
-  background: linear-gradient(120deg, var(--rail-surface), var(--rail-bg));
-  box-shadow: inset 0 1px 0 var(--rail-sheen);
+  width: 116px; max-width: 100%; border: 1px solid var(--rail-border); border-radius: var(--radius-xs);
+  background: var(--rail-surface);
+  box-shadow: none;
   padding: 0 12px; min-height: 32px;
   color: var(--rail-label); font-size: var(--t-xs); font-weight: var(--w-medium);
   text-align: left; cursor: pointer;
@@ -3335,7 +3342,7 @@ body.analysing .side { display: none; }
    browser composites that on the GPU with no layout work at all, tick after tick. */
 .an-bar-fill {
   height: 100%; width: 100%; border-radius: 2px;
-  background: linear-gradient(90deg, var(--brand-1), var(--accent));
+  background: var(--accent);
   transform: scaleX(0); transform-origin: left;
   transition: transform .4s var(--ease);
 }
@@ -3578,9 +3585,9 @@ body.analysing .side { display: none; }
 .account-trigger:hover .name { color: var(--rail-accent); }
 .account-avatar {
   display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
-  border: 1px solid var(--rail-accent);
-  background: linear-gradient(140deg, var(--rail-selected), var(--rail-surface));
-  box-shadow: 0 0 8px var(--rail-glow); color: var(--rail-text);
+  border: 1px solid var(--rail-border);
+  background: var(--rail-raised);
+  box-shadow: none; color: var(--rail-text);
   font-size: var(--t-xs); font-weight: var(--w-semi);
 }
 .account-identity { display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 1.3; }
