@@ -2494,6 +2494,8 @@ figure.chart.chart-fill .canvas-wrap { flex: 1 1 auto; min-height: calc(180px * 
   background: var(--surface-2);
   font-size: var(--t-xs); text-transform: uppercase; letter-spacing: var(--tr-xs);
   color: var(--text-dim); font-weight: var(--w-semi);
+  border-bottom: 1px solid var(--border);
+}
 .card td.num, .card th.num { text-align: right; font-variant-numeric: var(--nums); }
 /* Three levels inside one row: the label identifies, the figure is what you came for, and
    everything between them supports. Giving the money slightly more weight and full contrast
