@@ -3587,6 +3587,7 @@ body.analysing .side { display: none; }
   color: var(--rail-text); background: var(--rail-raised); border: 1px solid var(--rail-border);
 }
 .account-profile .account-signout:hover { background: var(--rail-selected); border-color: var(--rail-accent-edge); }
+.account-profile a.account-signout { box-sizing: border-box; text-decoration: none; margin-bottom: 6px; }
 @media (min-width: 1101px) {
   html.rail-mini .sidebar-account .account-trigger,
   body.rail-mini .sidebar-account .account-trigger { grid-template-columns: 28px 8px; gap: 2px; justify-content: center; }
