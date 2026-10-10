@@ -363,20 +363,20 @@
   --err-line: rgba(255, 107, 107, .35);
   --warn-line: rgba(255, 176, 32, .35);
 
-  --rail-bg: #081b23;
-  --rail-depth: #06151d;
-  --rail-surface: #102c37;
-  --rail-raised: #163b48;
-  --rail-border: #204550;
-  --rail-text: #eef6f8;
-  --rail-label: #c4d4e2;
-  --rail-muted: #8bb4c8;
-  --rail-icon: #9ed6e7;
-  --rail-accent: #32ead6;
-  --rail-accent-edge: #187b79;
-  --rail-selected: #10464b;
-  --rail-glow: rgba(25, 231, 211, .16);
-  --rail-sheen: rgba(135, 227, 243, .08);
+  --rail-bg: #0C191C;
+  --rail-depth: #0C191C;
+  --rail-surface: #15282D;
+  --rail-raised: #1B343A;
+  --rail-border: #305259;
+  --rail-text: #F0FAF7;
+  --rail-label: #CAE3DA;
+  --rail-muted: #A4C5BB;
+  --rail-icon: #A4C5BB;
+  --rail-accent: #70DCC0;
+  --rail-accent-edge: #305259;
+  --rail-selected: #1B343A;
+  --rail-glow: transparent;
+  --rail-sheen: transparent;
   --rail-shadow: rgba(0, 8, 14, .32);
 }
 
