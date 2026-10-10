@@ -203,8 +203,9 @@ function paintSavings(d, token) {
     return base === key ? label : `${label} currency conversion`;
   };
   const unavailable = Object.keys(d.unavailable || {});
+  const shown = unavailable.filter(k => !k.endsWith("_currency") || !unavailable.includes(k.replace(/_currency$/, "")));
   const warn = unavailable.length
-    ? `<p class="muted warn">Could not read ${esc(unavailable.map(sourceLabel).join(", "))}, so the total
+    ? `<p class="muted warn">Could not read ${esc(shown.map(sourceLabel).join(", "))}, so the total
        is incomplete.</p>`
     : "";
 
