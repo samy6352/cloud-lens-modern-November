@@ -5,6 +5,7 @@ import { KpiTile, PageHeader } from "@/components/blocks";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { OptimizeAmounts, OptimizeBars, OptimizeMetric, OptimizeNotices, OptimizeQueryState, OptimizeSelect, OptimizeTable, OptimizeWindow, useOptimizeScope } from "@/components/OptimizeShared";
+import { subscriptionsQuery } from "@/lib/queries";
 import { metricValue, optimizeQuery, performanceScope, type OptimizeScope, type PerformanceReport, type PerformanceRow } from "@/lib/optimize-queries";
 
 export function PerformancePage() {
@@ -20,7 +21,11 @@ function PerformanceContent({ scope }: { scope: OptimizeScope }) {
   const [coverage, setCoverage] = useState("");
   const [cost, setCost] = useState("");
   const [selectedRow, setSelected] = useState<PerformanceRow>();
-  const guard = performanceScope(scope.scope);
+  const subs = useQuery(subscriptionsQuery);
+  const accessible = (subs.data?.subscriptions ?? []).filter(s => s.azure_access !== false).map(s => s.id);
+  const implicitScope = !scope.scope && accessible.length >= 1 && accessible.length <= 100 ? accessible.join(",") : undefined;
+  const guard = performanceScope(scope.scope || implicitScope);
+  const resolvingScope = !scope.scope && subs.isPending;
   const q = useQuery({ ...optimizeQuery<PerformanceReport>("performance", { scope: guard.ids.join(",") }, { window_days: days }), enabled: !guard.error });
   const d = q.data;
   const all = d?.resources ?? [];
@@ -36,7 +41,7 @@ function PerformanceContent({ scope }: { scope: OptimizeScope }) {
   const clear = () => { setType(""); setGroup(""); setRegion(""); setCurrency(""); setCoverage(""); setCost(""); };
   const unavailable = d?.status === "unavailable";
   return <div><PageHeader title="Performance vs Spend" subtitle="Service-specific Azure Monitor observations alongside native-currency billed spend." actions={<><OptimizeWindow evidence days={days} onChange={v => { setDays(v); setSelected(undefined); }} /><Button variant="outline" disabled={!!guard.error || q.isFetching} onClick={() => void q.refetch()}>Refresh evidence</Button></>} />
-    <Card className="mb-4 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-medium">Explicit subscription scope required</p><p className="mt-1 text-xs text-muted">Choose 1–100 accessible subscriptions. The selection is saved in this page's URL.</p></div><ScopePicker /></div>{guard.error && <p role="alert" className="mt-3 text-sm text-warn">{guard.error}</p>}</Card>
+    <Card className="mb-4 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-medium">Subscription scope</p><p className="mt-1 text-xs text-muted">Choose 1–100 accessible subscriptions; with no selection, all accessible subscriptions are used when there are 100 or fewer. The selection is saved in this page's URL.</p></div><ScopePicker /></div>{guard.error && !resolvingScope && <p role="alert" className="mt-3 text-sm text-warn">{guard.error}</p>}</Card>
     {!guard.error && <OptimizeQueryState query={q}>
       <OptimizeNotices notices={[unavailable ? "Performance evidence unavailable. Missing observations are not zero utilization or proof of idle resources." : null, d?.status === "partial" || d?.truncated ? "Partial coverage: this bounded sample does not describe the entire estate." : null, ...(d?.notices ?? [])]} />
       <div className="text-xs text-muted">{d?.window?.start} – {d?.window?.end} · Retrieved {d?.generated_at} · {d?.status}</div>

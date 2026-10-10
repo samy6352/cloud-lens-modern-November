@@ -412,7 +412,7 @@ function SummaryBar({ view, money, numbers, loading }: { view: ExecutiveView | u
             </div>
           )}
         </div>
-        <dl className="grid min-w-0 flex-1 grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        <dl className="grid w-full min-w-0 grid-cols-2 gap-x-4 gap-y-2 sm:w-auto sm:flex-1 sm:grid-cols-4">
           {(stats.length ? stats : Array.from({ length: 4 }, () => ["", "", ""] as [string, string, string])).map(([label, value, hint], i) => (
             <div key={label || i} className="min-w-0 border-l border-border pl-3">
               {label ? (
