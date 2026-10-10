@@ -196,9 +196,15 @@ function paintSavings(d, token) {
         opps.filter(o => o.category === c.id && !finite(o.window)).length)).join("")}
     </div>`;
 
+  const sourceLabels = { waste: "orphan scan", rightsizing: "utilisation", shutdown: "schedule scan", advisor: "Azure Advisor" };
+  const sourceLabel = key => {
+    const base = key.replace(/_currency$/, "");
+    const label = sourceLabels[base] || base.replace(/_/g, " ");
+    return base === key ? label : `${label} currency conversion`;
+  };
   const unavailable = Object.keys(d.unavailable || {});
   const warn = unavailable.length
-    ? `<p class="muted warn">Could not read ${esc(unavailable.join(", "))}, so the total
+    ? `<p class="muted warn">Could not read ${esc(unavailable.map(sourceLabel).join(", "))}, so the total
        is incomplete.</p>`
     : "";
 

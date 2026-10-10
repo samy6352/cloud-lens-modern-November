@@ -368,3 +368,5 @@ scan.stop();
     assert "Provisional totals: incoming findings are deduplicated" in source
     assert "counts and totals may change." in source
     assert "Latest scan source failures:" in source
+    assert "unavailable.map(sourceLabel)" in source
+    assert "currency conversion" in source
