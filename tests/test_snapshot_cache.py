@@ -704,6 +704,29 @@ def test_partial_report_is_cached_briefly_and_served_as_partial():
     asyncio.run(scenario())
 
 
+def test_partial_opportunities_with_priced_savings_are_cached_not_reported_as_failed():
+    async def scenario():
+        cache, auth, calls = make_cache(), Authorize(), []
+
+        async def origin():
+            calls.append(1)
+            return JSONResponse({
+                "status": "partial",
+                "opportunities": [{"id": "waste:old_snapshots", "monthly_savings": 0.54,
+                                   "annual_savings": 6.48}],
+                "warnings": ["rightsizing: savings source unavailable; estimates may be incomplete."],
+            })
+
+        first = await cache.get(request(), origin, auth)
+        assert "x-cloudlens-refresh-error" not in first.headers
+        second = await cache.get(request(), origin, auth)
+        assert second.headers["x-cloudlens-cache"] == "hit"
+        assert calls == [1]
+        await cache.close()
+
+    asyncio.run(scenario())
+
+
 def test_partial_report_never_replaces_a_complete_snapshot():
     async def scenario():
         now = [1000.0]

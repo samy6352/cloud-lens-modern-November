@@ -90,6 +90,7 @@ _EVIDENCE_FIELDS = frozenset({
     "cost", "total", "total_cost", "billed_cost", "amount", "value", "input", "output",
     "input_tokens", "output_tokens", "saving", "savings",
 })
+_PRICED_FIELDS = _EVIDENCE_FIELDS | {"monthly_savings", "annual_savings"}
 _ROW_FIELDS = frozenset({
     "resources", "services", "models", "rows", "items", "opportunities", "recommendations",
     "metrics", "series", "daily",
@@ -703,7 +704,7 @@ def _carries_money(value: Any) -> bool:
         for name, item in value.items():
             if name in {"error", "errors", "problem"}:
                 continue
-            if (name in _EVIDENCE_FIELDS and isinstance(item, (int, float))
+            if (name in _PRICED_FIELDS and isinstance(item, (int, float))
                     and not isinstance(item, bool) and math.isfinite(item) and item != 0):
                 return True
             if isinstance(item, (dict, list)) and _carries_money(item):
