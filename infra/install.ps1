@@ -54,6 +54,11 @@ param(
 
     [string]$ResourceGroup = 'rg-cloudlens',
 
+    # Optional resource names: {NamePrefix}-web-{NameSuffix}, {NamePrefix}-postgres-{NameSuffix}, ...
+    # Both empty keeps the default generated names.
+    [string]$NamePrefix = '',
+    [string]$NameSuffix = '',
+
     # Current month counts as one. Earlier history remains an explicit administrator choice.
     [ValidateRange(1, 13)]
     [int]$InitialHistoryMonths = 3,
@@ -289,6 +294,8 @@ $deploy = [ordered]@{
 if ($target.Kind -eq 'managementGroup') { $deploy.CostScopeManagementGroup = $target.Id }
 else { $deploy.CostScopeSubscriptions = @($target.Id) }
 if ($EntraClientId) { $deploy.EntraClientId = $EntraClientId }
+if ($NamePrefix) { $deploy.NamePrefix = $NamePrefix }
+if ($NameSuffix) { $deploy.NameSuffix = $NameSuffix }
 $localPassword = $null
 if ($LocalSignIn) {
     $deploy.SkipEntra = $true
