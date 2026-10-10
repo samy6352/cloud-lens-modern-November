@@ -56,7 +56,7 @@ export function MonthPicker() {
         <Popover.Anchor asChild>
           <DropdownMenu.Trigger asChild>
             <Button variant="outline" size="md" aria-label="Reporting period">
-              <Calendar className="text-muted" />
+              <Calendar className="text-muted max-sm:hidden" />
               <span className="num">{label}</span>
               <ChevronDown className="text-muted" />
             </Button>

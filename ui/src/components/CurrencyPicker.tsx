@@ -20,7 +20,7 @@ export function CurrencyPicker() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <Button variant="outline" size="md" aria-label="Display currency">
-          <Coins className="text-muted" />
+          <Coins className="text-muted max-sm:hidden" />
           <span className="num">{search.currency ?? "As billed"}</span>
           <ChevronDown className="text-muted" />
         </Button>
