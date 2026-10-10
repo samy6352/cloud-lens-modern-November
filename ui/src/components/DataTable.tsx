@@ -52,6 +52,7 @@ export function DataTable<T extends RowData>({
   footer,
   busy = false,
   rowHeight: fixedRowHeight,
+  label = "Cost and resource records",
 }: {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,6 +71,7 @@ export function DataTable<T extends RowData>({
   busy?: boolean;
   /** Pixel height of every row in the wide layout; raise it when cells wrap onto two lines. */
   rowHeight?: number;
+  label?: string;
 }) {
   const controlled = sort !== undefined && onSortChange !== undefined;
   const table = useTable({
@@ -130,7 +132,7 @@ export function DataTable<T extends RowData>({
     return (
       <>
         {first && (
-          <div role="cell" className="min-w-0 truncate font-medium">
+          <div role="cell" className="min-w-0 break-words font-medium">
             <table.FlexRender cell={first} />
           </div>
         )}
@@ -141,7 +143,7 @@ export function DataTable<T extends RowData>({
             return (
               <div key={cell.id} role="cell" className="min-w-0">
                 {label && <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>}
-                <div className="num min-w-0 truncate text-xs">
+                <div className="num min-w-0 break-words text-xs">
                   <table.FlexRender cell={cell} />
                 </div>
               </div>
@@ -155,53 +157,53 @@ export function DataTable<T extends RowData>({
   return (
     // The footer sits beside the table, not in it: a table may own only rows, and the
     // footer can hold controls (a pager).
-    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border">
+    <div className="cl-data-table min-w-0 max-w-full overflow-hidden border border-border">
+      {!stacked && headers.length > 4 && <div className="cl-table-guide">Scroll horizontally for all columns.{sortable.length > 0 ? " Select a column heading to sort." : ""}</div>}
+      {stacked && sortable.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-3 py-2 text-xs">
+          <label className="flex min-w-0 items-center gap-1.5 text-muted">
+            Sort
+            <select
+              aria-label={`Sort ${label} by`}
+              className="h-8 rounded-md border border-border bg-surface px-1.5 text-xs text-fg"
+              value={current?.column.id ?? ""}
+              onChange={(e) => {
+                const next = sortable.find((h) => h.column.id === e.target.value);
+                next?.column.toggleSorting((next.column.columnDef.meta as ColumnMetaLike | undefined)?.align === "right");
+              }}
+            >
+              {!current && <option value="" disabled>Choose…</option>}
+              {sortable.map((h) => <option key={h.id} value={h.column.id}>{labelOf(h) || h.column.id}</option>)}
+            </select>
+          </label>
+          {current && (
+            <button
+              type="button"
+              onClick={() => current.column.toggleSorting(current.column.getIsSorted() === "asc")}
+              className="inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-surface px-2"
+              aria-label={current.column.getIsSorted() === "desc" ? "Sorted high to low; switch to low to high" : "Sorted low to high; switch to high to low"}
+            >
+              {current.column.getIsSorted() === "desc" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
+              {current.column.getIsSorted() === "desc" ? "High to low" : "Low to high"}
+            </button>
+          )}
+        </div>
+      )}
       <div
         ref={scrollRef}
         role="table"
-        aria-rowcount={rows.length}
+        aria-label={label}
+        aria-rowcount={rows.length + (stacked ? 0 : 1)}
+        aria-colcount={headers.length}
         aria-busy={busy}
         // With no sortable header nothing inside can take focus, so keyboard users could not scroll.
-        tabIndex={table.getHeaderGroups()[0]?.headers.some((h) => h.column.getCanSort()) ? undefined : 0}
+        tabIndex={0}
         className="max-w-full overflow-auto"
         style={{ maxHeight: `min(${height}px, 70dvh)` }}
       >
-        {stacked ? (
-          sortable.length > 0 && (
-            <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-surface-2/95 px-3 py-1.5 text-xs backdrop-blur">
-              <label className="flex min-w-0 items-center gap-1.5 text-muted">
-                Sort
-                <select
-                  aria-label="Sort by"
-                  className="h-7 rounded-md border border-border bg-surface px-1.5 text-xs text-fg"
-                  value={current?.column.id ?? ""}
-                  onChange={(e) => {
-                    const next = sortable.find((h) => h.column.id === e.target.value);
-                    next?.column.toggleSorting((next.column.columnDef.meta as ColumnMetaLike | undefined)?.align === "right");
-                  }}
-                >
-                  {!current && <option value="" disabled>Choose…</option>}
-                  {sortable.map((h) => (
-                    <option key={h.id} value={h.column.id}>{labelOf(h) || h.column.id}</option>
-                  ))}
-                </select>
-              </label>
-              {current && (
-                <button
-                  type="button"
-                  onClick={() => current.column.toggleSorting(current.column.getIsSorted() === "asc")}
-                  className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-surface px-2"
-                  aria-label={current.column.getIsSorted() === "desc" ? "Sorted high to low; switch to low to high" : "Sorted low to high; switch to high to low"}
-                >
-                  {current.column.getIsSorted() === "desc" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
-                  {current.column.getIsSorted() === "desc" ? "High to low" : "Low to high"}
-                </button>
-              )}
-            </div>
-          )
-        ) : (
-        <div role="rowgroup" className="sticky top-0 z-10 border-b border-border bg-surface-2/95 backdrop-blur" style={{ minWidth }}>
-          <div role="row" className="grid" style={{ gridTemplateColumns: template }}>
+        {!stacked && (
+        <div role="rowgroup" className="sticky top-0 z-10 border-b border-border bg-surface-2" style={{ minWidth }}>
+          <div role="row" aria-rowindex={1} className="grid" style={{ gridTemplateColumns: template }}>
             {headers.map((header) => {
               const meta = header.column.columnDef.meta as ColumnMetaLike | undefined;
               const sorted = header.column.getIsSorted();
@@ -246,11 +248,12 @@ export function DataTable<T extends RowData>({
                 <div
                   key={row.id}
                   role="row"
-                  aria-rowindex={item.index + 1}
+                  aria-rowindex={item.index + (stacked ? 1 : 2)}
                   data-index={item.index}
+                  data-row-id={row.id}
                   ref={stacked ? virtualizer.measureElement : undefined}
                   className={cn(
-                    "absolute left-0 w-full border-b border-border/60 text-sm hover:bg-surface-2/60",
+                    "cl-data-row absolute left-0 w-full border-b border-border/60 text-sm hover:bg-surface-2/60",
                     stacked ? "px-3 py-2" : "grid items-center",
                   )}
                   style={stacked ? { transform: `translateY(${item.start}px)` } : { gridTemplateColumns: template, height: item.size, transform: `translateY(${item.start}px)` }}

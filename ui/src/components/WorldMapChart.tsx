@@ -54,12 +54,10 @@ export default function WorldMapChart({ points, selected, zoom, center, colors, 
         opacity: selected && selected !== p.key ? 0.45 : 0.92,
         borderColor: selected === p.key ? colors.text : "rgba(255,255,255,0.85)",
         borderWidth: selected === p.key ? 2.5 : 1,
-        shadowBlur: 18,
-        shadowColor: colors.palette[i % colors.palette.length],
       },
     });
     const ranked = points.map(datum);
-    // Ripples only on the largest locations, so motion still means "this is where the money is".
+    // Label only the largest locations to preserve legibility without animated decoration.
     const hot = ranked.filter((p) => p.value[2]! > 0).slice(0, 5);
     const rest = ranked.filter((p) => !hot.includes(p));
     return {
@@ -86,10 +84,9 @@ export default function WorldMapChart({ points, selected, zoom, center, colors, 
       },
       series: [
         {
-          type: "effectScatter",
+          type: "scatter",
           coordinateSystem: "geo",
           zlevel: 2,
-          rippleEffect: { brushType: "stroke", scale: 2.6, period: 3.2, number: 2 },
           label: {
             show: true,
             position: "right",

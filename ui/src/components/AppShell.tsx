@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
-import { DropdownMenu } from "radix-ui";
+import { Dialog, DropdownMenu } from "radix-ui";
 import {
   Check,
   ChevronDown,
@@ -15,6 +15,8 @@ import {
   Rows4,
   Search,
   Sun,
+  Menu,
+  X,
 } from "lucide-react";
 import * as m from "motion/react-m";
 import { useEffect, useState } from "react";
@@ -37,8 +39,9 @@ export function useCurrentScreen() {
   return SCREENS.find((s) => (s.to === "/" ? path === "/" : path.startsWith(s.to))) ?? SCREENS[0]!;
 }
 
-function Sidebar() {
+function Sidebar({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) {
   const { sidebarCollapsed: collapsed } = usePrefs();
+  const compact = !mobile && collapsed;
   const me = useQuery(meQuery);
   const current = useCurrentScreen();
   const search = useSearch({ from: "__root__" });
@@ -46,18 +49,19 @@ function Sidebar() {
   return (
     <aside
       className={cn(
-        "sticky top-0 flex h-dvh shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-300 ease-out-soft",
-        collapsed ? "w-16" : "w-16 sm:w-64",
+        "cl-sidebar sticky top-0 h-dvh shrink-0 flex-col border-r border-border bg-surface transition-[width] duration-300 ease-out-soft",
+        mobile ? "flex w-full" : compact ? "hidden w-16 sm:flex" : "hidden w-56 sm:flex",
       )}
     >
       <div className="flex h-14 items-center gap-2.5 px-4">
         <img src={logo} alt="" className="size-7 shrink-0" />
-        {!collapsed && (
-          <div className="hidden min-w-0 sm:block">
+        {!compact && (
+          <div className="min-w-0">
             <div className="text-sm font-semibold tracking-tight">CloudLens</div>
-            <div className="text-[11px] text-muted">v3 preview</div>
+            <div className="text-[10px] uppercase tracking-widest text-muted">Cost intelligence / v3</div>
           </div>
         )}
+        {mobile && <Dialog.Close asChild><Button variant="ghost" size="icon" className="ml-auto" aria-label="Close navigation"><X /></Button></Dialog.Close>}
       </div>
 
       <nav aria-label="Workspaces" className="flex-1 overflow-y-auto px-2 pb-4">
@@ -66,8 +70,8 @@ function Sidebar() {
           if (!screens.length) return null;
           return (
             <div key={ws.id} className="mt-4 first:mt-1">
-              {!collapsed && ws.screens.length > 1 && (
-                <div className="hidden px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted sm:block">{ws.label}</div>
+              {!compact && ws.screens.length > 1 && (
+               <div className="cl-nav-label px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">{ws.label}</div>
               )}
               <ul className="space-y-0.5">
                 {screens.map((s) => {
@@ -80,22 +84,17 @@ function Sidebar() {
                         search={search}
                         title={s.label}
                         aria-label={s.label}
+                        aria-current={active ? "page" : undefined}
+                        onClick={onNavigate}
                         className={cn(
-                          "group relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+                          "cl-nav-link group relative flex min-h-9 items-center gap-2.5 px-2.5 text-xs transition-colors",
                           active ? "text-fg" : "text-muted hover:bg-surface-2 hover:text-fg",
                         )}
                       >
-                        {active && (
-                          <m.span
-                            layoutId="nav-active"
-                            className="absolute inset-0 rounded-lg bg-surface-2 ring-1 ring-border"
-                            transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                          />
-                        )}
                         <Icon className="relative size-4 shrink-0" />
-                        {!collapsed && (
+                        {!compact && (
                           <>
-                            <span className="relative hidden truncate sm:block">{s.label}</span>
+                            <span className="relative min-w-0">{s.label}</span>
                             {!s.migrated && (
                               <span className="relative ml-auto rounded bg-surface-2 px-1.5 py-px text-[10px] text-muted group-hover:bg-canvas">
                                 classic
@@ -113,7 +112,7 @@ function Sidebar() {
         })}
       </nav>
 
-      <div className="hidden border-t border-border p-2 sm:block">
+      {!mobile && <div className="hidden border-t border-border p-2 sm:block">
         <Button
           variant="ghost"
           size={collapsed ? "icon" : "md"}
@@ -124,9 +123,23 @@ function Sidebar() {
           {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           {!collapsed && "Collapse"}
         </Button>
-      </div>
+      </div>}
     </aside>
   );
+}
+
+function MobileNavigation() {
+  const [open, setOpen] = useState(false);
+  return <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Trigger asChild><Button size="icon" variant="ghost" className="sm:hidden" aria-label="Open navigation"><Menu /></Button></Dialog.Trigger>
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
+      <Dialog.Content className="cl-mobile-nav fixed inset-y-0 left-0 z-50 w-[min(320px,90vw)] bg-surface" aria-describedby={undefined}>
+        <Dialog.Title className="sr-only">CloudLens navigation</Dialog.Title>
+        <Sidebar mobile onNavigate={() => setOpen(false)} />
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>;
 }
 
 function PrefsMenu() {
@@ -204,42 +217,44 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
   const refresh = async () => {
     setSpinning(true);
-    await client.invalidateQueries();
-    setSpinning(false);
+    try { await client.invalidateQueries(); }
+    finally { setSpinning(false); }
   };
 
   return (
-    <header className="z-30 flex min-h-11 sm:sticky sm:top-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-canvas/80 px-3 py-1.5 backdrop-blur-md sm:gap-x-3 sm:px-5 xl:py-0">
-      <div className="order-1 flex min-w-0 max-w-full shrink-0 items-center gap-1.5 text-sm">
+    <header className="cl-topbar z-30 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-surface px-3 py-2 sm:sticky sm:top-0 sm:px-5">
+      <div className="order-1 flex min-w-0 max-w-full items-center gap-1.5 text-xs">
+        <MobileNavigation />
         {workspace && workspace.screens.length > 1 && (
           <>
             <span className="text-muted">{workspace.label}</span>
             <ChevronDown className="size-3.5 -rotate-90 text-muted" />
           </>
         )}
-        <h1 className="truncate font-semibold">{screen.label}</h1>
+        <span className="truncate font-medium">{screen.label}</span>
       </div>
 
       <button
         type="button"
         onClick={onOpenPalette}
-        className="order-2 ml-2 hidden h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-muted transition-colors hover:border-accent/40 md:flex xl:ml-4 xl:w-72"
+        className="order-2 ml-auto flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-surface px-2 text-xs text-muted transition-colors hover:border-accent/40 sm:ml-3 xl:w-56"
       >
         <Search className="size-4" />
-        <span className="sr-only xl:not-sr-only">Search or jump to…</span>
+        <span className="sr-only lg:not-sr-only">Find a view or action</span>
         <span className="ml-auto hidden gap-1 xl:flex">
           <Kbd>{mac ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>K</Kbd>
         </span>
       </button>
 
-      <div className="order-4 flex w-full min-w-0 flex-wrap items-center gap-1 pb-0.5 sm:order-3 sm:ml-auto sm:w-auto sm:gap-2 sm:pb-0">
+      <div className="cl-context-bar order-4 flex w-full min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2">
+        <span className="hidden text-[10px] font-semibold uppercase tracking-widest text-muted lg:block">Reporting context</span>
         <MonthPicker />
         <CurrencyPicker />
         <ScopePicker />
       </div>
-      <div className="order-3 ml-auto flex items-center gap-1 sm:order-4 sm:ml-0 sm:gap-2">
-        <Button variant="ghost" size="icon" onClick={() => void refresh()} aria-label="Refresh data" title="Refresh data">
+      <div className="order-3 flex items-center gap-1 sm:ml-auto sm:gap-2">
+        <Button variant="ghost" size="icon" disabled={spinning} onClick={() => void refresh()} aria-label={spinning ? "Refreshing data" : "Refresh data"} title="Refresh data">
           <RefreshCw className={cn(spinning && "animate-spin")} />
         </Button>
         <PrefsMenu />
@@ -279,11 +294,12 @@ export function AppShell() {
         <TopBar onOpenPalette={() => setPaletteOpen(true)} />
         <m.main
           id="main"
+          tabIndex={-1}
           key={pathname}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-3 sm:px-5 sm:py-4"
+          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-4 sm:px-5 sm:py-5"
         >
           <Outlet />
         </m.main>

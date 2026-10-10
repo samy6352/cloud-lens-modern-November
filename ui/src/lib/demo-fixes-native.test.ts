@@ -214,3 +214,78 @@ describe("native budget demo evidence", () => {
     }
   }, 30_000);
 });
+
+describe("financial workbench interactions", () => {
+  it("supports roving radio focus, arrow keys and Home/End without changing global scope", async () => {
+    const { page, errors, writes } = await mount(`/explore/resources?scope=${first}`);
+    try {
+      const group = page.getByRole("radiogroup", { name: "Billing currency" });
+      const all = group.getByRole("radio", { name: "All", exact: true });
+      await all.focus();
+      await page.keyboard.press("ArrowRight");
+      const inr = group.getByRole("radio", { name: "INR", exact: true });
+      expect(await inr.getAttribute("aria-checked")).toBe("true");
+      expect(await inr.evaluate(e => e === document.activeElement)).toBe(true);
+      await page.keyboard.press("End");
+      expect(await group.getByRole("radio", { name: "USD", exact: true }).getAttribute("aria-checked")).toBe("true");
+      await page.keyboard.press("Home");
+      expect(await all.getAttribute("aria-checked")).toBe("true");
+      expect(await group.locator('[tabindex="0"]').count()).toBe(1);
+      expect(new URL(page.url()).searchParams.get("scope")).toBe(first);
+      expect(errors).toEqual([]); expect(writes).toEqual([]);
+    } finally { await page.close(); }
+  }, 30_000);
+
+  it("offers labelled mobile navigation, escape dismissal and route selection without an icon rail", async () => {
+    const { page, errors, writes } = await mount(`/explore/resources?scope=${first}`, { width: 390 });
+    try {
+      expect(await page.getByRole("navigation", { name: "Workspaces" }).isVisible()).toBe(false);
+      await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+      const drawer = page.getByRole("dialog", { name: "CloudLens navigation" });
+      await drawer.waitFor();
+      expect(await drawer.getByRole("link", { name: "All resources", exact: true }).getAttribute("aria-current")).toBe("page");
+      await page.keyboard.press("Escape");
+      expect(await drawer.count()).toBe(0);
+      await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+      await drawer.getByRole("link", { name: "Budgets", exact: true }).click();
+      await page.locator("main").getByRole("heading", { name: "Budgets", exact: true }).waitFor();
+      expect(await drawer.count()).toBe(0);
+      expect(new URL(page.url()).searchParams.get("scope")).toBe(first);
+      expect(await page.locator("main h1").count()).toBe(1);
+      expect(errors).toEqual([]); expect(writes).toEqual([]);
+    } finally { await page.close(); }
+  }, 30_000);
+
+  it("clears local filters only and keeps the scrollable ledger labelled and correctly indexed", async () => {
+    const { page, errors, writes } = await mount(`/explore/resources?scope=${first}`);
+    try {
+      const table = page.getByRole("table", { name: "Billed resource ledger", exact: true });
+      await table.getByRole("row").filter({ hasText: "Resource 0" }).first().waitFor();
+      expect(await table.getAttribute("tabindex")).toBe("0");
+      expect(await table.getAttribute("aria-colcount")).toBe("7");
+      expect(await table.locator('[role="row"][data-index="0"]').getAttribute("aria-rowindex")).toBe("2");
+      await page.getByRole("textbox", { name: "Search resources" }).fill("no-match");
+      await page.getByText("No resources match these filters.", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+      await table.getByRole("row").filter({ hasText: "Resource 0" }).first().waitFor();
+      expect(await page.getByRole("textbox", { name: "Search resources" }).inputValue()).toBe("");
+      expect(new URL(page.url()).searchParams.get("scope")).toBe(first);
+      expect(errors).toEqual([]); expect(writes).toEqual([]);
+    } finally { await page.close(); }
+  }, 30_000);
+
+  it("fits the mobile workbench in light and dark modes at 320 and 390 pixels", async () => {
+    const { page, errors } = await mount("/explore/resources", { width: 320 });
+    try {
+      await page.getByText("Page 1 of 3", { exact: true }).waitFor();
+      for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        for (const dark of [false, true]) {
+          await page.evaluate(value => document.documentElement.classList.toggle("dark", value), dark);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        }
+      }
+      expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  }, 30_000);
+});

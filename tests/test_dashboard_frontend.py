@@ -35,6 +35,48 @@ def test_phone_layout_scrolls_the_page_instead_of_a_nested_board():
     assert "position: fixed; inset: 0; height: 100dvh;" in block
 
 
+def test_analyst_launcher_keeps_activity_and_findings_visible():
+    script = r"""
+import assert from "node:assert/strict";
+import { mountBot, setBotState, setBotCount, botState } from "./web/assets/bot.js";
+const label = { textContent: "Analyst" };
+const pip = { textContent: "", hidden: true };
+const attributes = {};
+const host = {
+  dataset: {},
+  setAttribute(name, value) { attributes[name] = value; },
+  querySelector(selector) { return selector === ".bot-label" ? label : pip; },
+};
+let clicked = false;
+mountBot(host, () => { clicked = true; });
+assert.equal(host.type, "button");
+assert.equal(attributes["aria-label"], "Ask the analyst");
+assert.match(host.innerHTML, /bot-label/);
+assert.doesNotMatch(host.innerHTML, /linearGradient|bot-face/);
+host.onclick();
+assert.ok(clicked);
+for (const [state, text] of [["thinking", "Thinking…"], ["analyzing", "Analysing…"],
+  ["explaining", "Explaining…"], ["alert", "Review findings"], ["celebrating", "All clear"],
+  ["insight", "Findings"], ["idle", "Analyst"]]) {
+  setBotState(state);
+  assert.equal(botState(), state);
+  assert.equal(host.dataset.state, state);
+  assert.equal(label.textContent, text);
+  assert.ok(attributes["aria-label"]);
+}
+setBotCount(12);
+assert.equal(pip.textContent, "9+");
+assert.equal(pip.hidden, false);
+setBotCount(0);
+assert.equal(pip.hidden, true);
+"""
+    result = subprocess.run(
+        [node(), "--input-type=module", "-e", script], cwd=ROOT, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_azure_updates_links_and_customer_filters():
     script = r"""
 import assert from "node:assert/strict";

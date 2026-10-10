@@ -5,7 +5,7 @@ import { AlertDialog } from "radix-ui";
 import { Plus, ShieldCheck } from "lucide-react";
 import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
-import { KpiTile, PageHeader } from "@/components/blocks";
+import { FilterBar, KpiTile, PageHeader } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GovernDetails, GovernError, GovernField, GovernLink, GovernLoading, GovernNotice, GovernRefresh, GovernSelect, governInput } from "@/components/GovernControls";
@@ -156,10 +156,10 @@ export function BudgetsPage() {
       <KpiTile label="Over budget" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "over").length} loading={query.isPending} /><KpiTile label="Near limit" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "near").length} loading={query.isPending} /><KpiTile label="Counter unavailable" value={query.isError ? "Unavailable" : demo ? "—" : all.filter(b => budgetStatus(b) === "unknown").length} loading={query.isPending} /></div>
     {query.data?.error || query.data?.partial ? <GovernNotice warning>{query.data.error || "Budget reads are incomplete."} An empty list does not prove there are no budgets.</GovernNotice> : null}
     {compose && <BudgetComposer scope={scope} existing={all} demo={demo} demoNote={demoNote} />}
-    <Card className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4"><GovernField label="Search budgets"><input type="search" className={governInput} value={q} onChange={e => setQ(e.target.value)} /></GovernField>
+    <FilterBar title="Find budgets" summary={`${rows.length} of ${all.length} loaded budgets`} active={!!q || !!status || !!currency || !!tag} onReset={() => { setQ(""); setStatus(""); setCurrency(""); setTag(""); }}><GovernField label="Search budgets"><input type="search" className={governInput} value={q} onChange={e => setQ(e.target.value)} /></GovernField>
       <GovernSelect label="State" value={status} onChange={setStatus} options={["attention", "over", "near", "ok", "unknown"]} />
       <GovernSelect label="Native currency" value={currency} onChange={setCurrency} options={all.map(b => b.currency || "__missing")} />
-      <GovernSelect label="Exact tag key" value={tag} onChange={setTag} options={all.flatMap(b => b.tag_filter?.map(([key]) => key) ?? [])} /></Card>
+      <GovernSelect label="Exact tag key" value={tag} onChange={setTag} options={all.flatMap(b => b.tag_filter?.map(([key]) => key) ?? [])} /></FilterBar>
     {query.isError ? <GovernError error={query.error} retry={() => void query.refetch()} /> : query.isPending ? <GovernLoading /> : <DataTable data={rows} columns={columns} rowKey={b => `${b.subscription_id}:${b.name}`} height={390} empty={query.data?.partial || query.data?.error ? "Unavailable subscriptions may contain budgets. Retry the read." : demoNote || "No budgets match this scope and filters."} />}
     {selected && <Card className="space-y-4 p-5"><div className="flex items-center justify-between gap-2"><h3 className="font-semibold">{selected.name}</h3><Button onClick={() => setPicked(null)}>Close details</Button></div>
       <GovernLink url={budgetPortal(selected)} /><div className="grid gap-3 sm:grid-cols-3"><KpiTile label="Azure-reported spend" value={nativeMoney(selected.current_spend, selected.currency)} /><KpiTile label="Remaining" value={nativeMoney(selected.remaining, selected.currency)} /><KpiTile label="Usage" value={selected.percent_used == null ? "Unknown" : `${selected.percent_used}%`} /></div>

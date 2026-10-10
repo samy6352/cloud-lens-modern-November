@@ -21,7 +21,7 @@ export function GovernSelect({ label, value, onChange, options, all = "All" }: {
   </select></GovernField>;
 }
 export function GovernNotice({ children, warning = false }: { children: ReactNode; warning?: boolean }) {
-  return <div role="status" className={`rounded-xl border p-4 text-sm ${warning ? "border-warn/30 bg-warn/5 text-warn" : "border-border bg-surface-2 text-muted"}`}>{children}</div>;
+  return <div role="status" className={`cl-notice border-l-2 p-3 text-sm ${warning ? "border-warn/60 bg-warn/5 text-warn" : "border-border bg-surface-2 text-muted"}`}>{children}</div>;
 }
 export function GovernLoading() { return <Card className="p-6 text-sm text-muted" role="status">Loading live evidence…</Card>; }
 export function GovernError({ error, retry }: { error: unknown; retry: () => void }) {

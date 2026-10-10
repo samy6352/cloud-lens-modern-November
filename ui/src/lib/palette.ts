@@ -1,5 +1,5 @@
 /** Categorical series colours, shared by ECharts and the HTML legends beside the charts. */
-export const PALETTE = ["#6366f1", "#06b6d4", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6", "#ef4444", "#84cc16", "#0ea5e9", "#f97316"];
+export const PALETTE = ["#1785a3", "#6787a0", "#b58a42", "#37856f", "#a66874", "#7a7ba1", "#b75d54", "#7b9156", "#4798b4", "#ad794f"];
 function luminance(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   const channel = (v: number) => {

@@ -17,7 +17,7 @@ export function useOptimizeScope(): OptimizeScope {
 }
 export function OptimizeNotices({ notices }: { notices?: Array<string | undefined | null> }) {
   const list = notices?.filter((n): n is string => !!n) ?? [];
-  return list.length ? <Card role="status" className="my-4 border-warn/30 p-4 text-sm"><ul className="space-y-2">{list.map((n, i) => <li key={i}>{n}</li>)}</ul></Card> : null;
+  return list.length ? <Card role="status" className="cl-notice my-4 border-warn/30 p-3 text-sm"><ul className="space-y-2">{list.map((n, i) => <li key={i}>{n}</li>)}</ul></Card> : null;
 }
 export function OptimizeLoading({ label = "Loading evidence…" }: { label?: string }) {
   return <div aria-busy="true" role="status"><p className="mb-3 text-sm text-muted">{label}</p><Skeleton className="h-28 w-full" /><Skeleton className="mt-4 h-64 w-full" /></div>;
@@ -60,7 +60,7 @@ export function OptimizeTable<T extends RowData>({ title, rows, columns, rowKey,
     const url = URL.createObjectURL(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a"); a.href = url; a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`; a.click(); URL.revokeObjectURL(url);
   }
-  return <Card className="mt-4"><CardHeader title={title} subtitle={`${filtered.length} of ${rows.length} records`} actions={<div className="flex flex-wrap gap-2"><input aria-label={`Search ${title}`} type="search" maxLength={200} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search records…" className="h-9 w-48 rounded-lg border border-border bg-surface px-3 text-sm" /><Button variant="outline" onClick={exportRows} disabled={!filtered.length}>Export CSV</Button></div>} /><CardBody><DataTable data={filtered} columns={defs} rowKey={r => rowKey(r, rows.indexOf(r))} height={480} rowHeight={rowHeight} empty={empty} footer={note} /></CardBody></Card>;
+  return <Card className="mt-4"><CardHeader title={title} subtitle={`${filtered.length} of ${rows.length} records`} actions={<div className="flex flex-wrap gap-2"><input aria-label={`Search ${title}`} type="search" maxLength={200} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search records…" className="h-9 w-48 rounded-lg border border-border bg-surface px-3 text-sm" /><Button variant="outline" onClick={exportRows} disabled={!filtered.length}>Export CSV</Button></div>} /><CardBody><DataTable label={title} data={filtered} columns={defs} rowKey={r => rowKey(r, rows.indexOf(r))} height={480} rowHeight={rowHeight} empty={empty} footer={note} /></CardBody></Card>;
 }
 export function OptimizeBars({ title, labels, values, currency }: { title: string; labels: string[]; values: Array<number | null>; currency?: string | null }) {
   const { numbers } = usePrefs();

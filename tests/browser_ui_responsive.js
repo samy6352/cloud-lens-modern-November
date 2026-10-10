@@ -1,4 +1,4 @@
-async (page) => {
+async (page, { assetOrigin } = {}) => {
   const origin = page.url().match(/^https?:\/\/[^/]+/)?.[0];
   if (!origin) throw new Error("Open local CloudLens before responsive checks.");
   const context = await page.context().browser().newContext({
@@ -14,6 +14,12 @@ async (page) => {
     service: "Virtual Machines", currency: "USD", cost: index, prior_cost: index / 2, tags: [],
   }));
   try {
+    if (assetOrigin) await context.route("**/assets/**", async route => {
+      const path = route.request().url().split("/assets/")[1].replace(/^v\/[a-f0-9]{64}\//, "");
+      const response = await page.request.get(`${assetOrigin}/assets/${path}`);
+      if (!response.ok()) throw new Error(`Missing candidate asset: ${path}`);
+      await route.fulfill({ response });
+    });
     await context.route("**/api/dashboard/resources?**", route => {
       requests++;
       const params = new URL(route.request().url()).searchParams;

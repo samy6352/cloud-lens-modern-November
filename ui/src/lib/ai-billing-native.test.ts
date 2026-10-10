@@ -171,6 +171,12 @@ describe("AI billing native router regression", () => {
       expect(await page.locator("#main").innerText()).not.toMatch(/\d\.000 tokens/);
       await model.click();
       await page.getByRole("heading", { name: "Current deployment metadata · not historical", exact: true }).waitFor();
+      expect(await page.locator(".cl-evidence").evaluate(e => e === document.activeElement)).toBe(true);
+      await page.getByRole("button", { name: "Close details", exact: true }).click();
+      await page.waitForFunction(() => document.activeElement?.textContent === "gpt-4o · chat");
+      expect(await model.evaluate(e => e === document.activeElement)).toBe(true);
+      await model.click();
+      await page.getByRole("heading", { name: "Current deployment metadata · not historical", exact: true }).waitFor();
       expect(await page.locator("#main").innerText()).toContain("Unavailable · not returned by API");
       expect(await page.locator("#main").innerText()).toContain("Zero baseline; percentage unavailable");
       await page.getByRole("heading", { name: "Anomaly assessment coverage", exact: true }).waitFor();

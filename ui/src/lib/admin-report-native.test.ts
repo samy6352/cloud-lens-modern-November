@@ -319,6 +319,11 @@ describe("native admin/report interactions (all APIs mocked)", () => {
     expect(reportRequest).toMatchObject({ method: "GET", body: null });
     expect(Object.fromEntries(new URL(`https://example.test/${reportRequest?.path}`).searchParams)).toEqual({ days: "30", summary: "true", sections: "compute", blocks: "trend,services", live: "" });
     expect(await page.getByRole("status").last().innerText()).not.toContain("saved locally");
+    await page.getByRole("radio", { name: "Raw cost export", exact: true }).click();
+    expect(await page.getByRole("link", { name: "Download report", exact: true }).isVisible()).toBe(false);
+    await page.getByRole("radio", { name: "Financial report", exact: true }).click();
+    expect(await page.getByLabel("Report file format").inputValue()).toBe("csv");
+    await page.getByRole("radio", { name: "Raw cost export", exact: true }).click();
     await page.getByRole("button", { name: "Review save to storage" }).click();
     expect(requests.some(r => r.path.startsWith("archive/export?"))).toBe(false);
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
