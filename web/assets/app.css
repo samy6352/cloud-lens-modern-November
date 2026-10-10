@@ -1830,6 +1830,23 @@ body.rail-mini .shell { grid-template-columns: var(--nav-w-mini) minmax(0, 1fr);
    past the point prose stays readable. Capped to the same measure the chat body already uses. */
 .board-body > p.muted, .board-body > p.empty { max-width: var(--prose); }
 
+/* Phones: the shell is a fixed-height box with its own nested scroller, which left the page's
+   actual content about 277px of a 844px screen once the header, estate strip, filters and
+   tabs had taken their share. Here the page scrolls as a whole instead, so content gets the
+   full height and nothing is trapped inside a small window. The header controls wrap rather
+   than truncate ("As b", "All subs...", "Refresh ..."). */
+@media (max-width: 620px) {
+  html, body { height: auto; min-height: 100dvh; }
+  body { overflow-y: auto; }
+  .shell { flex: none; min-height: 0; }
+  .board { overflow: visible; }
+  .board-body { flex: none; overflow: visible; }
+  .bar-right { flex-wrap: wrap; justify-content: flex-start; }
+  .bar-right .currency { min-width: 92px; flex: 0 0 auto; }
+  .bar-right .picker { flex: 1 1 120px; }
+  #refreshBtn, #refreshBtn #refreshLabel { white-space: nowrap; }
+}
+
 /* ---------------------------------------------------------------- skeletons */
 /* Blocks the size of the panels that are coming. They hold the layout still, so nothing
    jumps when the data lands, and the shimmer is a single background-position animation

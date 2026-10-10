@@ -22,6 +22,16 @@ def test_summary_is_beside_the_full_height_rail():
     assert html.count('id="firstRun"') == 1
 
 
+def test_phone_layout_scrolls_the_page_instead_of_a_nested_board():
+    css = (ASSETS / "app.css").read_text(encoding="utf-8")
+    block = css[css.index("Phones: the shell is a fixed-height box"):]
+    block = block[:block.index("\n}\n")]
+    assert "@media (max-width: 620px)" in block
+    assert "body { overflow-y: auto; }" in block
+    assert ".board-body { flex: none; overflow: visible; }" in block
+    assert ".bar-right { flex-wrap: wrap;" in block
+
+
 def test_azure_updates_links_and_customer_filters():
     script = r"""
 import assert from "node:assert/strict";
