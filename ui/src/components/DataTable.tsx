@@ -51,6 +51,7 @@ export function DataTable<T extends RowData>({
   empty = "No rows.",
   footer,
   busy = false,
+  rowHeight: fixedRowHeight,
 }: {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,6 +68,8 @@ export function DataTable<T extends RowData>({
   empty?: ReactNode;
   footer?: ReactNode;
   busy?: boolean;
+  /** Pixel height of every row in the wide layout; raise it when cells wrap onto two lines. */
+  rowHeight?: number;
 }) {
   const controlled = sort !== undefined && onSortChange !== undefined;
   const table = useTable({
@@ -93,7 +96,7 @@ export function DataTable<T extends RowData>({
   const { density } = usePrefs();
   const stacked = useMediaQuery(STACKED_QUERY);
   // Cards vary in height, so a stacked row is only estimated here and measured once rendered.
-  const rowHeight = stacked ? 116 : density === "compact" ? 32 : 40;
+  const rowHeight = stacked ? 116 : fixedRowHeight ?? (density === "compact" ? 32 : 40);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,

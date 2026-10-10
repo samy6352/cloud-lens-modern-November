@@ -273,7 +273,7 @@ export function metricValue(metric?: Metric, percent = false): string {
   if (metric?.status === "unsupported") return "Not supported";
   if (metric?.status === "no_data") return "No observations";
   if (!metric || !["ok", "partial"].includes(metric.status) || metric.value == null || !Number.isFinite(metric.value)) return "Unavailable";
-  return percent ? `${metric.value.toFixed(1)}%` : `${formatNumber(metric.value, { digits: 3 })}${metric.unit ? ` ${metric.unit}` : ""}`;
+  return percent ? `${metric.value.toFixed(1)}%` : `${formatNumber(metric.value, { digits: Number.isInteger(metric.value) ? 0 : 3 })}${metric.unit ? ` ${metric.unit}` : ""}`;
 }
 export function canSimulate(resourceId?: string): boolean {
   return /^\/subscriptions\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/resourcegroups\/[^/]+\/providers\/microsoft\.compute\/virtualmachines\/[^/]+$/i.test(resourceId ?? "");

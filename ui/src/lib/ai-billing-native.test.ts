@@ -88,6 +88,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
+import "/src/styles.css";
 import { makeRouter } from "/src/router.tsx";
 import { LazyMotion, domAnimation } from "motion/react";
 const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -161,6 +162,13 @@ describe("AI billing native router regression", () => {
       await model.waitFor();
       expect(await page.locator("#main").innerText()).toContain("GlobalStandard");
       expect(await page.locator("#main").innerText()).toContain("2024-08-06");
+      // A two-line token cell must sit inside its row: no overlap onto the next line, no clipping.
+      const fit = await page.locator('[role="row"] [role="cell"]').evaluateAll(cells => cells
+        .filter(c => /^\s*\S.*In .* Out /s.test(c.textContent ?? ""))
+        .map(c => { const row = c.closest('[role="row"]')!.getBoundingClientRect(), box = c.firstElementChild!.getBoundingClientRect(); return { inside: box.top >= row.top - 0.5 && box.bottom <= row.bottom + 0.5, wide: c.scrollWidth <= c.clientWidth + 1 }; }));
+      expect(fit.length).toBeGreaterThan(0);
+      expect(fit.every(f => f.inside && f.wide)).toBe(true);
+      expect(await page.locator("#main").innerText()).not.toMatch(/\d\.000 tokens/);
       await model.click();
       await page.getByRole("heading", { name: "Current deployment metadata · not historical", exact: true }).waitFor();
       expect(await page.locator("#main").innerText()).toContain("Unavailable · not returned by API");

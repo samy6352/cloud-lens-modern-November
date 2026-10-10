@@ -20,6 +20,8 @@ describe("Optimize evidence contracts", () => {
     expect(metricValue({ status: "unsupported", value: null })).toBe("Not supported");
     expect(metricValue({ status: "not_applicable", value: null }, true)).toBe("Not applicable");
     expect(metricValue({ status: "partial", value: 0 }, true)).toBe("0.0%");
+    expect(metricValue({ status: "ok", value: 30203, unit: "tokens" })).toBe("30,203 tokens");
+    expect(metricValue({ status: "ok", value: 12.5, unit: "ms" })).toBe("12.500 ms");
     expect(nativeMoney(null, "USD")).toBe("Unavailable");
     expect(nativeMoney(0, null)).toContain("currency unknown");
     expect(nativeMoney(10, "USD")).toContain("USD");
