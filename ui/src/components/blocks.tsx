@@ -126,7 +126,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        {/* The top bar already names the screen on phones; the heading stays for assistive technology. */}
+        <h2 className="text-lg font-semibold tracking-tight max-sm:sr-only">{title}</h2>
         {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
       </div>
       {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
