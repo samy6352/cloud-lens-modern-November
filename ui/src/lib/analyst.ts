@@ -145,6 +145,11 @@ export function toolLabel(name: string): string {
   return TOOL_LABELS[name] ?? name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 }
 
+/** A finding claims a saving only when it names a positive amount; a zero is not a measured result. */
+export function claimsSaving(f: Pick<Finding, "impact">): boolean {
+  return typeof f.impact === "number" && f.impact > 0;
+}
+
 /** Plain-language message for a failed question, saying what the person can do next. */
 export function askFailure(status: number, detail: string): string {
   if (status === 401) return "Your session has ended. Sign in again to keep asking questions.";

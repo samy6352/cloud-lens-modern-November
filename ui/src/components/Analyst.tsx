@@ -12,6 +12,7 @@ import {
   AskFailure,
   askStream,
   CONFIDENCE_LABEL,
+  claimsSaving,
   insightsQuery,
   sortFindings,
   SEVERITY_LABEL,
@@ -31,6 +32,7 @@ const PERIOD_WORD: Record<string, string> = { year: "per year", month: "per mont
 
 function impactText(f: Finding, numbers: ReturnType<typeof usePrefs>["numbers"]): string {
   if (f.impact == null) return "Not estimated";
+  if (!claimsSaving(f)) return "No saving claimed";
   return `${formatMoney(f.impact, f.currency, { system: numbers })} ${PERIOD_WORD[f.impact_period ?? ""] ?? "in this window"}`;
 }
 

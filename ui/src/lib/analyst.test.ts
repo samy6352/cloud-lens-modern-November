@@ -3,6 +3,7 @@ import {
   analystKey,
   answerBlocks,
   askFailure,
+  claimsSaving,
   sortFindings,
   suggestedQuestions,
   takeEvents,
@@ -104,6 +105,14 @@ describe("analystKey", () => {
     expect(analystKey({ month: "2026-09", scope: "a", days: 30, currency: "USD" })).toEqual(
       analystKey({ month: "2026-09", scope: "a", days: 30, currency: "USD" }),
     );
+  });
+});
+
+describe("claimsSaving", () => {
+  it("claims a saving only for a positive amount", () => {
+    expect(claimsSaving({ impact: 12 })).toBe(true);
+    expect(claimsSaving({ impact: 0 })).toBe(false);
+    expect(claimsSaving({ impact: null })).toBe(false);
   });
 });
 
