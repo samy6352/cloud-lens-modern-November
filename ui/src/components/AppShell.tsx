@@ -25,6 +25,7 @@ import { meQuery } from "@/lib/queries";
 import { signOut } from "@/lib/session";
 import { WORKSPACES, SCREENS } from "@/nav";
 import { CommandPalette } from "./CommandPalette";
+import { AnalystButton } from "./Analyst";
 import { CurrencyPicker } from "./CurrencyPicker";
 import { MonthPicker } from "./MonthPicker";
 import { ScopePicker } from "./ScopePicker";
@@ -239,6 +240,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <ScopePicker />
       </div>
       <div className="order-3 ml-auto flex items-center gap-1 sm:order-4 sm:ml-0 sm:gap-2">
+        <AnalystButton />
         <Button variant="ghost" size="icon" onClick={() => void refresh()} aria-label="Refresh data" title="Refresh data">
           <RefreshCw className={cn(spinning && "animate-spin")} />
         </Button>
