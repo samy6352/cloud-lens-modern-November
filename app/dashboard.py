@@ -15,7 +15,7 @@ anything not claimed by a named group falls into "Other" rather than quietly dis
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from . import reporting, resource_counts
 
@@ -479,6 +479,83 @@ class Dashboard:
             "families": families, "monthly_family": monthly_family, "services": services,
             "subs": subs, "groups_top": groups_top, "regions_top": regions_top,
         })
+
+    # The contributors that made up one day's spend, against the day before. Read-only, one
+    # query, bounded to `limit` named rows; everything below the cut is one "other" line per
+    # currency so a day can still be reconciled to its total.
+    DAY_DIMENSIONS: ClassVar[dict[str, str]] = {
+        "service": '"ServiceName"',
+        "subscription": "coalesce(\"SubAccountName\", \"SubAccountId\", '—')",
+        "resource_group": "coalesce(\"ResourceGroup\", '—')",
+    }
+
+    def day_contributors(self, scope: list[str] | None, day: str, dimension: str = "service",
+                         currency: str | None = None,
+                         filters: dict[str, list[str]] | None = None,
+                         limit: int = 10) -> dict[str, Any]:
+        from datetime import date, timedelta
+
+        if dimension not in self.DAY_DIMENSIONS:
+            raise ValueError(f"dimension must be one of {', '.join(self.DAY_DIMENSIONS)}")
+        chosen = date.fromisoformat(day)
+        prior = chosen - timedelta(days=1)
+        label = self.DAY_DIMENSIONS[dimension]
+        with self.wh.reader(scope, currency, filters) as r:
+            rows = r.rows(
+                f'SELECT {label} AS name, "BillingCurrency" AS currency, '
+                f'sum(CASE WHEN "ChargePeriodStart" = date \'{chosen}\' THEN "BilledCost" ELSE 0 END) AS cost, '
+                f'sum(CASE WHEN "ChargePeriodStart" = date \'{prior}\' THEN "BilledCost" ELSE 0 END) AS prior '
+                f'FROM {_aggregate(r)} '
+                f'WHERE "ChargePeriodStart" IN (date \'{prior}\', date \'{chosen}\') '
+                'GROUP BY 1, 2', None)
+
+        rows = [row for row in rows if (row.get("cost") or 0) or (row.get("prior") or 0)]
+        totals: dict[str, dict[str, float]] = {}
+        for row in rows:
+            slot = totals.setdefault(row.get("currency") or "unknown", {"cost": 0.0, "prior": 0.0})
+            slot["cost"] += float(row.get("cost") or 0.0)
+            slot["prior"] += float(row.get("prior") or 0.0)
+
+        def shaped(row: dict) -> dict[str, Any]:
+            cur = row.get("currency") or "unknown"
+            cost, before = round(float(row.get("cost") or 0.0), 2), round(float(row.get("prior") or 0.0), 2)
+            day_total = totals[cur]["cost"]
+            return {
+                "name": row.get("name") or "—", "currency": None if cur == "unknown" else cur,
+                "cost": cost, "prior": before, "delta": round(cost - before, 2),
+                # None rather than 0 when there was no prior spend to compare against.
+                "change_pct": round((cost - before) / before * 100, 1) if before else None,
+                "share_pct": round(cost / day_total * 100, 1) if day_total else None,
+            }
+
+        # Amounts in different currencies are not comparable, so each currency gets its own top N;
+        # ranking them together lets a large-denomination currency push every other one into "Other".
+        named: list[dict] = []
+        rest: list[dict] = []
+        for cur in sorted({row.get("currency") or "unknown" for row in rows}):
+            ranked = sorted((row for row in rows if (row.get("currency") or "unknown") == cur),
+                            key=lambda row: -float(row.get("cost") or 0.0))
+            named.extend(ranked[:limit])
+            rest.extend(ranked[limit:])
+        others: dict[str, dict[str, Any]] = {}
+        for row in rest:
+            cur = row.get("currency") or "unknown"
+            slot = others.setdefault(cur, {"currency": None if cur == "unknown" else cur,
+                                           "cost": 0.0, "prior": 0.0, "count": 0})
+            slot["cost"] += float(row.get("cost") or 0.0)
+            slot["prior"] += float(row.get("prior") or 0.0)
+            slot["count"] += 1
+        for slot in others.values():
+            slot["cost"], slot["prior"] = round(slot["cost"], 2), round(slot["prior"], 2)
+
+        return {
+            "day": day, "prior_day": prior.isoformat(), "dimension": dimension,
+            "mixed_currency": len(totals) > 1,
+            "totals": [{"currency": None if cur == "unknown" else cur, "cost": round(t["cost"], 2),
+                        "prior": round(t["prior"], 2)} for cur, t in sorted(totals.items())],
+            "contributors": [shaped(row) for row in named],
+            "other": list(others.values()),
+        }
 
     def _executive_payload(self, *, days: int, hi: str, totals: list[dict],
                            counts: list[dict], daily: list[dict], families: list[dict],

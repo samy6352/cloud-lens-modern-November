@@ -3856,6 +3856,23 @@ async def dashboard_executive(request: Request, days: int = 30, scope: str = "",
                                       filters=request_filters(request)))
 
 
+@app.get("/api/dashboard/day")
+async def dashboard_day(request: Request, day: str, dimension: str = "service",
+                        scope: str = "", currency: str = "") -> JSONResponse:
+    """What made up one day's spend, against the day before. Same scope and filters as Overview."""
+    from .dashboard import get_dashboard
+
+    user = current_user(request)
+    allowed = await permitted(user)
+    picked = narrow([s for s in scope.split(",") if s.strip()], allowed)
+    try:
+        return JSONResponse(await offload(get_dashboard().day_contributors, picked or None, day,
+                                          dimension, currency=currency or None,
+                                          filters=request_filters(request)))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 async def _billing_scope(user: User, scope: str) -> list[str]:
     def normal(value: str) -> str:
         value = value.strip().lower()

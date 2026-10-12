@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowDownRight, ArrowUpRight, Boxes, CalendarDays, Layers3, Sparkles, TrendingUp } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Chart, InsightChart } from "@/components/Chart";
 import { CountUp, cssVar, escapeHtml, RadialGauge, Sparkline } from "@/components/premium";
 import { RegionSpend } from "@/components/RegionSpend";
@@ -14,7 +14,9 @@ import { formatMoney, formatMonth, formatNumber, type NumberSystem } from "@/lib
 import { isDark, usePrefs } from "@/lib/prefs";
 import { chipOn, PALETTE } from "@/lib/palette";
 import { formatRange, periodParam, validRange } from "@/lib/period";
-import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked } from "@/lib/queries";
+import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked, type Scope } from "@/lib/queries";
+import { DayContributorsPanel, dayLabel } from "@/components/DayContributors";
+import { ChangeBridge, MonthOverMonth } from "@/components/SpendPatterns";
 
 /** A mixed-currency estate has no honest single total, so the page shows one currency at a time. */
 function useCurrencyViews(views: ExecutiveView[]) {
@@ -448,6 +450,13 @@ export function OverviewPage() {
   const subs = useQuery(subscriptionsQuery);
   const [trendStyle, setTrendStyle] = useState<"area" | "bars">("area");
   const [landscape, setLandscape] = useState<Landscape>("services");
+  // The day whose contributors are open. Choosing another period, scope or currency clears it,
+  // because the figures it shows belong to the old selection.
+  const [day, setDay] = useState<string | null>(null);
+  const pickDay = useCallback((label: string) => setDay(label), []);
+  useEffect(() => {
+    setDay(null);
+  }, [search.month, search.from, search.to, search.scope, search.days, search.currency]);
 
   const views = useMemo<ExecutiveView[]>(() => {
     const data = query.data;
@@ -568,8 +577,25 @@ export function OverviewPage() {
           <CardBody>
             {view && options && view.trend.labels.length ? (
               <>
-                <div role="img" aria-label={`Daily spend in ${currency ?? "unspecified currency"}, this and previous period. Exact daily values are available below.`}><div aria-hidden="true"><Chart height={240} option={options.trend} /></div></div>
+                <div role="img" aria-label={`Daily spend in ${currency ?? "unspecified currency"}, this and previous period. Click a day, or choose one below, to see its top contributors. Exact daily values are available below.`}><div aria-hidden="true"><Chart height={240} option={options.trend} onCategoryClick={pickDay} /></div></div>
                 {view.trend.partial_last && <p className="mt-2 text-xs text-muted">Latest day is partial; do not compare it with a complete billing day.</p>}
+                <label className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span>Inspect contributors on</span>
+                  <select value={day ?? ""} onChange={(e) => setDay(e.target.value || null)}
+                    className="rounded border border-border bg-surface px-2 py-1 text-xs text-fg">
+                    <option value="">Choose a day</option>
+                    {view.trend.labels.map(d => <option key={d} value={d}>{dayLabel(d)}</option>)}
+                  </select>
+                </label>
+                {day && (
+                  <DayContributorsPanel
+                    scope={search as Scope}
+                    day={day}
+                    currency={currency}
+                    partial={view.trend.partial_last && day === view.trend.labels[view.trend.labels.length - 1]}
+                    onClose={() => setDay(null)}
+                  />
+                )}
                 <details className="mt-3 text-xs">
                   <summary className="w-fit cursor-pointer font-medium text-accent">View daily values</summary>
                   <div className="mt-2 max-h-64 overflow-auto" tabIndex={0} role="region" aria-label="Daily spend data">
@@ -711,6 +737,18 @@ export function OverviewPage() {
             <Chart height={240} option={options.monthly} />
           </CardBody>
         </Card>
+      )}
+      {view && (
+        <div className="mt-3 grid grid-cols-1 gap-3 [&>*]:min-w-0 lg:grid-cols-2">
+          <Card>
+            <CardHeader title="What changed by service" subtitle="Against the previous period, largest change first" />
+            <CardBody><ChangeBridge view={view} money={money} /></CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Month over month" subtitle="Each calendar month against the one before" />
+            <CardBody><MonthOverMonth view={view} money={money} /></CardBody>
+          </Card>
+        </div>
       )}
     </div>
   );

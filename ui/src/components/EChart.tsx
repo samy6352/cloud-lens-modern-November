@@ -60,9 +60,11 @@ export interface EChartProps {
   height?: number;
   className?: string;
   onClick?: (params: { name: string; seriesName?: string; value: unknown; dataIndex: number; data?: unknown }) => void;
+  /** A click anywhere in the plot, reporting the nearest category on the x axis. */
+  onCategoryClick?: (category: string) => void;
 }
 
-export default function EChart({ option, height = 280, className, onClick }: EChartProps) {
+export default function EChart({ option, height = 280, className, onClick, onCategoryClick }: EChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const { theme } = usePrefs();
@@ -86,6 +88,22 @@ export default function EChart({ option, height = 280, className, onClick }: ECh
     instance.off("click");
     if (onClick) instance.on("click", (p) => onClick(p as never));
   }, [onClick]);
+
+  useEffect(() => {
+    const instance = chart.current;
+    if (!instance) return;
+    const zr = instance.getZr();
+    zr.off("click");
+    if (!onCategoryClick) return;
+    zr.on("click", (event) => {
+      const point = [event.offsetX, event.offsetY];
+      if (!instance.containPixel({ gridIndex: 0 }, point)) return;
+      const [x] = instance.convertFromPixel({ gridIndex: 0 }, point) as number[];
+      const axis = (instance.getOption().xAxis as Array<{ data?: unknown[] }> | undefined)?.[0];
+      const label = axis?.data?.[Math.round(x ?? -1)];
+      if (typeof label === "string") onCategoryClick(label);
+    });
+  }, [onCategoryClick]);
 
   useEffect(() => {
     const instance = chart.current;
