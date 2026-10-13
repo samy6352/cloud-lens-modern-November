@@ -45,10 +45,10 @@ async (page) => {
         return {
           theme: document.documentElement.dataset.theme,
           saved: localStorage.getItem("costTheme"),
-          sidebar: getComputedStyle(document.querySelector(".sidebar")).backgroundImage,
-          active: getComputedStyle(document.querySelector(".rail-item.on")).backgroundImage,
+          sidebar: getComputedStyle(document.querySelector(".sidebar")).backgroundColor,
+          active: getComputedStyle(document.querySelector(".rail-item.on")).backgroundColor,
           icon: getComputedStyle(document.querySelector(".rail-item.on .rail-icon-frame")).color,
-          collapse: getComputedStyle(document.querySelector(".rail-mini-btn")).backgroundImage,
+          collapse: getComputedStyle(document.querySelector(".rail-mini-btn")).backgroundColor,
           account: getComputedStyle(document.getElementById("who")).backgroundColor,
           popover: getComputedStyle(document.querySelector(".account-popover")).backgroundColor,
           contrast: [

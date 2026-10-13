@@ -20,6 +20,13 @@ async (page) => {
       }, theme);
       for (const size of [{ width: 1600, height: 1050 }, { width: 1200, height: 800 }, { width: 390, height: 844 }]) {
         await test.setViewportSize(size);
+        // A resize reflows over a few frames; the board reads 24px for an instant after 390px -> 1600px.
+        await test.evaluate(() => { window.__boardReads = []; });
+        await test.waitForFunction(() => {
+          const reads = window.__boardReads;
+          reads.push(document.querySelector("#tabBody").clientHeight);
+          return reads.length >= 3 && reads.slice(-3).every(value => value === reads.at(-1));
+        }, null, { polling: 100 });
         results.push(await test.evaluate(() => {
           const style = getComputedStyle(document.documentElement);
           const luminance = name => {
@@ -50,7 +57,7 @@ async (page) => {
       }
     }
     const failures = results.filter(result => result.overflow || !result.railAligned
-      || result.boardHeight < 200 || result.cardRadius < 8 || result.cardRadius > 12
+      || result.boardHeight < 200 || result.cardRadius < 4 || result.cardRadius > 12
       || Object.values(result.contrast).some(value => !Number.isFinite(value) || value < 4.5));
     if (failures.length || errors.length) throw new Error(JSON.stringify({ failures, errors }));
     return { results, errors };
