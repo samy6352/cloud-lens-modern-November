@@ -1136,7 +1136,7 @@ details.step.failed .tick { color: var(--err); }
   align-items: center; gap: 8px; padding: 2px;
 }
 
-.banner { border-radius: var(--radius-sm); padding: 9px 12px; margin: 0 0 10px; font-size: var(--t-base); }
+.banner { border-radius: var(--radius-sm); padding: 9px 12px; margin: 0 0 10px; font-size: var(--t-base); overflow-wrap: anywhere; }
 /* Banner text colours are tokens, not literals: the pale red that reads on near-black is
    invisible on white, so each theme supplies its own. */
 .banner.err { background: var(--err-wash); border: 1px solid var(--err); color: var(--err-text); }
@@ -1174,6 +1174,8 @@ figure.chart:focus-within .chart-actions { opacity: 1; }
 @media (hover: none) { .chart-actions { opacity: 1; } }
 .chart-actions button { padding: 3px 8px; font-size: var(--t-xs); }
 .canvas-wrap { position: relative; width: 100%; }
+/* An unsized canvas is 300px wide until the chart library measures it, which overflows a phone. */
+.canvas-wrap canvas { max-width: 100%; }
 .chart-point { padding: var(--s3) var(--s4); border-top: 1px solid var(--border); }
 .chart-point-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
 .chart-point table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; }
@@ -1626,7 +1628,7 @@ body.rail-mini .shell { grid-template-columns: var(--nav-w-mini) minmax(0, 1fr);
    escape it, which left every filter showing its search box and none of its options. Six short
    chips wrap onto a second line on a narrow window and cost nothing. */
 .filterbar {
-  flex: none; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  flex: 0 1 auto; max-width: 100%; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
   min-width: 0;
 }
 .filterbar[hidden] { display: none; }
