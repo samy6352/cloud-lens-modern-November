@@ -948,7 +948,9 @@ button.ghost, a.btn.ghost { background: transparent; }
   font-size: 18px; font-weight: var(--w-semi); letter-spacing: -.02em;
   line-height: 1.25; color: var(--text);
   font-variant-numeric: var(--nums);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* A figure is never truncated: a two-currency total wraps at its " · " so each amount stays whole,
+     where an ellipsis used to cut the second currency off. */
+  white-space: normal; overflow-wrap: anywhere;
 }
 .tile .v.warn { color: var(--warn); font-weight: var(--w-semi); }
 /* Distinct from warn: an exceeded budget is a fact, not a caution. */
