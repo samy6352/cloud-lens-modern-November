@@ -1072,11 +1072,14 @@ function paintBackfill(state) {
       ${folded ? `<details class="banner-names"><summary>Show names</summary>${names}</details>` : ""}</div>`);
   }
   if (failed.length) {
+    // Each name carries its reason, so a long list is longer still; it folds behind the fix.
+    const reasons = failed.map((f) => `${name(f)}${f.detail ? ` — ${esc(f.detail)}` : ""}`).join("; ");
+    const folded = failed.length > 3;
     parts.push(`<div class="banner warn">
-      <strong>Could not load ${failed.length} subscription${failed.length === 1 ? "" : "s"}</strong>
-      ${failed.map((f) => `${name(f)}${f.detail ? ` — ${esc(f.detail)}` : ""}`).join("; ")}.
+      <strong>Could not load ${failed.length} subscription${failed.length === 1 ? "" : "s"}</strong>${folded ? "." : ` ${reasons}.`}
       Cost is read with this app's identity, so a subscription you can see but it cannot needs
-      the app's managed identity granted access. Totals below exclude these.</div>`);
+      the app's managed identity granted access. Totals below exclude these.
+      ${folded ? `<details class="banner-names"><summary>Show names and reasons</summary>${reasons}</details>` : ""}</div>`);
   }
 
   host.innerHTML = parts.join("");
