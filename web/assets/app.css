@@ -1850,13 +1850,16 @@ body.rail-mini .shell { grid-template-columns: var(--nav-w-mini) minmax(0, 1fr);
 @media (max-width: 620px) {
   html, body { height: auto; min-height: 100dvh; }
   body { overflow-y: auto; }
-  .shell { flex: none; min-height: 0; }
+  .shell { flex: none; min-height: 100dvh; }
   .board { overflow: visible; }
   .board-body { flex: none; overflow: visible; }
   .bar-right { flex-wrap: wrap; justify-content: flex-start; }
   .bar-right .currency { min-width: 92px; flex: 0 0 auto; }
   .bar-right .picker { flex: 1 1 120px; }
   #refreshBtn, #refreshBtn #refreshLabel { white-space: nowrap; }
+  /* With the page scrolling as a whole, the account row would sit at the very end of a long page.
+     Keep it docked to the screen edge, as it was when the shell had a fixed height. */
+  .sidebar-account { position: sticky; bottom: 0; z-index: 20; background: var(--rail-bg); border-top: 1px solid var(--rail-border); }
   /* The analysis overlay is positioned against .board. Once the board grows with the page,
      that overlay stretches to the full document and the ask bar leaves the screen. Pin it
      to the viewport so its own scroller keeps the ask bar in reach. */
