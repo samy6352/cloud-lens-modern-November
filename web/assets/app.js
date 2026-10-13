@@ -1062,11 +1062,14 @@ function paintBackfill(state) {
   const name = (s) => esc(s.name || s.id);
   const parts = [];
   if (pending.length) {
+    // Eighty-odd names would fill the screen above the board, so a long list folds away.
+    const names = pending.map(name).join(", ");
+    const folded = pending.length > 3;
     parts.push(`<div class="banner info">
       <strong>Loading ${pending.length} subscription${pending.length === 1 ? "" : "s"}</strong>
-      you can see but this dashboard had not pulled yet:
-      ${pending.map(name).join(", ")}. Cost reports take a few minutes; the numbers below
-      exclude them until they land.</div>`);
+      you can see but this dashboard had not pulled yet${folded ? "" : `: ${names}`}.
+      Cost reports take a few minutes; the numbers below exclude them until they land.
+      ${folded ? `<details class="banner-names"><summary>Show names</summary>${names}</details>` : ""}</div>`);
   }
   if (failed.length) {
     parts.push(`<div class="banner warn">

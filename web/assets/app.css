@@ -1149,6 +1149,9 @@ details.step.failed .tick { color: var(--err); }
    numbers it qualifies rather than after them. */
 #backfill { padding: 0 var(--s4); margin-top: var(--s3); }
 #backfill .banner:last-child { margin-bottom: 0; }
+.banner-names { margin-top: 4px; }
+.banner-names summary { cursor: pointer; font-weight: var(--w-semi); }
+.banner-names[open] { max-height: 5.5em; overflow-y: auto; }
 
 /* ------------------------------------------------------------------ charts */
 .charts { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
