@@ -88,7 +88,7 @@ def call_warehouse_status(admin: bool, state: dict, monkeypatch, *, durable=Fals
 def test_operator_is_told_what_the_refresh_actually_did(monkeypatch, durable):
     """The fields the header reports with survive the filter for the only role that sees them.
 
-    Every name below is read by `paintIngest` or `watchIngest` in dashboard.js. Dropping any
+    Every name below is part of the refresh status the UI reads. Dropping any
     of them is not a cosmetic loss: with `mode` gone the quick-refresh row count never prints,
     with `detail` gone a failure reports "No reason was reported", and with `done`/`total`
     gone the strip cannot say how far through it is.
@@ -215,19 +215,6 @@ def test_a_later_run_owns_the_state_and_an_old_callback_keeps_out(job_runtime):
 
 # ------------------------------------------------------------------ the browser's watcher
 
-def test_the_watcher_only_accepts_this_run_s_outcome():
-    from dashboard_source import read_dashboard
-
-    source = read_dashboard()
-    watch = re.search(r"async function watchIngest\((.*?)\)\s*\{(.*?)\n\}", source, re.S)
-    assert watch, "watchIngest is gone"
-    assert watch.group(1).strip(), "the watcher has to know which run it is watching"
-    body = watch.group(2)
-    assert "(state.job_id || state.started) !== runStarted" in body, (
-        "without this the first poll can accept a finished state from an earlier refresh")
-    assert "?job_id=${encodeURIComponent(runStarted)}" in body
-    assert "watchIngest(data.job_id || data.started)" in source, (
-        "the server stamps the run; the start call has to pass it on")
 
 
 # ------------------------------------------------------------------ the RBAC snapshot

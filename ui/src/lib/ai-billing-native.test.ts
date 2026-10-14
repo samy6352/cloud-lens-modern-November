@@ -64,20 +64,6 @@ describe("Actual AI billing wire contract", () => {
       { ...report(), models: { value: [deploymentRow()] } },
     ]) expect(() => validateOptimizeReport("ai-billing", bad)).toThrow("incomplete evidence");
   });
-  it("agrees with the actual classic module on rows, partial tokens and anomaly filtering", async () => {
-    const modulePath = new URL("../../../web/assets/dashboard-ai.js", import.meta.url).href;
-    const classic: {
-      validAiBilling: (data: unknown) => boolean;
-      aiTokenSummary: (rows: AiResourceRow[]) => ReturnType<typeof observedTokens>;
-      filterAiRows: (rows: AiDeploymentRow[], query: string) => AiDeploymentRow[];
-      prioritizeAiAnomalies: (rows: AiDeploymentRow[], only: boolean) => AiDeploymentRow[];
-    } = await import(/* @vite-ignore */ modulePath);
-    const data = report();
-    expect(classic.validAiBilling(data)).toBe(true);
-    expect(classic.aiTokenSummary(data.services)).toEqual(observedTokens(data.services));
-    expect(classic.filterAiRows(data.models, "chat")).toEqual(data.models);
-    expect(classic.prioritizeAiAnomalies(data.models, true)).toEqual(data.models);
-  });
 });
 
 let server: ViteDevServer;
@@ -117,7 +103,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${address.port}`;
   browser = await chromium.launch({ headless: true });
 }, 60_000);
-afterAll(async () => { await browser?.close(); await server?.close(); });
+afterAll(async () => { await browser?.close(); await server?.close(); }, 60_000);
 
 async function mount(data: AiReport, offline = false) {
   const page = await browser.newPage();

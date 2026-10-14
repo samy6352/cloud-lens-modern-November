@@ -209,7 +209,7 @@ check("a signed-in API call is no longer refused",
 check("/api/auth/me now knows the user",
       client.get("/api/auth/me").json()["user"]["name"] == "ravi")
 check("the app shell is served once signed in",
-      client.get("/", headers={"accept": "text/html"}).status_code == 200)
+      client.get("/v2/", headers={"accept": "text/html"}).status_code == 200)
 
 # Admin gate. A pretend in-flight job means the admin path answers "already running" instead
 # of starting a real ingest against Azure.
@@ -308,7 +308,7 @@ check("the login page is never cached", "no-store" in page.headers.get("cache-co
       page.headers.get("cache-control", ""))
 
 client.post("/api/auth/login", json={"username": "ravi", "password": "hunter2-hunter2"})
-shell = client.get("/", headers={"accept": "text/html"})
+shell = client.get("/v2/", headers={"accept": "text/html"})
 check("the signed-in app shell is never cached either",
       "no-store" in shell.headers.get("cache-control", ""),
       shell.headers.get("cache-control", ""))

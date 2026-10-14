@@ -152,13 +152,6 @@ src = inspect.getsource(appmain.dashboard_anomalies)
 check("it is scoped to what the caller may see", "permitted(user)" in src and "narrow(" in src)
 check("it reads the warehouse, not Azure", "anomalies.analyse" in src)
 
-from dashboard_source import read_dashboard
-
-dash = read_dashboard()
-check("the tab is registered", 'id: "anomalies"' in dash)
-check("it renders cards, not a bare table", "anomalyCard" in dash)
-check("an absurd score is shown as words", 'a.score >= 50 ? "far outside"' in dash)
-
 print("\n" + "=" * 72)
 print(f"  {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

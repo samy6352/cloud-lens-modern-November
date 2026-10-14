@@ -243,8 +243,6 @@ check("exhausted throttling explains it is a per-subscription limit",
 check("the wait is reported as a phase", "_phase" in src_report)
 check("phases cover both waits",
       '"submitting"' in src_report and '"generating"' in src_report)
-check("the dashboard shows the phase",
-      "generating" in (HERE / "web" / "assets" / "dashboard.js").read_text(encoding="utf-8"))
 
 
 # ------------------------------------------------- submissions are queued, not fired in a burst
@@ -396,49 +394,7 @@ check("a normal refresh is not quietly turned into a quick one",
       any(s[2] is False for s in started), repr(started))
 
 
-# ------------------------------------------------------------ the menu itself
-print("\ndashboard.js — the Refresh menu")
-
-from dashboard_source import read_dashboard
-
-dash = read_dashboard()
-
-menu = re.search(r"function buildRefreshMenu\(\)\s*\{(.*?)\n\}", dash, re.S)
-check("buildRefreshMenu exists", menu is not None)
-body = menu.group(1) if menu else ""
-
-buttons = re.findall(r"<button data-act=", body)
-check("the menu offers exactly three choices", len(buttons) == 3, f"found {len(buttons)}")
-for label in ("Refresh latest", "Quick refresh", "FOCUS report"):
-    check(f"offers '{label}'", label in body)
-check("the redundant full-detail options are removed", 'data-act="api"' not in body)
-check("and the quick one is honest about the trade",
-      "capped at about a minute" in body and "kept unchanged" in body)
-check("FOCUS explicitly requests the FOCUS dataset", 'metric: "FocusCost"' in body)
-
-# The old menu listed every discovered export and fired a live Azure call on every open, which
-# took ~13s on this tenant before anything was clickable.
-check("opening the menu makes no Azure call", "/api/exports" not in body or
-      ("/api/exports/ingest" in body and "get(\"/api/exports\"" not in dash))
-check("no per-export picker remains", "export_id: e.id" not in dash)
-check("the menu is built once", "dataset.built" in dash)
-check("FOCUS lets the server choose the export", 'startIngest("/api/exports/ingest"' in dash)
-check("the period is fixed rather than asked", "months=3" in dash and "data-months" not in dash)
-
-watch = re.search(r"async function watchIngest\([^)]*\)\s*\{(.*?)\n\}", dash, re.S)
-wbody = watch.group(1) if watch else ""
-# Comments are stripped first: an earlier version of this check matched the word "notify"
-# inside the comment explaining why notify is not used here.
-wbare = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", wbody, flags=re.S))
-check("watchIngest handles 'partial'", '"partial"' in wbare)
-check("watchIngest handles 'failed'", '"failed"' in wbare)
-# A banner lives in #tabBody, which loadTabs() replaces — outcomes must float instead.
-check("outcomes use toast, not a tab banner", "toast(" in wbare and "notify(" not in wbare)
-check("a timeout is reported rather than silent",
-      "stopped watching" in wbare or "still running on the server" in wbare)
-check("failure prefers the current detail", "state.detail" in wbare)
-# notify() was left behind with no callers once outcomes moved to toasts.
-check("the unused banner helper is gone", "function notify(" not in dash)
+# ------------------------------------------------------------ export reads# notify() was left behind with no callers once outcomes moved to toasts.
 
 # ---------------------------------------------------------------- export reads
 # A FOCUS export is a couple of very large blobs, and essentially all of the wall time is one
@@ -453,11 +409,6 @@ check("the bar advances to the start of that file's share",
       '((n - 1) / len(latest)) * 0.9' in exp)
 check("and the marker is cleared once the loop ends",
       'warehouse.state.pop("fetching", None)' in exp)
-check("the file being fetched is named", 'fetching_name' in exp and 'fetching_name' in dash)
-check("with its size, so a long wait is explained",
-      'fetching_bytes' in exp and 'fetching_bytes' in dash)
-check("the UI says Downloading while a fetch is in flight",
-      "Downloading file ${state.fetching}" in dash)
 
 # The actual cause of "the refresh button doesn't work". Both the database writes and the CSV parse
 # ran on the event loop, so a refresh froze the entire app: the log shows the last request
@@ -476,8 +427,6 @@ check("the API path's write is off the event loop too",
 check("the writer lock is still held around it",
       wh.index("async with self._lock:") < wh.index("await asyncio.to_thread(_swap)"))
 check("the write phase is named in the state", '"writing"' in exp)
-check("and the UI says what it is doing", "state.writing" in dash
-      and "Writing ${state.writing" in dash)
 
 # Concurrency the freeze had been hiding. Once reads and writes could actually overlap, a read
 # taken during an ingest had to be able to proceed on its own connection. PostgreSQL sessions
@@ -502,10 +451,6 @@ check("a connection that cannot be reset is discarded rather than pooled",
 # The two refresh routes count different things, and calling both "periods" put
 # "0/2 periods loaded" over a FOCUS run that has no periods in it.
 check("an export read counts files", 'warehouse.state["unit"] = "file"' in exp)
-check("and the UI uses whichever unit the server reported",
-      'state.unit || "period"' in dash)
-check("the count is hidden while a single file is in flight",
-      "total && !state.fetching" in dash)
 
 # --------------------------------------------------------------- schedule fixes
 # Creating an export with a managed identity makes Azure grant that identity a role on the
@@ -541,11 +486,6 @@ check("so FOCUS is offered as a schedulable report",
       '"FocusCost"' in sched and "FocusCost" in sched.split("METRICS = ")[1].split(")")[0])
 check("and it leads, being the schema that carries both costs",
       sched.split("METRICS = ")[1].lstrip().startswith('("FocusCost"'))
-check("the tab offers it too",
-      '<option value="FocusCost">' in dash)
-check("and no longer claims Azure refuses it",
-      "FOCUS cannot be scheduled" not in dash
-      and "Only ActualCost and" not in sched)
 check("an unknown type now blames the version, which is what it is",
       "API version this request" in sched)
 # Discovery had the same blind spot: the GA versions it asked omit FocusCost entirely, so an
@@ -571,8 +511,6 @@ check("and the next run is no longer called the last one",
       # it forbade reporting the one thing the field should have held all along. Pin the source
       # of each instead, which is what the mislabelling was about.
       and '"last_run": last.get("executionTime")' in sched)
-check("the next run is actually shown, having been fetched all along",
-      "s.next_run ? `next ${String(s.next_run)" in dash)
 
 # ------------------------------------------------------- the quick refresh path
 main_py = (HERE / "app" / "main.py").read_text(encoding="utf-8")
@@ -596,13 +534,9 @@ check("the columns a query cannot fill are listed in one place",
       "QUICK_OMITS = (" in wh)
 check("the finished state says it was a quick load",
       '"mode": "quick"' in wh)
-check("and the UI says what that cost", 'state.mode === "quick"' in dash)
-check("the quick option is offered", 'data-act="quick"' in dash)
 # It used to lead, on the claim that it took seconds. It does not: the Query API is
 # rate-limited hard enough that a busy day still takes minutes, so the export path — a blob
 # read, with no report to build and no quota to spend — is the one worth reaching for first.
-check("but the export path leads, being genuinely the fastest",
-      dash.index('data-act="focus"') < dash.index('data-act="quick"'))
 check("the endpoint takes the flag", "quick: bool = False" in main_py)
 check("and routes it to the quick path",
       "await ingest_jobs.ingest(subs, months, metric, quick=True)" in main_py
@@ -640,16 +574,6 @@ check("the deadline is enforced inside the query, not just around it",
       "deadline: float | None = None" in wh and "def out_of_time()" in wh)
 check("running out of time is not reported as a failure",
       "except TimeoutError" in wh)
-# "API data" was the old name for the full-detail Actual option. Left in the progress strip, a
-# nine-period six-minute run was labelled as though it were the live query someone had meant to
-# pick — which is exactly the confusion the rename was supposed to end.
-check("the progress strip names the route, not the old option name",
-      'ActualCost: "Actual" }' in dash and 'ActualCost: "API data"' not in dash)
-check("and says which route is running",
-      'state.mode === "quick"' in dash and '"full detail"' in dash)
-check("the expected wait matches the route rather than being one sentence for all three",
-      "ingestNote" in dash and "capped at about a minute" in dash
-      and "ten minutes or more" in dash)
 check("the quick path uses that backoff and not the report one",
       "_query_wait(r, attempt)" in wh.split("async def _query_period")[1].split("async def")[0])
 check("a service-supplied Retry-After is still capped for the fast path",
@@ -662,8 +586,6 @@ check("the quick path asks once per subscription, not once per month",
       and "start, end = spans[0][0], spans[-1][1]" in wh)
 check("so its progress is counted in subscriptions",
       '"unit": "subscription"' in wh)
-check("and the UI reads whichever unit was reported",
-      'state.unit || "period"' in dash)
 # A raw 429 body invites the one response that makes it worse -- pressing Refresh again, which
 # spends the quota that has just run out.
 check("a throttled query is explained rather than dumped",

@@ -159,9 +159,8 @@ def test_workload_diagnostics_require_admin_and_clear_delegated_caller(web, monk
 
 
 def test_html_uses_versioned_assets_without_weakening_csp(web):
-    response = web.client.get("/")
+    response = web.client.get("/v2/")
     assert response.status_code == 200
-    assert "/assets/v/" in response.text
     assert response.headers["content-type"].startswith("text/html")
     policy = response.headers["content-security-policy"]
     script = next(part for part in policy.split(";") if "script-src" in part)

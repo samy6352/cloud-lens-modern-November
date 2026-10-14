@@ -38,10 +38,7 @@ def client():
     assets.clear()
 
 
-@pytest.mark.parametrize("name", [
-    "dashboard.js", "dashboard-spend.js", "dashboard-optimize.js",
-    "dashboard-monitor.js", "dashboard-reports.js", "dashboard-state.js",
-])
+@pytest.mark.parametrize("name", ["app.css"])
 def test_a_large_asset_comes_back_gzipped_and_intact(name):
     """The bytes have to survive the round trip, not merely be smaller."""
     assets.clear()
@@ -58,12 +55,12 @@ def test_a_large_asset_comes_back_gzipped_and_intact(name):
 
 
 def test_the_file_is_compressed_once_however_often_it_is_read(client):
-    client.get("/assets/dashboard.js", headers={"Accept-Encoding": "gzip"})
+    client.get("/assets/app.css", headers={"Accept-Encoding": "gzip"})
     assert len(assets._store) == 1
     stored = dict(assets._store)
 
     for _ in range(5):
-        r = client.get("/assets/dashboard.js", headers={"Accept-Encoding": "gzip"})
+        r = client.get("/assets/app.css", headers={"Accept-Encoding": "gzip"})
         assert r.status_code == 200
 
     assert assets._store == stored, "re-reading an asset must not recompress it"
@@ -89,19 +86,19 @@ def test_editing_a_file_recompresses_it(tmp_path):
 
 
 def test_a_client_that_cannot_take_gzip_gets_the_file(client):
-    r = client.get("/assets/dashboard.js", headers={"Accept-Encoding": "identity"})
+    r = client.get("/assets/app.css", headers={"Accept-Encoding": "identity"})
     assert r.status_code == 200
     assert "content-encoding" not in r.headers
-    assert r.content == (WEB / "dashboard.js").read_bytes()
+    assert r.content == (WEB / "app.css").read_bytes()
     assert not assets._store, "nothing to store for a client that did not ask for it"
 
 
 def test_a_repeat_visit_still_revalidates_to_304(client):
-    first = client.get("/assets/dashboard.js", headers={"Accept-Encoding": "gzip"})
+    first = client.get("/assets/app.css", headers={"Accept-Encoding": "gzip"})
     etag = first.headers["etag"]
 
     again = client.get(
-        "/assets/dashboard.js",
+        "/assets/app.css",
         headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
     )
     assert again.status_code == 304, "a kept ETag is the whole reason repeat visits are cheap"
@@ -140,14 +137,14 @@ def test_vary_is_declared_exactly_once_on_every_path(client):
     Declaring `Vary` on every response as well produced a literal
     `Vary: Accept-Encoding, Accept-Encoding` for clients that did not take gzip.
     """
-    gzipped = client.get("/assets/dashboard.js", headers={"Accept-Encoding": "gzip"})
+    gzipped = client.get("/assets/app.css", headers={"Accept-Encoding": "gzip"})
     assert gzipped.headers["vary"] == "Accept-Encoding"
 
-    plain = client.get("/assets/dashboard.js", headers={"Accept-Encoding": "identity"})
+    plain = client.get("/assets/app.css", headers={"Accept-Encoding": "identity"})
     assert plain.headers["vary"] == "Accept-Encoding"
 
     not_modified = client.get(
-        "/assets/dashboard.js",
+        "/assets/app.css",
         headers={"Accept-Encoding": "gzip", "If-None-Match": gzipped.headers["etag"]},
     )
     assert not_modified.status_code == 304

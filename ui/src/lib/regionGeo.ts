@@ -4,7 +4,7 @@
  * Cost exports name regions inconsistently: "Central India", "centralindia" and the meter style
  * "in central" all mean the same datacentre. Everything resolves to the ARM name first; anything
  * that is not a place (Global, Unassigned, garbled) is reported separately rather than invented
- * onto the map. Coordinates match web/assets/regionmap.js.
+ * onto the map. This table is the source of truth for region coordinates.
  */
 export const REGION_COORDS: Record<string, [lat: number, lon: number]> = {
   eastus: [37.37, -79.82], eastus2: [36.67, -78.39], eastus3: [32.78, -96.8],

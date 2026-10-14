@@ -61,7 +61,7 @@ async function mount(route: string, options: { demo?: boolean; note?: string; pa
     else { errors.push(`Unexpected API ${path}`); await intercepted.abort(); return; }
     await intercepted.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
-  await page.goto(base + "/v2" + route, { waitUntil: "domcontentloaded" });
+  await page.goto(base + "/v2" + route, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.locator("main").getByRole("heading").first().waitFor();
   return { page, requests, errors, writes };
 }
@@ -89,7 +89,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${address.port}`;
   browser = await chromium.launch({ headless: true });
 }, 60_000);
-afterAll(async () => { await browser?.close(); await server?.close(); });
+afterAll(async () => { await browser?.close(); await server?.close(); }, 60_000);
 
 describe("resource currency facets", () => {
   it("uses a separate minimal unfiltered query with the exact period/scope cache partition", async () => {

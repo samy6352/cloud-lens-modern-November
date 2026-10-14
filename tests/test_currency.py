@@ -136,12 +136,6 @@ routes = {getattr(r, "path", "") for r in appmain.app.routes}
 check("GET /api/currency exists", "/api/currency" in routes)
 check("rates are warmed at startup", "currency.refresh()" in inspect.getsource(appmain.lifespan))
 
-from dashboard_source import read_dashboard
-
-dash = read_dashboard()
-check("the picker only appears when there is a choice", "supported || []).length < 2" in dash)
-check("the choice is part of the cache key", 'readStore("costCurrency"' in dash)
-
 print("\n" + "=" * 72)
 print("every figure on the page moves, not just the ones on the front tab")
 
@@ -237,13 +231,6 @@ check("the download link takes one",
 check("and so does the POST body", "currency" in appmain.ReportRequest.model_fields)
 check("live datasets in a report are converted as well",
       "fx.convert_money(result, body.currency)" in inspect.getsource(appmain._report_response))
-
-js = read_dashboard()
-check("the report links carry the display currency",
-      'p.set("currency", cur)' in js)
-# Raw rows are the billed record. Converting them would make the export disagree with the
-# invoice it exists to reconcile against, which is the opposite of helpful.
-check("raw cost rows are deliberately left as billed", 'raw.delete("currency")' in js)
 
 # Six of the ten offered currencies used to render with no symbol at all, because three
 # builders each carried their own four-entry table.

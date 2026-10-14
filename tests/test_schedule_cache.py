@@ -136,19 +136,15 @@ def test_owned_discovery_can_bypass_a_startup_snapshot(listing_probe):
     assert listing_probe["forgotten"] == [EXPORTS]
 
 
-def test_the_endpoint_and_the_button_agree_on_the_parameter():
+def test_the_endpoint_accepts_the_fresh_parameter():
     """Structural: a `fresh` the browser sends and the server ignores is worse than neither."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     server = (root / "app" / "main.py").read_text(encoding="utf-8")
-    client = (root / "web" / "assets" / "dashboard-reports.js").read_text(encoding="utf-8")
 
     assert "fresh: bool = False" in server
     assert "schedules.listing(picked or allowed, fresh=fresh," in server
-    assert 'fresh ? "&fresh=true" : ""' in client
-    assert "renderSettings(ctx.loadToken, true)" in client, (
-        "the Reload button has to be the thing that asks for it")
 
 
 # ------------------------------------------------------ last-run history, split from the list
@@ -194,14 +190,12 @@ def test_history_is_keyed_by_subscription_and_name(three_exports):
     assert len(found) == 3
 
 
-def test_the_tab_asks_for_the_fast_list_then_the_history():
+def test_the_history_route_is_served_separately():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     server = (root / "app" / "main.py").read_text(encoding="utf-8")
-    client = (root / "web" / "assets" / "dashboard-reports.js").read_text(encoding="utf-8")
     assert "expand=history" in server and '"/api/schedules/history"' in server
-    assert "&history=false" in client and "loadScheduleHistory(sched, token, sequence)" in client
 
 
 def test_startup_warms_the_export_list_without_expansion(three_exports):

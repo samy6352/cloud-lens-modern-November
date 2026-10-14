@@ -520,23 +520,6 @@ def test_startup_sas_requires_focus_and_falls_back_explicitly(monkeypatch, memor
     primary.assert_awaited_once_with([{"id": "sub-a"}], 3)
 
 
-def test_frontend_choices_approval_legacy_and_archive_mapping():
-    root = Path(__file__).resolve().parents[1]
-    ui = (root / "web/assets/dashboard-reports.js").read_text(encoding="utf-8")
-    select = ui.split('<select id="sMetric">', 1)[1].split("</select>", 1)[0]
-    assert select.count("<option") == 1 and 'value="FocusCost"' in select
-    for cadence in schedules.RECURRENCE:
-        assert f'value="{cadence}"' in ui
-    assert ui.count("window.confirm(") >= 3
-    assert "Edit cadence" in ui and "Legacy / external" in ui
-    assert "s.can_write === true" in ui and "sub.can_write === true" in ui
-    assert "Daily — recommended" in ui and '"/api/schedules/refresh"' in ui
-    assert 'focus: "FOCUS", amortized: "Amortized", actual: "Actual"' in ui
-    refresh = (root / "web/assets/dashboard.js").read_text(encoding="utf-8")
-    menu = refresh.split("function buildRefreshMenu()", 1)[1].split("menu.innerHTML = `", 1)[1].split("`;", 1)[0]
-    assert menu.count("data-act=") == 3
-    assert all(f'data-act="{action}"' in menu for action in ("latest", "focus", "quick"))
-    assert "reports.refreshLatest" in refresh and "cloudlens:focus-synced" in refresh
 
 
 @pytest.mark.parametrize("script", ["test_scopes.py", "test_onboarding.py", "test_export_manifest.py"])

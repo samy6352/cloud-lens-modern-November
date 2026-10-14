@@ -10,8 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CSS = (ROOT / "web" / "assets" / "app.css").read_text(encoding="utf-8")
-APP_JS = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
-INDEX = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
 LOGIN = (ROOT / "web" / "login.html").read_text(encoding="utf-8")
 
 THEMES = ["dark", "light", "vivid", "paper"]
@@ -50,33 +48,13 @@ def test_every_theme_defines_every_palette_token():
         assert not missing, f"{theme} theme is missing {sorted(missing)}"
 
 
-def test_theme_lists_agree_across_every_place_that_names_them():
-    """app.js cycles them, and both HTML entry points validate a stored one before first paint."""
-    app_order = re.search(r"const THEMES = \[([^\]]+)\]", APP_JS).group(1)
-    assert re.findall(r'"([a-z]+)"', app_order) == THEMES
-
-    for name, page in (("index.html", INDEX), ("login.html", LOGIN)):
-        guard = re.search(r'\[([^\]]*"paper"[^\]]*)\]\.indexOf\(saved\)', page)
-        assert guard, f"{name} does not validate the stored theme against a list"
-        assert sorted(re.findall(r'"([a-z]+)"', guard.group(1))) == sorted(THEMES), name
-
-    # login.html cycles the toggle itself rather than importing app.js.
+def test_theme_lists_agree_on_the_sign_in_page():
+    """login.html cycles the toggle itself and validates a stored theme before first paint."""
     login_order = re.search(r"const THEMES = \[([^\]]+)\]", LOGIN).group(1)
     assert re.findall(r'"([a-z]+)"', login_order) == THEMES
-
-
-def test_every_theme_has_a_chart_palette_of_its_own():
-    """Charts are canvases: they read JS arrays, not CSS, so a theme missing here falls to dark."""
-    for registry in ("RAMP_BY_THEME", "CATEGORICAL_BY_THEME", "MOM_BY_THEME"):
-        body = re.search(rf"const {registry} = \{{(.*?)\}};", APP_JS, re.S).group(1)
-        named = set(re.findall(r"(\w+):", body))
-        assert named == set(THEMES), f"{registry} covers {sorted(named)}, not {THEMES}"
-
-
-def test_titles_and_meta_colours_cover_every_theme():
-    for table in ("THEME_TITLE", "THEME_METACOLOR"):
-        body = re.search(rf"const {table} = \{{(.*?)\}};", APP_JS, re.S).group(1)
-        assert set(re.findall(r"(\w+):", body)) == set(THEMES), table
+    guard = re.search(r'\[([^\]]*"paper"[^\]]*)\]\.indexOf\(saved\)', LOGIN)
+    assert guard, "login.html does not validate the stored theme against a list"
+    assert sorted(re.findall(r'"([a-z]+)"', guard.group(1))) == sorted(THEMES)
 
 
 def test_kindle_theme_is_flat_and_still_bounded_by_its_own_tokens():

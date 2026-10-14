@@ -93,7 +93,7 @@ def _content_security_policy() -> str:
     """
     inline = re.compile(r"<script(?![^>]*\ssrc=)[^>]*>(.*?)</script>", re.S | re.I)
     hashes: set[str] = set()
-    for page in ("index.html", "login.html", "v2/index.html"):
+    for page in ("login.html", "v2/index.html"):
         try:
             body = (WEB / page).read_text(encoding="utf-8")
         except OSError:  # a partial checkout must not stop the app from starting
@@ -5589,10 +5589,8 @@ web_v2.install(app, WEB)
 
 
 @app.get("/")
-async def index() -> Response:
-    html = await offload((WEB / "index.html").read_text, encoding="utf-8")
-    return Response(await offload(stamp_asset_urls, html, _static_assets),
-                    media_type="text/html", headers={"Cache-Control": "no-store"})
+async def index() -> RedirectResponse:
+    return RedirectResponse("/v2/", status_code=303)
 
 
 install_snapshot_routes(app, lambda: _snapshot_cache, authorize_snapshot)

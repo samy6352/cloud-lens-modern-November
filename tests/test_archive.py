@@ -390,17 +390,6 @@ async def comparison() -> int:
           Warehouse._PHASE_WEIGHT["submitting"] < Warehouse._PHASE_WEIGHT["generating"]
           < Warehouse._PHASE_WEIGHT["loading"])
 
-    dash = (ROOT / "web" / "assets" / "dashboard.js").read_text(encoding="utf-8")
-    check("the bar only moves forwards", "ingestSeen = Math.max" in dash)
-    check("the elapsed clock runs on its own timer, not on the poll",
-          "setInterval(paintElapsed" in dash)
-    check("the strip is hidden when the run ends", "showIngest(false)" in dash)
-    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    check("the strip exists in the page", 'id="ingest"' in html)
-    check("it tells the user they can walk away", "keep using the dashboard" in html)
-    check("the period selector offers 7/30/60/90",
-          all(f'data-days="{d}"' in html for d in (7, 30, 60, 90)))
-
     passed = sum(1 for r in results if r)
     failed = len(results) - passed
     print("\n" + "=" * 72)

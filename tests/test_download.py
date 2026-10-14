@@ -118,43 +118,6 @@ check(
     get("nope", days=30, probe=1).status_code == 404,
 )
 
-print("\nthe page offers downloads as real links, not scripted clicks")
-print("=" * 72)
-# A download started by JavaScript counts as an *automatic* download, which managed browsers
-# block silently. These assert the markup keeps the click a genuine navigation.
-page = client.get("/").text if client.get("/").status_code == 200 else ""
-check("the app shell is served", bool(page), f"{len(page)} bytes")
-if page:
-    for fmt in ("xlsx", "pptx", "csv"):
-        check(
-            f"the {fmt} menu item is an anchor with an href",
-            f'<a data-fmt="{fmt}"' in page and f'href="/api/report/{fmt}"' in page,
-        )
-    check(
-        "print and 'choose what to include' stay buttons — they download nothing",
-        '<button data-fmt="print"' in page and '<button data-fmt="custom"' in page,
-    )
-
-script = client.get("/assets/dashboard.js").text + client.get("/assets/dashboard-reports.js").text
-check(
-    "the report tab downloads through links, not a scripted click",
-    'id="buildMenu"' in script and "a data-fmt=" in script,
-)
-check(
-    "the report tab no longer carries its own format panel — the header menu already has one",
-    "fmt-row" not in script and "<h3>Format</h3>" not in script,
-)
-check(
-    "no blob URLs are used for downloads",
-    "createObjectURL" not in script,
-    "found createObjectURL" if "createObjectURL" in script else "",
-)
-check(
-    "nothing synthesises a click on a download anchor",
-    "a.click()" not in script,
-    "found a.click()" if "a.click()" in script else "",
-)
-
 print("\nthe selection in the link changes the file")
 print("=" * 72)
 

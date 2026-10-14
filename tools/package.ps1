@@ -95,8 +95,7 @@ $files.Add([pscustomobject]@{
 })
 $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($file in $files) { $paths.Add($file.Path) | Out-Null }
-$requiredFiles = @('app/__init__.py', 'app/main.py', 'web/index.html', 'web/login.html',
-                   'web/assets/dashboard.js', 'web/assets/app.js', 'web/assets/app.css')
+$requiredFiles = @('app/__init__.py', 'app/main.py', 'web/login.html', 'web/assets/app.css')
 if ($builtUi -or $InstallerSource) { $requiredFiles += 'web/v2/index.html' }
 if ($InstallerSource) {
     $sourceFiles = @(

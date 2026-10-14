@@ -445,15 +445,6 @@ def test_generic_resume_cannot_cross_scope(durable, monkeypatch):
     assert jobs.get(record["job_id"])["status"] == "queued"
 
 
-def test_reports_workflow_offers_preview_and_keeps_populated_view():
-    from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "web" / "assets" / "dashboard-reports.js").read_text(
-        encoding="utf-8")
-    assert "Initial FOCUS load (last 90 days)" in source
-    assert "crypto.randomUUID()" in source
-    assert "Resume failed or pending chunks" in source
-    assert 'notice.textContent = `Job ${job.job_id} accepted.' in source
-    assert "Newly covered days are separate from restatements" in source
 
 
 def test_filter_costs_are_currency_buckets_not_a_mixed_sum(monkeypatch):

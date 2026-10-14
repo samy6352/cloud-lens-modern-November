@@ -170,8 +170,6 @@ async def main() -> int:
     # false, and on the very tab being demonstrated. The three cases are different facts and
     # have to read differently.
     main_py = open("app/main.py", encoding="utf-8").read()
-    from dashboard_source import read_dashboard
-    dash = read_dashboard()
     check("the tags payload says whether tags were even loaded",
           '"tags_not_loaded"' in main_py or "tags_not_loaded" in main_py)
     check("and it is derived from what the last refresh omitted",
@@ -182,12 +180,6 @@ async def main() -> int:
     check("and it survives a restart by reading the ingest log too",
           "FROM ingest_log WHERE status = 'ok'" in main_py)
     check("the log check looks for a quick load", '"quick" in' in main_py)
-    check("the empty tab distinguishes 'not loaded' from 'not tagged'",
-          "d.tags_not_loaded" in dash)
-    check("it does not claim the estate is untagged when tags were never fetched",
-          dash.index("d.tags_not_loaded") < dash.index("carry a tag."))
-    check("and it points at a refresh route that does return tags",
-          "FOCUS report" in dash and "cannot " in dash)
 
     await cost.azure.close()
     print("\n" + "=" * 72)

@@ -1,9 +1,8 @@
 """The v3 web interface (React, built from `ui/` into `web/v2/`), served at /v2.
 
-It sits beside the classic interface at `/` until it reaches parity (plan.md section 8.4) and shares
-everything else with it: the same session cookie, the same `RequireAuth` gate, the same `/api/*`
-and the same Content-Security-Policy. The build contains no inline script, so that policy does not
-have to loosen for it.
+It is the only interface: `/` redirects here. It shares the session cookie, the `RequireAuth` gate,
+the `/api/*` routes and the Content-Security-Policy with the sign-in page. The build contains no
+inline script, so that policy does not have to loosen for it.
 
 A checkout that has never run `npm run build` still starts; /v2 then explains what is missing
 instead of failing.
@@ -55,10 +54,9 @@ def install(app: FastAPI, web: Path) -> None:
         index = root / "index.html"
         if not index.is_file():
             return PlainTextResponse(
-                "The CloudLens v3 interface has not been built. Run `npm ci && npm run build` in ui/, "
-                "or use the classic interface at /.",
+                "The CloudLens v3 interface has not been built. Run `npm ci && npm run build` in ui/.",
                 status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "60"})
-        # no-store for the same reason as the classic shell: it sits behind a sign-in.
+        # no-store: the shell sits behind a sign-in, so it must not be cached.
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-store"})
 
     @app.get(PREFIX, include_in_schema=False)
