@@ -853,10 +853,11 @@ async def read_manifests(reader: BlobReader, prefix: str = "",
             f"Found {len(found)} manifests, exceeding EXPORT_MAX_MANIFESTS={limit}. "
             "No data was changed; narrow the prefix or raise the cap.")
 
-    out: list[Manifest] = []
     reader.manifest_metadata = {}
     reader.manifest_bytes = 0
-    for entry in found:
+    results: list = [None] * len(found)
+
+    async def load(slot: int, entry: dict) -> None:
         name = entry["name"]
         try:
             document_bytes = await reader.get(name)
@@ -873,16 +874,34 @@ async def read_manifests(reader: BlobReader, prefix: str = "",
                 if counts[0] != sum(counts[1:]):
                     raise ValueError("FOCUS manifest row counts disagree with its partitions")
             manifest = Manifest.parse(raw)
-            out.append(manifest)
-            reader.manifest_metadata[(manifest.run_id, manifest.submitted)] = {
+            results[slot] = (manifest, {
                 "name": name, "etag": entry.get("etag"),
                 "sha256": hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest(),
                 "document": raw,
-            }
+            })
         except Exception as exc:
             raise ExportError(
                 f"Cannot verify manifest {name}: {exc}. No data was changed; retry after "
                 "Azure finishes the run.") from exc
+
+    # Reads are independent, so fetch them concurrently; results keep the newest-first order.
+    gate = asyncio.Semaphore(int(os.getenv("EXPORT_MANIFEST_CONCURRENCY", "8")))
+
+    async def guarded(slot: int, entry: dict) -> None:
+        async with gate:
+            await load(slot, entry)
+
+    tasks = [asyncio.ensure_future(guarded(slot, entry)) for slot, entry in enumerate(found)]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        raise
+    out: list[Manifest] = []
+    for manifest, metadata in results:
+        out.append(manifest)
+        reader.manifest_metadata[(manifest.run_id, manifest.submitted)] = metadata
     return out
 
 

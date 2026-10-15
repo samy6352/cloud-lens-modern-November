@@ -421,6 +421,16 @@ def _create_history(plan: dict, tasks: list[dict], idempotency_key: str, payload
         return record
 
 
+def _pause_native_schedule() -> bool:
+    """Whether setup pauses Azure's native daily schedule before the app takes over.
+
+    Pausing is one more export write, and that write is the one Azure refuses when the
+    runtime identity lacks rights. With FOCUS_PAUSE_NATIVE_SCHEDULE=false the schedule keeps
+    running and the app only adopts it.
+    """
+    return os.getenv("FOCUS_PAUSE_NATIVE_SCHEDULE", "true").strip().lower() != "false"
+
+
 async def configure(record: dict, task: dict) -> None:
     """Run under the shared durable lease. Persist ownership before the Azure transition."""
     require_writable()
@@ -483,7 +493,9 @@ async def configure(record: dict, task: dict) -> None:
     if expected and current.get("etag") != expected.get("etag") and not task.get("pause_started"):
         raise ValueError("The owned export changed after review. Review setup again.")
     native = "paused"
-    if current["status"] != "Inactive":
+    if not _pause_native_schedule() and current["status"] != "Inactive":
+        native = "active (not paused by configuration; its daily runs are not imported)"
+    if current["status"] != "Inactive" and _pause_native_schedule():
         # Retry after a confirmed pause is safe; a different active ETag is not.
         etag = expected.get("etag") if expected else current.get("etag")
         await asyncio.to_thread(jobs.update, record["job_id"], task_id=task["task_id"], pause_started=True)
