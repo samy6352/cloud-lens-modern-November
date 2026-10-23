@@ -653,9 +653,18 @@ class Warehouse:
         # during schema init; None until then, False on a server where the application is
         # not permitted to create roles.
         self._query_role: bool | None = None
-        self._init_schema()
-        # Reflect what is already stored, so a restart doesn't report an empty warehouse.
-        summary = self.summary()
+        self._schema_pending = False
+        try:
+            self._init_schema()
+            # Reflect what is already stored, so a restart doesn't report an empty warehouse.
+            summary = self.summary()
+        except Exception as exc:  # noqa: BLE001 - a stopped database must not stop the app booting
+            log.warning("warehouse: PostgreSQL unavailable at startup (%s); schema setup is deferred",
+                        type(exc).__name__)
+            self._schema_pending = True
+            self.state = {"status": "unavailable",
+                          "detail": "PostgreSQL is stopped. It is started on the next request."}
+            return
         if self._rebuilt:
             self.state: dict[str, Any] = {
                 "status": "empty",
@@ -979,6 +988,13 @@ class Warehouse:
         housekeeping — a leftover `costs` view carrying one user's scope would silently answer
         the next user's questions.
         """
+        if getattr(self, "_schema_pending", False):
+            self._schema_pending = False
+            try:
+                self._init_schema()
+            except Exception:
+                self._schema_pending = True
+                raise
         con = self._store.connect()
         try:
             return self._prepare_connection(

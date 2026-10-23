@@ -765,6 +765,17 @@ def snapshot_cache_settings() -> dict[str, int]:
     }
 
 
+def _warehouse_is_empty() -> bool:
+    """Whether no cost rows are stored. A stopped database counts as not known to be empty."""
+    from .warehouse import warehouse
+
+    try:
+        return warehouse.summary()["rows"] == 0
+    except Exception as exc:  # noqa: BLE001 - startup must not depend on the database
+        log.warning("warehouse empty check skipped (%s)", type(exc).__name__)
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _agent, _ingest_task, _overview, _snapshot_cache
@@ -840,7 +851,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # longer touches it here. Where ingest *is* automatic the call still happens and a
         # database failure is still fatal, which is right: there is no ingest without one.
         if (not read_only_mode() and os.getenv("AUTO_INGEST", "true").lower() != "false"
-                and warehouse.summary()["rows"] == 0):
+                and _warehouse_is_empty()):
             await _start_ingest_task(functools.partial(
                 _run_ingest, initial_history_months()),
                 kind="automatic", identity="workload")

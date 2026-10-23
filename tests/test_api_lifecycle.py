@@ -252,8 +252,9 @@ def test_lifespan_drains_background_and_audit_jobs_before_closing_resources(runt
     asyncio.run(run())
 
 
-def test_startup_failure_cancels_tasks_and_closes_resources(runtime, monkeypatch):
-    runtime.warehouse.summary.side_effect = RuntimeError("startup failed")
+def test_stopped_database_at_startup_does_not_stop_the_app(runtime, monkeypatch):
+    """A stopped database at boot costs ingest, not the whole app; tasks still shut down cleanly."""
+    runtime.warehouse.summary.side_effect = RuntimeError("database stopped")
     spawned = []
     create_task = asyncio.create_task
 
@@ -265,15 +266,13 @@ def test_startup_failure_cancels_tasks_and_closes_resources(runtime, monkeypatch
     monkeypatch.setattr(main.asyncio, "create_task", track)
 
     async def run():
-        with pytest.raises(RuntimeError, match="startup failed"):
-            async with main.lifespan(main.app):
-                pytest.fail("startup must not succeed")
+        async with main.lifespan(main.app):
+            assert main._agent is not None
         assert spawned and all(task.done() for task in spawned)
         runtime.agent.close.assert_awaited_once()
         runtime.warehouse._store.close.assert_called_once()
         assert main._agent is None
         assert main.app.state.readiness is None
-        runtime.warehouse.check_readiness.assert_not_called()
 
     asyncio.run(run())
 
