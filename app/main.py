@@ -1153,6 +1153,16 @@ def _overview_timing_header(timings: dict[str, float], failures: set[str]) -> st
 app.add_middleware(CacheHeaders)
 
 
+@app.middleware("http")
+async def wake_stopped_database(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        probe = getattr(request.app.state, "readiness", None)
+        if probe is not None and not await probe.ready():
+            from . import db_wake
+            db_wake.kick()
+    return await call_next(request)
+
+
 class Ask(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     history: list[dict] = Field(default_factory=list, max_length=60)
