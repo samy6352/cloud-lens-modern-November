@@ -18,7 +18,7 @@ from .job_policy import read_only_mode
 
 log = logging.getLogger(__name__)
 
-API_VERSION = "2025-06-01"
+API_VERSION = "2024-08-01"
 MIN_INTERVAL_SECONDS = 600.0
 
 _last_attempt = float("-inf")

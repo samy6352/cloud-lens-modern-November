@@ -70,7 +70,7 @@ def _run(azure: FakeAzure, monkeypatch) -> None:
 
 def test_stopped_server_is_started(monkeypatch):
     _run(FakeAzure("Stopped"), monkeypatch)
-    assert FakeHttp.posts == [f"https://management.azure.com{SERVER}/start?api-version=2025-06-01"]
+    assert FakeHttp.posts == [f"https://management.azure.com{SERVER}/start?api-version=2024-08-01"]
 
 
 def test_running_server_is_left_alone(monkeypatch):
