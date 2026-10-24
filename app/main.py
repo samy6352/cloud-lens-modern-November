@@ -776,6 +776,15 @@ def _warehouse_is_empty() -> bool:
         return False
 
 
+def _instrument_requests(app: FastAPI) -> None:
+    """Record inbound requests. Done on the instance: `FastAPI` was imported before patching."""
+    if not os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip():
+        return
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app)
+
+
 def _configure_telemetry() -> None:
     """Send traces, logs and metrics to Application Insights when a connection string is set."""
     connection = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
@@ -788,10 +797,6 @@ def _configure_telemetry() -> None:
     # Publisher on the component, and ingestion rejects key-only requests on this resource.
     credential = ManagedIdentityCredential(client_id=os.getenv("AZURE_CLIENT_ID") or None)
     configure_azure_monitor(connection_string=connection, credential=credential)
-    # Request telemetry needs the FastAPI class instrumented before the app is constructed.
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-    FastAPIInstrumentor().instrument()
 
 
 @asynccontextmanager
@@ -927,6 +932,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # Before the app is created: FastAPI instrumentation wraps the class at this point.
 _configure_telemetry()
 app = FastAPI(title="CloudLens", version="1.0.0", lifespan=lifespan)
+_instrument_requests(app)
 
 # SSE is already chunked and must not be buffered, so exclude it by minimum size rather than
 # compressing everything: JSON and the HTML/CSS/JS bundle benefit, the event stream is unaffected

@@ -48,3 +48,16 @@ def test_connection_string_configures_azure_monitor(monkeypatch, sdk):
     kwargs = sdk.call_args.kwargs
     assert kwargs["connection_string"] == connection
     assert kwargs["credential"] is not None
+
+
+def test_requests_are_instrumented_only_with_a_connection_string(monkeypatch, sdk):
+    from app import main
+
+    instrumentor = sys.modules["opentelemetry.instrumentation.fastapi"].FastAPIInstrumentor
+    app = object()
+    monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+    main._instrument_requests(app)
+    instrumentor.instrument_app.assert_not_called()
+    monkeypatch.setenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "InstrumentationKey=k")
+    main._instrument_requests(app)
+    instrumentor.instrument_app.assert_called_once_with(app)
