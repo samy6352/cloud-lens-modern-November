@@ -776,8 +776,19 @@ def _warehouse_is_empty() -> bool:
         return False
 
 
+def _configure_telemetry() -> None:
+    """Send traces, logs and metrics to Application Insights when a connection string is set."""
+    connection = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
+    if not connection:
+        return
+    from azure.monitor.opentelemetry import configure_azure_monitor
+
+    configure_azure_monitor(connection_string=connection)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    _configure_telemetry()
     global _agent, _ingest_task, _overview, _snapshot_cache
     app.state.readiness = None
     app.state.snapshot_bootstrap_ready = False

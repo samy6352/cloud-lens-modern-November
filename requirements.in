@@ -21,3 +21,5 @@ psycopg[binary]>=3.2.0
 pyarrow>=17.0.0
 openpyxl>=3.1.0
 python-pptx>=1.0.0
+# Telemetry to Application Insights. The app reads APPLICATIONINSIGHTS_CONNECTION_STRING; without this package nothing is sent.
+azure-monitor-opentelemetry>=1.6.0
