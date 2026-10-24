@@ -792,7 +792,6 @@ def _configure_telemetry() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    _configure_telemetry()
     global _agent, _ingest_task, _overview, _snapshot_cache
     app.state.readiness = None
     app.state.snapshot_bootstrap_ready = False
@@ -921,6 +920,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             warehouse._store.close()
 
 
+# Before the app is created: FastAPI instrumentation wraps the class at this point.
+_configure_telemetry()
 app = FastAPI(title="CloudLens", version="1.0.0", lifespan=lifespan)
 
 # SSE is already chunked and must not be buffered, so exclude it by minimum size rather than
