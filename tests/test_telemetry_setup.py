@@ -41,4 +41,7 @@ def test_connection_string_configures_azure_monitor(monkeypatch, sdk):
     connection = "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://example.invalid/"
     monkeypatch.setenv("APPLICATIONINSIGHTS_CONNECTION_STRING", connection)
     main._configure_telemetry()
-    sdk.assert_called_once_with(connection_string=connection)
+    sdk.assert_called_once()
+    kwargs = sdk.call_args.kwargs
+    assert kwargs["connection_string"] == connection
+    assert kwargs["credential"] is not None

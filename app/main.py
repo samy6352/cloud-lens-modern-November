@@ -781,9 +781,13 @@ def _configure_telemetry() -> None:
     connection = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
     if not connection:
         return
+    from azure.identity import ManagedIdentityCredential
     from azure.monitor.opentelemetry import configure_azure_monitor
 
-    configure_azure_monitor(connection_string=connection)
+    # Entra ID rather than the instrumentation key: the app identity holds Monitoring Metrics
+    # Publisher on the component, and ingestion rejects key-only requests on this resource.
+    credential = ManagedIdentityCredential(client_id=os.getenv("AZURE_CLIENT_ID") or None)
+    configure_azure_monitor(connection_string=connection, credential=credential)
 
 
 @asynccontextmanager
