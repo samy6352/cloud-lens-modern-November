@@ -16,6 +16,9 @@ def sdk(monkeypatch):
     opentelemetry.configure_azure_monitor = configure
     monkeypatch.setitem(sys.modules, "azure.monitor", monitor)
     monkeypatch.setitem(sys.modules, "azure.monitor.opentelemetry", opentelemetry)
+    instrumentation = ModuleType("opentelemetry.instrumentation.fastapi")
+    instrumentation.FastAPIInstrumentor = Mock()
+    monkeypatch.setitem(sys.modules, "opentelemetry.instrumentation.fastapi", instrumentation)
     return configure
 
 

@@ -788,6 +788,10 @@ def _configure_telemetry() -> None:
     # Publisher on the component, and ingestion rejects key-only requests on this resource.
     credential = ManagedIdentityCredential(client_id=os.getenv("AZURE_CLIENT_ID") or None)
     configure_azure_monitor(connection_string=connection, credential=credential)
+    # Request telemetry needs the FastAPI class instrumented before the app is constructed.
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor().instrument()
 
 
 @asynccontextmanager
