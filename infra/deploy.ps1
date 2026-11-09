@@ -207,11 +207,12 @@ if ($NetworkIsolation) {
     }
 }
 
-$script:InstallStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+if (-not $script:InstallStart) {
+    $script:InstallStart = if ($env:CLOUDLENS_INSTALL_START) { [datetime]::Parse($env:CLOUDLENS_INSTALL_START, $null, 'RoundtripKind') } else { [datetime]::UtcNow }
+}
 $script:StepPrefix = if ($env:CLOUDLENS_PARENT_STEP) { "$($env:CLOUDLENS_PARENT_STEP)." } else { '' }
-$script:ClockOffset = if ($env:CLOUDLENS_INSTALL_START) { ([datetime]::UtcNow - [datetime]::Parse($env:CLOUDLENS_INSTALL_START, $null, 'RoundtripKind')) } else { [timespan]::Zero }
 $script:StepNumber = 0
-function Get-ElapsedText { $e = $script:InstallStopwatch.Elapsed + $script:ClockOffset; '{0:00}:{1:00}' -f [int]$e.TotalMinutes, $e.Seconds }
+function Get-ElapsedText { $e = [datetime]::UtcNow - $script:InstallStart; '{0:00}:{1:00}' -f [int]$e.TotalMinutes, $e.Seconds }
 
 function Step($message) {
     $script:StepNumber++
@@ -784,21 +785,26 @@ if (-not $SkipCode) {
     $scmHost = Get-CloudLensScmHost $webAppUrl
     $previousDeployment = (Get-CloudLensNewestDeployment $scmHost).id
     try {
-        # --async returns once the upload is accepted. A synchronous call can sit for many minutes
-        # after the build has already succeeded, so the deployment record is followed here instead.
-        az webapp deploy `
-            --resource-group $ResourceGroup `
-            --name $webAppName `
-            --src-path $zip `
-            --type zip `
-            --async true `
-            --only-show-errors -o none
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning 'The upload call did not confirm; following the deployment record to find the real outcome.'
+        # The CLI can keep polling for many minutes after Azure reports the build finished (measured:
+        # 14 min on a deployment that succeeded in 4). Run it as a job and decide on the deployment
+        # record instead, then stop the job.
+        $uploadJob = Start-Job -ArgumentList $ResourceGroup, $webAppName, $zip -ScriptBlock {
+            param($Group, $Name, $Path)
+            az webapp deploy --resource-group $Group --name $Name --src-path $Path --type zip --async true --only-show-errors -o none 2>&1
+            "exit=$LASTEXITCODE"
         }
-        Write-Host '    uploaded: building on Azure (first build takes 5-10 minutes)'
-        $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
-        Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green    } finally {
+        Write-Host '    uploading, then building on Azure (the first build takes 5-10 minutes)'
+        try {
+            $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
+            Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green
+        } finally {
+            if ($uploadJob.State -eq 'Completed') {
+                $uploadOutput = (Receive-Job $uploadJob) -join ' '
+                if ($uploadOutput -notmatch 'exit=0') { Write-Warning "The upload call reported: $uploadOutput" }
+            }
+            Stop-Job $uploadJob -ErrorAction SilentlyContinue
+            Remove-Job $uploadJob -Force -ErrorAction SilentlyContinue
+        }    } finally {
         Remove-Item -LiteralPath $zip -Force
     }
 
