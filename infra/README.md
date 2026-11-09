@@ -19,8 +19,7 @@ The customer path. Open Cloud Shell in **PowerShell** mode, get and extract the 
 CloudLens source bundle (or a clone; see *Distribution* below), then:
 
 ```powershell
-az account set --subscription <subscription-to-host-cloudlens>
-./infra/install.ps1 -Location centralindia     # -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
+./infra/install.ps1 -Location centralindia -SubscriptionId <subscription-to-host-cloudlens>     # -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
 ```
 
 `install.ps1` checks PowerShell 7, the Azure CLI and the account; resolves what to monitor (the

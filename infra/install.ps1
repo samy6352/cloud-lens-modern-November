@@ -3,10 +3,10 @@
     Install CloudLens into your own Azure subscription -- two lines in Azure Cloud Shell (PowerShell).
 
 .DESCRIPTION
-        az account set --subscription <subscription-to-host-cloudlens>
-        ./infra/install.ps1 -Location centralindia
+        ./infra/install.ps1 -Location centralindia -SubscriptionId <subscription-to-host-cloudlens>
 
-    Optional: -Scope <subscription id | /providers/Microsoft.Management/managementGroups/<id>>
+    Optional: -SubscriptionId <id> (default: the current az subscription)
+              -Scope <subscription id | /providers/Microsoft.Management/managementGroups/<id>>
               -Size small|medium|large   -EntraClientId <id>   -LocalSignIn   -WhatIf
 
     What it does, in order, and nothing else:
@@ -46,7 +46,10 @@ param(
     [Parameter(Mandatory)]
     [string]$Location,
 
-    # What CloudLens monitors. Empty = the current subscription.
+    # Subscription that hosts CloudLens. Empty = the Azure CLI's current subscription.
+    [string]$SubscriptionId = '',
+
+    # What CloudLens monitors. Empty = the hosting subscription.
     [string]$Scope = '',
 
     [ValidateSet('small', 'medium', 'large')]
@@ -207,6 +210,10 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw 'The Azure CLI (az) was not found. Azure Cloud Shell has it; elsewhere install it and run az login.'
 }
 $root = Resolve-CloudLensRoot
+if ($SubscriptionId) {
+    if ($SubscriptionId -notmatch $Guid) { throw '-SubscriptionId must be a subscription GUID.' }
+    Invoke-Az @('account', 'set', '--subscription', $SubscriptionId) | Out-Null
+}
 $account = Invoke-Az @('account', 'show')
 if (-not $account -or $account.id -notmatch $Guid) { throw "Not signed in to Azure. Run 'az login' (Cloud Shell is already signed in)." }
 $hosting = $account.id.ToLowerInvariant()
