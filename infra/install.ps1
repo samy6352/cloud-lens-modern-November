@@ -5,7 +5,7 @@
 .DESCRIPTION
         ./infra/install.ps1 -Location centralindia -SubscriptionId <subscription-to-host-cloudlens>
 
-    Optional: -SubscriptionId <id> (default: the current az subscription)
+    Optional: -SubscriptionId <id> (default: choose from a list)   -NamePrefix <app> -NameSuffix <customer>   -NonInteractive
               -Scope <subscription id | /providers/Microsoft.Management/managementGroups/<id>>
               -Size small|medium|large   -EntraClientId <id>   -LocalSignIn   -WhatIf
 
@@ -46,7 +46,7 @@ param(
     [Parameter(Mandatory)]
     [string]$Location,
 
-    # Subscription that hosts CloudLens. Empty = the Azure CLI's current subscription.
+    # Subscription that hosts CloudLens. Empty = pick from a list in a terminal, otherwise the current one.
     [string]$SubscriptionId = '',
 
     # What CloudLens monitors. Empty = the hosting subscription.
@@ -80,6 +80,9 @@ param(
     # When not run from a CloudLens checkout (e.g. `irm .../install.ps1 | iex`): a release zip,
     # as an https URL or a local path.
     [string]$Source = '',
+
+    # Never prompt (pipelines): every choice must come from parameters or defaults.
+    [switch]$NonInteractive,
 
     [switch]$WhatIf
 )
@@ -210,10 +213,36 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw 'The Azure CLI (az) was not found. Azure Cloud Shell has it; elsewhere install it and run az login.'
 }
 $root = Resolve-CloudLensRoot
+$interactive = -not $NonInteractive -and [Environment]::UserInteractive
+if (-not $SubscriptionId -and $interactive) {
+    $subs = @(Invoke-Az @('account', 'list', '--query', "[?state=='Enabled'].{name:name,id:id,isDefault:isDefault}"))
+    if ($subs.Count -gt 1) {
+        Write-Host "`nSubscriptions you can install CloudLens into:"
+        for ($i = 0; $i -lt $subs.Count; $i++) {
+            Write-Host ("  {0}. {1}  ({2}){3}" -f ($i + 1), $subs[$i].name, $subs[$i].id, $(if ($subs[$i].isDefault) { '  <- current' } else { '' }))
+        }
+        $default = [array]::FindIndex($subs, [Predicate[object]]{ param($s) $s.isDefault }) + 1
+        $answer = Read-Host "Number of the subscription to host CloudLens [$default]"
+        $pick = if ($answer.Trim()) { 0 + $answer.Trim() } else { $default }
+        if ($pick -lt 1 -or $pick -gt $subs.Count) { throw "Choose a number from 1 to $($subs.Count). Nothing has been changed." }
+        $SubscriptionId = $subs[$pick - 1].id
+    }
+}
 if ($SubscriptionId) {
     if ($SubscriptionId -notmatch $Guid) { throw '-SubscriptionId must be a subscription GUID.' }
     Invoke-Az @('account', 'set', '--subscription', $SubscriptionId) | Out-Null
 }
+$PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'  # 2-12, as main.bicep allows
+$SuffixRule = '^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$'  # 1-10
+if ($interactive -and -not $NamePrefix -and -not $NameSuffix) {
+    Write-Host "`nResource names: {name}-web-{suffix}, {name}-postgres-{suffix}, and so on."
+    Write-Host 'Press Enter at both questions to keep the generated default names.'
+    $NamePrefix = (Read-Host 'Application name, 2-12 characters, e.g. cloudlens').Trim().ToLowerInvariant()
+    if ($NamePrefix) { $NameSuffix = (Read-Host 'Suffix to keep names unique, up to 10 characters, e.g. contoso').Trim().ToLowerInvariant() }
+}
+if ($NamePrefix -and $NamePrefix -notmatch $PrefixRule) { throw "-NamePrefix must be 2-12 lowercase letters, digits or hyphens, not starting or ending with a hyphen: '$NamePrefix'. Nothing has been changed." }
+if ($NameSuffix -and $NameSuffix -notmatch $SuffixRule) { throw "-NameSuffix must be 1-10 lowercase letters, digits or hyphens, not starting or ending with a hyphen: '$NameSuffix'. Nothing has been changed." }
+if ($NamePrefix -and -not $NameSuffix) { throw 'Provide -NameSuffix with -NamePrefix so the web app and database host names are unique.' }
 $account = Invoke-Az @('account', 'show')
 if (-not $account -or $account.id -notmatch $Guid) { throw "Not signed in to Azure. Run 'az login' (Cloud Shell is already signed in)." }
 $hosting = $account.id.ToLowerInvariant()
