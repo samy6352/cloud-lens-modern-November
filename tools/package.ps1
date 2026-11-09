@@ -42,10 +42,13 @@ $ui = Join-Path $root 'ui'
 $hasUi = Test-Path -LiteralPath (Join-Path $ui 'package.json') -PathType Leaf
 $builtUi = $false
 if ($hasUi -and -not $SkipUiBuild) {
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    $nodeOk = (Get-Command node -ErrorAction SilentlyContinue) -and (Get-Command npm -ErrorAction SilentlyContinue)
+    if ($nodeOk) { & node --version *> $null; $nodeOk = $LASTEXITCODE -eq 0 }
+    if (-not $nodeOk) {
         # Not fatal while the classic interface at / is still the product: /v2 answers with an
         # explanation instead. Failing here would stop a deployment after its infrastructure exists.
-        Write-Warning 'Node.js (npm) was not found, so the v3 preview interface at /v2 was not rebuilt. Install Node.js 20+ to include it.'
+        if (Test-Path -LiteralPath (Join-Path $root 'web/v2/index.html')) { Write-Host '    Node.js not available: packaging the prebuilt v3 interface (web/v2) that ships with the source.' }
+        else { Write-Warning 'Node.js (working node and npm) was not found and no prebuilt web/v2 exists, so the v3 interface at /v2 is missing. Install Node.js 20+ to include it.' }
     } else {
         Push-Location -LiteralPath $ui
         try {
