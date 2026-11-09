@@ -74,8 +74,18 @@ function global:az {
     if ($call.StartsWith('deployment sub create')) {
         if ($scenario -eq 'storage-preview') { throw 'WhatIf attempted an Azure write' }
         if ($call.Contains('authDelegatedArm=false')) { Write-Host 'EXPLICIT_FALLBACK_APPLIED' }
+        return
+    }
+    if ($call.StartsWith('deployment sub show')) {
+        if ($call.Contains('provisioningState')) { return 'Succeeded' }
+        if ($call.Contains('properties.error')) { return }
         return '{"webAppName":{"value":"fixture-app"},"webAppUrl":{"value":"https://fixture-app.azurewebsites.net"},"managedIdentityPrincipalId":{"value":"44444444-4444-4444-8444-444444444444"}}'
     }
+    if ($call.StartsWith('resource list')) {
+        if ($call.Contains('--query [0].id')) { return }
+        return '[]'
+    }
+    if ($call.StartsWith('ad app list')) { return }
     if ($call.StartsWith('webapp show')) {
         return '{"id":"/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/rg-cloudlens/providers/Microsoft.Web/sites/fixture-app","name":"fixture-app","identity":{"type":"SystemAssigned","principalId":"44444444-4444-4444-8444-444444444444","tenantId":"22222222-2222-4222-8222-222222222222"}}'
     }
