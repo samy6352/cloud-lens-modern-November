@@ -193,8 +193,13 @@ function Get-CloudLensExistingSite([string]$Group) {
     <# The CloudLens web app already in this resource group, if this is a rerun. #>
     $exists = Invoke-Az -Raw @('group', 'exists', '--name', $Group)
     if ($exists -ne 'true') { return $null }
-    return Invoke-Az @('webapp', 'list', '--resource-group', $Group,
-        '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}") | Select-Object -First 1
+    $found = @(Invoke-Az @('webapp', 'list', '--resource-group', $Group,
+        '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}"))
+    if ($NamePrefix) { $found = @($found | Where-Object { $_.name -eq "$NamePrefix-web-$NameSuffix" }) }
+    if ($found.Count -gt 1) {
+        throw "$($found.Count) CloudLens apps exist in $Group ($(($found | ForEach-Object { $_.name }) -join ', ')). Pass -NamePrefix and -NameSuffix to choose one. Nothing has been changed."
+    }
+    return $found | Select-Object -First 1
 }
 
 function Resolve-CloudLensRoot {
@@ -385,7 +390,10 @@ if ($WhatIf) {
 $sites = @(Invoke-Az @('webapp', 'list', '--resource-group', $ResourceGroup,
     '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}"))
 $site = $sites | Where-Object { $_.name -eq $env:CLOUDLENS_WEBAPP_NAME } | Select-Object -First 1
-if (-not $site -and -not $env:CLOUDLENS_WEBAPP_NAME) { $site = $sites | Select-Object -First 1 }
+if (-not $site -and -not $env:CLOUDLENS_WEBAPP_NAME -and $sites.Count -eq 1) { $site = $sites[0] }
+if (-not $site -and $sites.Count -gt 1) {
+    throw "Could not tell which of the $($sites.Count) CloudLens apps in $ResourceGroup was just deployed. Refusing to guess; see the deployment output above."
+}
 
 # Cost Management lets the app's identity *run* an export but not *create* one: the creator must
 # be able to grant the export's own identity a role on the storage account (verified live, 30 Sep
@@ -405,6 +413,15 @@ if (-not $monitored.Count) {
         Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
     }
 }
+# deploy.ps1 already waited for readiness; confirm the URL printed below is that same app, so a mix-up can never show as success.
+if ($site -and $env:CLOUDLENS_WEBAPP_NAME) {
+    $probe = $null
+    try { $probe = Invoke-RestMethod -Uri "https://$($site.host)/readyz" -TimeoutSec 30 } catch { $probe = $null }
+    if (-not $probe -or $probe.status -ne 'ready') {
+        throw "$($site.name) is not answering /readyz. Check: az webapp log tail -g $ResourceGroup -n $($site.name)"
+    }
+}
+
 $elapsed = (Get-Date) - $started
 Step "CloudLens is installed ($([int][math]::Floor($elapsed.TotalMinutes)) min $($elapsed.Seconds) s)"
 if ($site) {

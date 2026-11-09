@@ -515,6 +515,12 @@ if ($NameSuffix) {
 
 # ------------------------------------------------------------- provisioning
 
+# The sign-in registration is shared by every stack in the tenant and the template rewrites its redirect list,
+# so remember what other stacks had registered and put it back after the deployment.
+$priorRedirectUris = @()
+$priorClientId = if ($EntraClientId) { $EntraClientId } else { (az ad app list --filter "displayName eq 'CloudLens'" --query "[0].appId" -o tsv 2>$null) }
+if ($priorClientId) { $priorRedirectUris = @(az ad app show --id $priorClientId --query "publicClient.redirectUris" -o tsv 2>$null | Where-Object { $_ }) }
+
 Step "Deploying infrastructure to $ResourceGroup ($Location)"
 $deploymentName = "cloudlens-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
@@ -674,6 +680,15 @@ if (-not $clientId -and -not $SkipEntra) {
 }
 
 if ($clientId) {
+    $existingUris = @(az ad app show --id $clientId --query "publicClient.redirectUris" -o tsv 2>$null | Where-Object { $_ })
+    Assert-AzSuccess 'Reading the sign-in registration'
+    $wanted = @($existingUris + $priorRedirectUris + $redirectUri | Select-Object -Unique)
+    if (@($wanted | Where-Object { $existingUris -notcontains $_ }).Count) {
+        az ad app update --id $clientId --public-client-redirect-uris @wanted --only-show-errors -o none 2>$null
+        Assert-AzSuccess "Registering the redirect URI $redirectUri"
+        Write-Host "    redirect URI registered ($($wanted.Count) total, other stacks kept)"
+    }
+
     if ($EntraClientId) {
         # Verify before writing. Everything below this line modifies the registration
         # or consents on its behalf, so the one chance to notice it is the wrong one
@@ -686,14 +701,7 @@ if ($clientId) {
         #
         # Public-client platform, not web: CloudLens redeems the code with PKCE
         # and no secret, and Entra only allows that for a public client.
-        $existingUris = @(az ad app show --id $clientId --query "publicClient.redirectUris" -o tsv 2>$null)
-        Assert-AzSuccess 'Reading the existing sign-in registration'
-        if ($existingUris -notcontains $redirectUri) {
-            $merged = @($existingUris | Where-Object { $_ }) + $redirectUri
-            az ad app update --id $clientId --public-client-redirect-uris @merged --only-show-errors -o none 2>$null
-            Assert-AzSuccess "Adding the public-client redirect URI $redirectUri"
-            Write-Host "    redirect URI added to the existing registration"
-        }
+
         $requiredAccess = az ad app show --id $clientId --query requiredResourceAccess -o json | ConvertFrom-Json
         Assert-AzSuccess 'Reading requested API permissions'
         $armAccess = $requiredAccess | Where-Object { $_.resourceAppId -eq '797f4846-ba00-4fd7-ba43-dac1f8f63013' }

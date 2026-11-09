@@ -68,7 +68,8 @@ function global:az {
     if ($call.StartsWith('group exists')) { return $(if ($fixture.site) { 'true' } else { 'false' }) }
     if ($call.StartsWith('webapp config appsettings list')) { return [string]$fixture.authUsers }
     if ($call.StartsWith('webapp list')) {
-        return '[{"name":"cloudlens-web-abc","host":"cloudlens-web-abc.azurewebsites.net"}]'
+        $apps = if ($fixture.apps) { $fixture.apps } else { @('cloudlens-web-abc') }
+        return ('[' + ((@($apps) | ForEach-Object { '{"name":"' + $_ + '","host":"' + $_ + '.azurewebsites.net"}' }) -join ',') + ']')
     }
     throw "Unexpected Azure call; never invoke real Azure: $call"
 }
@@ -80,8 +81,9 @@ param(
     [string]$Location, [string]$ResourceGroup, [string]$PostgresSku, [int]$PostgresStorageGb,
     [string]$AppServicePlanSku, [switch]$SkipFocusExports, [switch]$EnableExportManagement,
     [bool]$ManagedExports, [int]$InitialHistoryMonths, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup,
-    [string]$EntraClientId, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
+    [string]$EntraClientId, [string]$NamePrefix, [string]$NameSuffix, [switch]$AllowAppIdentityFallback, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
 )
+if ($fixture.deployed) { $env:CLOUDLENS_WEBAPP_NAME = $fixture.deployed }
 $bound = [ordered]@{}
 foreach ($key in $PSBoundParameters.Keys) {
     $value = $PSBoundParameters[$key]
@@ -160,7 +162,7 @@ $calls = [Collections.Generic.List[string]]::new()
 $writes = [Collections.Generic.List[string]]::new()
 {MOCK}
 try {{
-    & '{script}' -Location centralindia {options} 6>&1 | ForEach-Object {{ "$_" }}
+    & '{script}' -Location centralindia -NonInteractive {options} 6>&1 | ForEach-Object {{ "$_" }}
     $code = 0
 }} catch {{
     Write-Output ('FAILURE:' + $_.Exception.Message)
@@ -189,7 +191,7 @@ exit $code
             "PostgresSku": "Standard_D2ds_v5", "PostgresStorageGb": 128, "AppServicePlanSku": "B2",
             "SkipFocusExports": True, "EnableExportManagement": True, "ManagedExports": True,
             "InitialHistoryMonths": 3,
-            "CostScopeSubscriptions": [HOST]})
+            "CostScopeSubscriptions": [HOST], "AllowAppIdentityFallback": True})
         # Only what is missing: two hosting providers and the export provider.
         self.assertEqual(self.registered(recorded), sorted([
             ("Microsoft.Insights", HOST), ("Microsoft.CognitiveServices", HOST),
@@ -200,6 +202,23 @@ exit $code
         self.assertEqual(self.exports, {"ResourceGroup": "rg-cloudlens", "WebAppName": "cloudlens-web-abc",
                                         "Subscriptions": [HOST], "HostingSubscriptionId": HOST,
                                         "Paused": True})
+
+    def test_two_stacks_in_one_group_finish_with_the_one_just_deployed(self):
+        data = fixture()
+        data["apps"] = ["cloudlens-web-old", "nov-cl-web-ewb"]
+        data["deployed"] = "nov-cl-web-ewb"
+        result, _, _ = self.install("-WhatIf:$false -NamePrefix nov-cl -NameSuffix ewb", data=data)
+        self.assertIn("WebAppName", json.dumps(self.exports), result.stdout)
+        self.assertEqual(self.exports["WebAppName"], "nov-cl-web-ewb")
+        self.assertNotIn("cloudlens-web-old", result.stdout)
+
+    def test_ambiguous_stacks_are_never_guessed(self):
+        data = fixture()
+        data["apps"] = ["cloudlens-web-old", "cloudlens-web-new"]
+        result, _, _ = self.install(data=data)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Refusing to guess", result.stdout)
+        self.assertIsNone(self.exports)
 
     def test_management_group_scope_pages_descendants_and_grants_once_at_the_group(self):
         result, recorded, deploy = self.install(
