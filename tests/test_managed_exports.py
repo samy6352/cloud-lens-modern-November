@@ -61,6 +61,11 @@ class FakeArm:
                 payload["nextLink"] = ("https://management.azure.com/subscriptions?"
                                        f"api-version=2022-12-01&$skiptoken={page + 1}")
             return httpx.Response(200, json=payload)
+        if path.count("/") == 2 and path.startswith("/subscriptions/"):
+            row = next((s for page in self.pages for s in page if s["subscriptionId"] == path.split("/")[2]), None)
+            if row is None:
+                return httpx.Response(403, json={"error": {"code": "AuthorizationFailed"}})
+            return httpx.Response(200, json=row)
         if path.endswith("/providers/Microsoft.Authorization/permissions"):
             if path.startswith(ACCOUNT):
                 return httpx.Response(200, json={"value": [{
@@ -392,6 +397,36 @@ def test_progress_and_check_now_routes(azure, monkeypatch):
     with pytest.raises(HTTPException) as off:
         asyncio.run(main.run_cost_data_bootstrap(admin))
     assert off.value.status_code == 409 and "CLOUDLENS_MANAGED_EXPORTS" in off.value.detail
+
+
+def test_add_subscriptions_reports_visibility_and_gives_grant_commands(azure, monkeypatch):
+    """Visible ones are onboarded; invisible ones come back with commands; only admins may ask."""
+    from fastapi import HTTPException
+
+    from app import main
+
+    unseen = "00000000-0000-0000-0000-0000000000aa"
+    monkeypatch.setenv("WEBSITE_SITE_NAME", "nov-cl-web")
+    monkeypatch.setenv("WEBSITE_RESOURCE_GROUP", "rg-new")
+    monkeypatch.setenv("WEBSITE_OWNER_NAME", f"{S5}+rg-new-CentralIndiaWebspace")
+    monkeypatch.setattr(main, "permitted", AsyncMock(return_value=None))
+    admin = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(
+        admin=True, source="local", name="Admin", sid="s")), query_params={})
+    viewer = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(
+        admin=False, source="local", name="Viewer", sid="s")), query_params={})
+    body = main.AddSubscriptionsRequest(subscription_ids=[S1, unseen.upper(), "not-a-guid", S1])
+    out = json.loads(asyncio.run(main.add_cost_data_subscriptions(body, admin)).body)
+    rows = {r["id"]: r for r in out["subscriptions"]}
+    assert rows[S1]["visible"] and rows[S1]["fix"] == [] and rows[S1]["name"] == "One"
+    assert not rows[unseen]["visible"] and len(rows[unseen]["fix"]) == 3
+    assert all(unseen in c and "synthetic-client" in c for c in rows[unseen]["fix"])
+    assert out["invalid"] == ["not-a-guid"] and len(out["subscriptions"]) == 2
+    assert f"-HostingSubscriptionId '{S5}'" in out["script"] and unseen in out["script"]
+    assert "-AppName 'nov-cl-web'" in out["script"] and S1 not in out["script"]
+    assert out["onboarding"]["enabled"] is True
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(main.add_cost_data_subscriptions(body, viewer))
+    assert denied.value.status_code == 403
 
 
 def _finish(azure, job_id: str) -> None:

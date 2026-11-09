@@ -206,6 +206,99 @@ function History({ data, admin, onSaved }: { data: SetupProgress; admin: boolean
   );
 }
 
+type AddResult = {
+  subscriptions: { id: string; name?: string | null; visible: boolean; detail: string; fix: string[] }[];
+  invalid: string[];
+  script: string | null;
+  onboarding: { onboarding?: string[] } | null;
+};
+
+const GUID = /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi;
+
+/** Adding a subscription later: the app reports what it can already see and hands back grant commands for the rest. */
+function AddSubscriptions({ onDone }: { onDone: (message: string) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<AddResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ids = [...new Set((text.match(GUID) ?? []).map((id) => id.toLowerCase()))];
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await api<AddResult>("cost-data/add-subscriptions", undefined, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription_ids: ids }),
+      });
+      setResult(out);
+      const seen = out.subscriptions.filter((s) => s.visible).length;
+      if (seen) onDone(`${seen} subscription${seen === 1 ? " is" : "s are"} visible and being set up.`);
+    } catch (e) {
+      setError(e instanceof ApiError || e instanceof Error ? e.message : "The check failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pending = result?.subscriptions.filter((s) => !s.visible) ?? [];
+  return (
+    <Card className="mb-5">
+      <CardHeader
+        title="Add subscriptions"
+        subtitle="Paste subscription IDs. CloudLens checks what it can already read, sets those up, and gives you the grant commands for the rest."
+      />
+      <CardBody>
+        <label className="sr-only" htmlFor="add-subs">
+          Subscription IDs
+        </label>
+        <textarea
+          id="add-subs"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={2}
+          placeholder="00000000-0000-0000-0000-000000000000, one per line or comma-separated"
+          className="w-full rounded-lg border border-border bg-surface p-2 font-mono text-xs"
+        />
+        <div className="mt-2 flex items-center gap-3">
+          <Button variant="primary" size="sm" onClick={submit} disabled={busy || !ids.length}>
+            Check {ids.length || ""} subscription{ids.length === 1 ? "" : "s"}
+          </Button>
+          {error && <span className="text-sm text-bad">{error}</span>}
+        </div>
+        {result && (
+          <div className="mt-4 text-sm">
+            {result.invalid.length > 0 && <p className="mb-2 text-bad">Not valid subscription IDs: {result.invalid.join(", ")}</p>}
+            <ul className="divide-y divide-border">
+              {result.subscriptions.map((s) => (
+                <li key={s.id} className="flex items-center gap-2 py-1.5">
+                  {s.visible ? <Check className="size-4 text-good" /> : <CircleAlert className="size-4 text-warn" />}
+                  <span className="font-mono text-xs">{s.id}</span>
+                  <span className="text-muted">{s.visible ? (s.name ?? "visible, setting up") : "not accessible yet"}</span>
+                </li>
+              ))}
+            </ul>
+            {pending.length > 0 && (
+              <div className="mt-3">
+                <p className="text-muted">
+                  An owner of each subscription runs this once (Owner, User Access Administrator or RBAC Administrator). Then press{" "}
+                  <span className="font-medium text-fg">Check now</span>; role assignments can take a few minutes to apply.
+                </p>
+                {result.script && <FixCommand command={result.script} />}
+                <p className="mt-3 text-xs text-muted">Or with the Azure CLI, per subscription:</p>
+                {pending.flatMap((s) => s.fix).map((command) => (
+                  <FixCommand key={command} command={command} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export function SetupPage() {
   const search = useSearch({ strict: false }) as { scope?: string };
   const me = useQuery(meQuery);
@@ -286,6 +379,14 @@ export function SetupPage() {
             </Card>
           )}
           {admin && <Blockers data={data} />}
+          {admin && data.enabled && (
+            <AddSubscriptions
+              onDone={(message) => {
+                setNotice(message);
+                void client.invalidateQueries({ queryKey: ["setup-progress"] });
+              }}
+            />
+          )}
           <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
             <KpiTile index={0} label="Months loaded" value={`${count(data.totals.loaded)} of ${count(total)}`} hint={`${data.subscriptions.length} subscriptions × ${data.months.length} months`} />
             <KpiTile index={1} label="Generating or importing" value={count(data.totals.running + data.totals.landed)} hint={`at most ${data.concurrency} Azure runs at once`} />

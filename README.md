@@ -268,6 +268,21 @@ start ingest work, and the schedule client refuses Azure writes. Authenticated r
 cache/rollup/DDL work remain available. Use a separate database and staging-only credentials;
 this flag does not replace those isolation controls.
 
+### Adding subscriptions later
+
+An administrator can add subscriptions to cost analysis at any time, without redeploying:
+
+- **In the app:** Setup page → *Add subscriptions*. Paste the IDs. CloudLens checks which it can
+  already read and sets those up; for the rest it shows the exact grant commands.
+- **By script:** `.\infra\add-subscriptions.ps1 -ResourceGroup <rg> -SubscriptionId '<sub-a>','<sub-b>'`
+  grants the app's managed identity Reader, Cost Management Reader and Cost Management
+  Contributor (the last lets it create exports; skip it with `-ReadOnlyCostAccess`), then
+  verifies. Use `-InstructionsOnly` to produce commands for someone else to run.
+
+Granting needs Owner, User Access Administrator or RBAC Administrator on each target
+subscription, which the app deliberately never holds. Subscriptions must be in the app's tenant.
+The next hourly pass picks them up; *Check now* on the Setup page runs it immediately.
+
 ### Cached views and access readiness
 
 Private PostgreSQL snapshots keep compatible last-good dashboard responses across worker

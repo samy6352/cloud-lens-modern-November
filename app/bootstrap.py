@@ -37,6 +37,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -120,6 +121,69 @@ def fix_command(role: str, scope: str, *, condition: str | None = None) -> str:
     if condition:
         command += f' --condition "{condition}" --condition-version 2.0'
     return command
+
+
+_GUID = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+GRANT_ROLES = ("Reader", "Cost Management Reader", EXPORT_ROLE)
+
+
+def grant_commands(sub: str) -> list[str]:
+    """The role assignments that make a subscription visible to this app and let it export."""
+    return [fix_command(role, f"/subscriptions/{sub}") for role in GRANT_ROLES]
+
+
+def grant_script(subs: list[str]) -> str:
+    """The same grant through the repository script, filled in from this App Service's own settings."""
+    owner = os.getenv("WEBSITE_OWNER_NAME", "").split("+")[0]
+    host = owner if _GUID.match(owner) else "<hosting-subscription-id>"
+    group = os.getenv("WEBSITE_RESOURCE_GROUP") or "<resource-group>"
+    app = os.getenv("WEBSITE_SITE_NAME") or "<app-name>"
+    ids = ",".join(f"'{s}'" for s in subs)
+    return (f".\\infra\\add-subscriptions.ps1 -HostingSubscriptionId '{host}' -ResourceGroup '{group}' "
+            f"-AppName '{app}' -SubscriptionId @({ids})")
+
+
+async def plan_add_subscriptions(raw_ids: list[str]) -> dict[str, Any]:
+    """Which of the named subscriptions this app can already see, and how to grant the rest.
+
+    Asked of Azure as the workload identity: the question is whether the *app* can read the
+    subscription, not whether the administrator can. Nothing is granted here -- role assignments
+    need an owner of the target subscription, so the app hands back the commands and then
+    onboards whatever has become visible on the next pass.
+    """
+    from . import cost
+
+    ids: list[str] = []
+    invalid: list[str] = []
+    for value in raw_ids:
+        value = value.strip().lower()
+        if not _GUID.match(value) or not value.strip("0-"):
+            invalid.append(value)
+        elif value not in ids:
+            ids.append(value)
+
+    tokens = (cost._caller.set(None), cost._caller_id.set("server"))
+    try:
+        async def probe(sub: str) -> dict[str, Any]:
+            try:
+                row = await cost.azure.request(
+                    "GET", f"{cost.ARM}/subscriptions/{sub}", params={"api-version": cost.SUBS_API})
+            except Exception as exc:  # noqa: BLE001 - any refusal means "not yet visible"
+                return {"id": sub, "visible": False, "detail": str(exc)[:200]}
+            state = row.get("state")
+            return {"id": sub, "visible": state == "Enabled", "name": row.get("displayName"),
+                    "detail": "" if state == "Enabled" else f"Subscription state is {state}."}
+
+        results = list(await asyncio.gather(*(probe(s) for s in ids)))
+    finally:
+        cost._caller.reset(tokens[0])
+        cost._caller_id.reset(tokens[1])
+
+    missing = [r["id"] for r in results if not r["visible"]]
+    for r in results:
+        r["fix"] = [] if r["visible"] else grant_commands(r["id"])
+    return {"subscriptions": results, "invalid": invalid,
+            "script": grant_script(missing) if missing else None}
 
 
 # ------------------------------------------------------------------ lease and status

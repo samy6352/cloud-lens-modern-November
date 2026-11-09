@@ -3124,6 +3124,24 @@ async def set_cost_data_history(body: HistoryRequest, request: Request) -> JSONR
     return JSONResponse({"months": body.months, **await bootstrap.run_once()})
 
 
+class AddSubscriptionsRequest(BaseModel):
+    subscription_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+@app.post("/api/cost-data/add-subscriptions")
+async def add_cost_data_subscriptions(body: AddSubscriptionsRequest, request: Request) -> JSONResponse:
+    """Add subscriptions to cost analysis: report which the app can see, onboard those, and give
+    the grant commands for the rest. Granting needs an owner of the target subscription, so the
+    app never does it itself."""
+    from . import bootstrap
+    require_admin(request)
+    plan = await bootstrap.plan_add_subscriptions(body.subscription_ids)
+    plan["onboarding"] = None
+    if any(s["visible"] for s in plan["subscriptions"]) and bootstrap.enabled() and not read_only_mode():
+        plan["onboarding"] = await bootstrap.run_once()
+    return JSONResponse(plan)
+
+
 @app.get("/api/cost-data/subscriptions")
 async def cost_data_subscriptions(request: Request) -> JSONResponse:
     """Entitled catalog only: unlike the legacy picker this never schedules backfill."""
