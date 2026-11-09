@@ -372,6 +372,7 @@ if ($LocalSignIn) {
     }
 }
 if ($WhatIf) { $deploy.WhatIf = $true }
+$env:CLOUDLENS_WEBAPP_NAME = $null
 & (Join-Path (Join-Path $root 'infra') 'deploy.ps1') @deploy
 if ($WhatIf) {
     Write-Host ''
@@ -380,8 +381,11 @@ if ($WhatIf) {
 }
 
 # ------------------------------------------------------------------ 4. hand-off
-$site = Invoke-Az @('webapp', 'list', '--resource-group', $ResourceGroup,
-    '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}") | Select-Object -First 1
+# A resource group can hold several CloudLens stacks: use the one deploy.ps1 just deployed, not the first listed.
+$sites = @(Invoke-Az @('webapp', 'list', '--resource-group', $ResourceGroup,
+    '--query', "[?tags.application=='CloudLens'].{name:name,host:defaultHostName}"))
+$site = $sites | Where-Object { $_.name -eq $env:CLOUDLENS_WEBAPP_NAME } | Select-Object -First 1
+if (-not $site -and -not $env:CLOUDLENS_WEBAPP_NAME) { $site = $sites | Select-Object -First 1 }
 
 # Cost Management lets the app's identity *run* an export but not *create* one: the creator must
 # be able to grant the export's own identity a role on the storage account (verified live, 30 Sep

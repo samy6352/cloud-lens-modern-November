@@ -601,6 +601,7 @@ Assert-AzSuccess 'Reading the deployment outputs'
 if (-not $result) { throw "Deployment produced no outputs." }
 
 $webAppName = $result.webAppName.value
+$env:CLOUDLENS_WEBAPP_NAME = $webAppName
 $webAppUrl = $result.webAppUrl.value
 $redirectUri = "$webAppUrl/auth/callback"
 
