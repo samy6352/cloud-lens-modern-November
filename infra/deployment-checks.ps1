@@ -60,6 +60,7 @@ function Wait-CloudLensApplication {
             if ($readiness.status -eq 'ready') { $ready = $true; break }
         } catch {
             Write-Verbose "Readiness check $attempt failed: $($_.Exception.Message)"
+            if ($attempt % 3 -eq 1) { Write-Host ("    waiting for the app to start (check {0}; the first start can take a few minutes)" -f $attempt) }
         }
         $remaining = [int][math]::Floor(($deadline - [DateTime]::UtcNow).TotalSeconds)
         if ($attempt -lt $Attempts -and $remaining -gt 0) {
@@ -128,7 +129,7 @@ function Wait-CloudLensDeployment {
             if ([int]$latest.status -eq 3) {
                 throw "App Service deployment $($latest.id) failed. Its log: https://$ScmHost/api/deployments/$($latest.id)/log"
             }
-            Write-Host "    build        : $($latest.id) status $($latest.status) $($latest.progress)"
+            Write-Host ("    [{0:00}:{1:00}] building     : status {2} {3}" -f [int]([DateTime]::UtcNow - $started).TotalMinutes, ([DateTime]::UtcNow - $started).Seconds, $latest.status, $latest.progress)
         } elseif (([DateTime]::UtcNow - $started).TotalSeconds -gt $AppearSeconds) {
             throw "No new App Service deployment appeared within $AppearSeconds seconds; the upload did not land."
         }

@@ -220,9 +220,10 @@ function Step($message) {
     Write-Progress -Activity 'CloudLens deployment' -Status "Step $($script:StepNumber): $message" -PercentComplete ([math]::Min(95, $script:StepNumber * 7))
 }
 
-function Wait-CloudLensInfrastructure([string]$Name, [string]$Group) {
+function Wait-CloudLensInfrastructure([string]$Name, [string]$Group, [hashtable]$Baseline = @{}) {
     <# Follows a --no-wait subscription deployment: new resources as they appear, a heartbeat, the final state. #>
     $seen = @{}
+    $existing = $Baseline.Count
     $lastBeat = Get-Date
     while ($true) {
         $raw = az resource list --resource-group $Group --query '[].[type,name]' -o json --only-show-errors 2>$null
@@ -231,24 +232,25 @@ function Wait-CloudLensInfrastructure([string]$Name, [string]$Group) {
                 $key = "$($r[0])/$($r[1])"
                 if (-not $seen.ContainsKey($key)) {
                     $seen[$key] = $true
-                    Write-Host ("    [{0}] creating   {1,-45} {2}" -f (Get-ElapsedText), $r[0], $r[1])
+                    if ($Baseline.ContainsKey($key)) { continue }
+                    Write-Host ("    [{0}] new        {1,-45} {2}" -f (Get-ElapsedText), $r[0], $r[1])
                 }
             }
         }
         $state = az deployment sub show --name $Name --query properties.provisioningState -o tsv --only-show-errors 2>$null
         if ($state -in 'Succeeded', 'Failed', 'Canceled') { break }
         if (((Get-Date) - $lastBeat).TotalSeconds -ge 60) {
-            Write-Host ("    [{0}] still deploying ({1} resources seen, state {2})" -f (Get-ElapsedText), $seen.Count, $(if ($state) { $state } else { 'Starting' }))
+            Write-Host ("    [{0}] still deploying ({1} new resources so far, state {2})" -f (Get-ElapsedText), ($seen.Count - $existing), $(if ($state) { $state } else { 'Starting' }))
             $lastBeat = Get-Date
         }
-        Write-Progress -Activity 'CloudLens deployment' -Status "Provisioning infrastructure: $($seen.Count) resources seen" -PercentComplete ([math]::Min(60, 20 + $seen.Count))
+        Write-Progress -Activity 'CloudLens deployment' -Status "Provisioning infrastructure: $($seen.Count - $existing) new resources" -PercentComplete ([math]::Min(60, 20 + $seen.Count - $existing))
         Start-Sleep -Seconds 15
     }
     if ($state -ne 'Succeeded') {
         $detail = az deployment sub show --name $Name --query properties.error -o json --only-show-errors 2>$null
         throw "Provisioning the infrastructure ended as $state. $detail"
     }
-    Write-Host ("    [{0}] infrastructure ready ({1} resources)" -f (Get-ElapsedText), $seen.Count) -ForegroundColor Green
+    Write-Host ("    [{0}] infrastructure ready ({1} resources in the group, {2} new)" -f (Get-ElapsedText), $seen.Count, ($seen.Count - $existing)) -ForegroundColor Green
 }
 
 function Assert-AzSuccess([string]$Operation) {
@@ -580,6 +582,9 @@ if ($WhatIf) {
     return
 }
 
+$baseline = @{}
+$rawBase = az resource list --resource-group $ResourceGroup --query '[].[type,name]' -o json --only-show-errors 2>$null
+if ($LASTEXITCODE -eq 0 -and $rawBase) { foreach ($r in ($rawBase | ConvertFrom-Json)) { $baseline["$($r[0])/$($r[1])"] = $true } }
 az deployment sub create `
     --name $deploymentName `
     --location $Location `
@@ -588,7 +593,7 @@ az deployment sub create `
     --no-wait --only-show-errors -o none
 Assert-AzSuccess 'Starting the infrastructure deployment'
 Write-Host "    started: this usually takes 10-25 minutes; new resources are listed as they appear"
-Wait-CloudLensInfrastructure -Name $deploymentName -Group $ResourceGroup
+Wait-CloudLensInfrastructure -Name $deploymentName -Group $ResourceGroup -Baseline $baseline
 $result = az deployment sub show --name $deploymentName --query properties.outputs -o json --only-show-errors | ConvertFrom-Json
 Assert-AzSuccess 'Reading the deployment outputs'
 
@@ -754,7 +759,7 @@ if ($clientId) {
         # door that will not open.
         Write-Warning "Continuing in app-identity mode (AUTH_DELEGATED_ARM=false). People see the"
         Write-Warning "subscriptions they hold a cost-capable role on, among those CloudLens was"
-        Write-Warning "granted Reader on. Once consent is granted, rerun without the switch."
+        Write-Warning "granted Reader on. Once an administrator grants consent, rerun the same command to upgrade."
     }
 } else {
     if ($AuthUsers) {
@@ -779,20 +784,21 @@ if (-not $SkipCode) {
     $scmHost = Get-CloudLensScmHost $webAppUrl
     $previousDeployment = (Get-CloudLensNewestDeployment $scmHost).id
     try {
+        # --async returns once the upload is accepted. A synchronous call can sit for many minutes
+        # after the build has already succeeded, so the deployment record is followed here instead.
         az webapp deploy `
             --resource-group $ResourceGroup `
             --name $webAppName `
             --src-path $zip `
             --type zip `
+            --async true `
             --only-show-errors -o none
         if ($LASTEXITCODE -ne 0) {
-            # Usually "504 GatewayTimeout": the first build on a small plan outlasts the publish
-            # gateway and then succeeds. Decide on the deployment record, not on the CLI.
-            Write-Warning 'The publish call did not confirm completion (commonly a 504 while the first build runs). Following the deployment itself.'
-            $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
-            Write-Host "    build        : $($published.id) succeeded"
+            Write-Warning 'The upload call did not confirm; following the deployment record to find the real outcome.'
         }
-    } finally {
+        Write-Host '    uploaded: building on Azure (first build takes 5-10 minutes)'
+        $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
+        Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green    } finally {
         Remove-Item -LiteralPath $zip -Force
     }
 
