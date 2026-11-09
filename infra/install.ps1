@@ -5,7 +5,7 @@
 .DESCRIPTION
         ./infra/install.ps1 -Location centralindia -SubscriptionId <subscription-to-host-cloudlens>
 
-    Optional: -SubscriptionId <id> (default: choose from a list)   -NamePrefix <app> -NameSuffix <customer>   -AllowAppIdentityFallback   -NonInteractive
+    Optional: -SubscriptionId <id> (default: choose from a list)   -NamePrefix <app> -NameSuffix <customer>   -RequireDelegatedArm   -NonInteractive
               -Scope <subscription id | /providers/Microsoft.Management/managementGroups/<id>>
               -Size small|medium|large   -EntraClientId <id>   -LocalSignIn   -WhatIf
 
@@ -72,9 +72,13 @@ param(
     # For tenants where app registration or admin consent is not available to the installer:
     # sign in with a local administrator. The installer generates its password here, gives the
     # app only a PBKDF2 hash (AUTH_USERS), and shows the password once in this terminal.
-    # For tenants where an administrator has not yet approved delegated ARM access: sign-in still uses
-    # Microsoft, but subscription data is read with the app's own identity. Run the printed
-    # 'az ad app permission admin-consent' later and rerun to switch to full mode.
+    # By default the installer asks for delegated ARM consent and, if the tenant has not approved it,
+    # continues in limited mode: people still sign in with Microsoft, and subscriptions are read with
+    # the app's own identity. Rerun after an administrator runs the printed 'az ad app permission
+    # admin-consent' command to upgrade. -RequireDelegatedArm stops instead of continuing.
+    [switch]$RequireDelegatedArm,
+
+    # Kept for older commands; limited mode is already the default.
     [switch]$AllowAppIdentityFallback,
 
     [switch]$LocalSignIn,
@@ -335,7 +339,7 @@ $deploy = [ordered]@{
 if ($target.Kind -eq 'managementGroup') { $deploy.CostScopeManagementGroup = $target.Id }
 else { $deploy.CostScopeSubscriptions = @($target.Id) }
 if ($EntraClientId) { $deploy.EntraClientId = $EntraClientId }
-if ($AllowAppIdentityFallback) { $deploy.AllowAppIdentityFallback = $true }
+if (-not $RequireDelegatedArm) { $deploy.AllowAppIdentityFallback = $true }
 if ($NamePrefix) { $deploy.NamePrefix = $NamePrefix }
 if ($NameSuffix) { $deploy.NameSuffix = $NameSuffix }
 $localPassword = $null

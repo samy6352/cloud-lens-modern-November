@@ -19,7 +19,7 @@ The customer path. Open Cloud Shell in **PowerShell** mode, get and extract the 
 CloudLens source bundle (or a clone; see *Distribution* below), then:
 
 ```powershell
-./infra/install.ps1 -Location centralindia     # asks which subscription and what to call the app; or pass -SubscriptionId <id> -NamePrefix <app> -NameSuffix <customer> -NonInteractive. Also: -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
+./infra/install.ps1 -Location centralindia     # asks which subscription and what to call the app; or pass -SubscriptionId <id> -NamePrefix <app> -NameSuffix <customer> -NonInteractive. If the tenant has not approved delegated ARM consent it continues in limited mode (add -RequireDelegatedArm to stop instead). Also: -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
 ```
 
 `install.ps1` checks PowerShell 7, the Azure CLI and the account; resolves what to monitor (the
