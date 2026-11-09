@@ -120,7 +120,7 @@ function Step([string]$Message) {
     $script:StepNumber++
     $e = (Get-Date) - $started
     Write-Host ''
-    Write-Host ("==> [{0:00}:{1:00}] Step {2}: {3}" -f [int]$e.TotalMinutes, $e.Seconds, $script:StepNumber, $Message) -ForegroundColor Cyan
+    Write-Host ("==> [{0:00}:{1:00}] Step {2}: {3}" -f [int][math]::Floor($e.TotalMinutes), $e.Seconds, $script:StepNumber, $Message) -ForegroundColor Cyan
     Write-Progress -Activity 'CloudLens install' -Status $Message -PercentComplete ([math]::Min(95, $script:StepNumber * 10))
 }
 function Info([string]$Message) { Write-Host "    $Message" }
@@ -402,7 +402,7 @@ if (-not $monitored.Count) {
     }
 }
 $elapsed = (Get-Date) - $started
-Step "CloudLens is installed ($([int]$elapsed.TotalMinutes) min $($elapsed.Seconds) s)"
+Step "CloudLens is installed ($([int][math]::Floor($elapsed.TotalMinutes)) min $($elapsed.Seconds) s)"
 if ($site) {
     Write-Host "    https://$($site.host)" -ForegroundColor Green
     Info "Setup progress: https://$($site.host)/v2/admin/setup"

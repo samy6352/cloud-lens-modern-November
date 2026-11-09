@@ -129,7 +129,7 @@ function Wait-CloudLensDeployment {
             if ([int]$latest.status -eq 3) {
                 throw "App Service deployment $($latest.id) failed. Its log: https://$ScmHost/api/deployments/$($latest.id)/log"
             }
-            Write-Host ("    [{0:00}:{1:00}] building     : status {2} {3}" -f [int]([DateTime]::UtcNow - $started).TotalMinutes, ([DateTime]::UtcNow - $started).Seconds, $latest.status, $latest.progress)
+            Write-Host ("    [{0:00}:{1:00}] building     : status {2} {3}" -f [int][math]::Floor(([DateTime]::UtcNow - $started).TotalMinutes), ([DateTime]::UtcNow - $started).Seconds, $latest.status, $latest.progress)
         } elseif (([DateTime]::UtcNow - $started).TotalSeconds -gt $AppearSeconds) {
             throw "No new App Service deployment appeared within $AppearSeconds seconds; the upload did not land."
         }

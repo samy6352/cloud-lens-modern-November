@@ -212,7 +212,7 @@ if (-not $script:InstallStart) {
 }
 $script:StepPrefix = if ($env:CLOUDLENS_PARENT_STEP) { "$($env:CLOUDLENS_PARENT_STEP)." } else { '' }
 $script:StepNumber = 0
-function Get-ElapsedText { $e = [datetime]::UtcNow - $script:InstallStart; '{0:00}:{1:00}' -f [int]$e.TotalMinutes, $e.Seconds }
+function Get-ElapsedText { $e = [datetime]::UtcNow - $script:InstallStart; '{0:00}:{1:00}' -f [int][math]::Floor($e.TotalMinutes), $e.Seconds }
 
 function Step($message) {
     $script:StepNumber++
