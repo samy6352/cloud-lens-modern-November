@@ -207,9 +207,48 @@ if ($NetworkIsolation) {
     }
 }
 
+$script:InstallStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:StepPrefix = if ($env:CLOUDLENS_PARENT_STEP) { "$($env:CLOUDLENS_PARENT_STEP)." } else { '' }
+$script:ClockOffset = if ($env:CLOUDLENS_INSTALL_START) { ([datetime]::UtcNow - [datetime]::Parse($env:CLOUDLENS_INSTALL_START, $null, 'RoundtripKind')) } else { [timespan]::Zero }
+$script:StepNumber = 0
+function Get-ElapsedText { $e = $script:InstallStopwatch.Elapsed + $script:ClockOffset; '{0:00}:{1:00}' -f [int]$e.TotalMinutes, $e.Seconds }
+
 function Step($message) {
+    $script:StepNumber++
     Write-Host ""
-    Write-Host "==> $message" -ForegroundColor Cyan
+    Write-Host "==> [$(Get-ElapsedText)] Step $($script:StepPrefix)$($script:StepNumber): $message" -ForegroundColor Cyan
+    Write-Progress -Activity 'CloudLens deployment' -Status "Step $($script:StepNumber): $message" -PercentComplete ([math]::Min(95, $script:StepNumber * 7))
+}
+
+function Wait-CloudLensInfrastructure([string]$Name, [string]$Group) {
+    <# Follows a --no-wait subscription deployment: new resources as they appear, a heartbeat, the final state. #>
+    $seen = @{}
+    $lastBeat = Get-Date
+    while ($true) {
+        $raw = az resource list --resource-group $Group --query '[].[type,name]' -o json --only-show-errors 2>$null
+        if ($LASTEXITCODE -eq 0 -and $raw) {
+            foreach ($r in ($raw | ConvertFrom-Json)) {
+                $key = "$($r[0])/$($r[1])"
+                if (-not $seen.ContainsKey($key)) {
+                    $seen[$key] = $true
+                    Write-Host ("    [{0}] creating   {1,-45} {2}" -f (Get-ElapsedText), $r[0], $r[1])
+                }
+            }
+        }
+        $state = az deployment sub show --name $Name --query properties.provisioningState -o tsv --only-show-errors 2>$null
+        if ($state -in 'Succeeded', 'Failed', 'Canceled') { break }
+        if (((Get-Date) - $lastBeat).TotalSeconds -ge 60) {
+            Write-Host ("    [{0}] still deploying ({1} resources seen, state {2})" -f (Get-ElapsedText), $seen.Count, $(if ($state) { $state } else { 'Starting' }))
+            $lastBeat = Get-Date
+        }
+        Write-Progress -Activity 'CloudLens deployment' -Status "Provisioning infrastructure: $($seen.Count) resources seen" -PercentComplete ([math]::Min(60, 20 + $seen.Count))
+        Start-Sleep -Seconds 15
+    }
+    if ($state -ne 'Succeeded') {
+        $detail = az deployment sub show --name $Name --query properties.error -o json --only-show-errors 2>$null
+        throw "Provisioning the infrastructure ended as $state. $detail"
+    }
+    Write-Host ("    [{0}] infrastructure ready ({1} resources)" -f (Get-ElapsedText), $seen.Count) -ForegroundColor Green
 }
 
 function Assert-AzSuccess([string]$Operation) {
@@ -541,13 +580,17 @@ if ($WhatIf) {
     return
 }
 
-$result = az deployment sub create `
+az deployment sub create `
     --name $deploymentName `
     --location $Location `
     --template-file $templateFile `
     --parameters $templateParameters `
-    --query properties.outputs -o json | ConvertFrom-Json
-Assert-AzSuccess 'Provisioning the infrastructure'
+    --no-wait --only-show-errors -o none
+Assert-AzSuccess 'Starting the infrastructure deployment'
+Write-Host "    started: this usually takes 10-25 minutes; new resources are listed as they appear"
+Wait-CloudLensInfrastructure -Name $deploymentName -Group $ResourceGroup
+$result = az deployment sub show --name $deploymentName --query properties.outputs -o json --only-show-errors | ConvertFrom-Json
+Assert-AzSuccess 'Reading the deployment outputs'
 
 if (-not $result) { throw "Deployment produced no outputs." }
 

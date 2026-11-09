@@ -115,7 +115,14 @@ $HostingProviders = @(
 $MonitoredProviders = @('Microsoft.CostManagement', 'Microsoft.CostManagementExports')
 $Guid = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
-function Step([string]$Message) { Write-Host ''; Write-Host "==> $Message" -ForegroundColor Cyan }
+$script:StepNumber = 0
+function Step([string]$Message) {
+    $script:StepNumber++
+    $e = (Get-Date) - $started
+    Write-Host ''
+    Write-Host ("==> [{0:00}:{1:00}] Step {2}: {3}" -f [int]$e.TotalMinutes, $e.Seconds, $script:StepNumber, $Message) -ForegroundColor Cyan
+    Write-Progress -Activity 'CloudLens install' -Status $Message -PercentComplete ([math]::Min(95, $script:StepNumber * 10))
+}
 function Info([string]$Message) { Write-Host "    $Message" }
 
 function Invoke-Az {
@@ -324,6 +331,8 @@ if (-not $pending.Count -and -not $unregistrable.Count -and -not $WhatIf) { Info
 
 # ------------------------------------------------------------------ 3. deploy
 Step 'Deploying CloudLens (infra/deploy.ps1)'
+$env:CLOUDLENS_INSTALL_START = $started.ToUniversalTime().ToString('o')
+$env:CLOUDLENS_PARENT_STEP = $script:StepNumber
 $deploy = [ordered]@{
     Location               = $Location
     ResourceGroup          = $ResourceGroup
