@@ -6,7 +6,7 @@
         ./infra/install.ps1 -Location centralindia -SubscriptionId <subscription-to-host-cloudlens>
 
     Optional: -SubscriptionId <id> (default: choose from a list)   -NamePrefix <app> -NameSuffix <customer>   -RequireDelegatedArm   -NonInteractive
-              -Scope <subscription id | /providers/Microsoft.Management/managementGroups/<id>>
+              -Scope <all (default) | subscription id | /providers/Microsoft.Management/managementGroups/<id>>
               -Size small|medium|large   -EntraClientId <id>   -LocalSignIn   -WhatIf
 
     What it does, in order, and nothing else:
@@ -49,13 +49,19 @@ param(
     # Subscription that hosts CloudLens. Empty = pick from a list in a terminal, otherwise the current one.
     [string]$SubscriptionId = '',
 
-    # What CloudLens monitors. Empty = the hosting subscription.
+    # What CloudLens monitors. Empty or 'all' = every enabled subscription in this tenant that you can see
+    # (each person then sees the ones they hold a cost-capable role on), a subscription ID, or
+    # /providers/Microsoft.Management/managementGroups/<id> (later subscriptions are covered automatically).
     [string]$Scope = '',
 
     [ValidateSet('small', 'medium', 'large')]
     [string]$Size = 'medium',
 
     [string]$ResourceGroup = 'rg-cloudlens',
+
+    [string]$AiLocation = 'eastus2',
+
+    [string]$EntraAppUniqueName = 'cloudlens',
 
     # Optional resource names: {NamePrefix}-web-{NameSuffix}, {NamePrefix}-postgres-{NameSuffix}, ...
     # Both empty keeps the default generated names.
@@ -81,6 +87,9 @@ param(
     # Kept for older commands; limited mode is already the default.
     [switch]$AllowAppIdentityFallback,
 
+    # Keep runtime-managed-identity reads even when delegated consent is available.
+    [switch]$AppIdentityOnly,
+
     [switch]$LocalSignIn,
 
     # With -LocalSignIn on a rerun: replace the local administrator's password instead of keeping it.
@@ -97,6 +106,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($AppIdentityOnly -and $RequireDelegatedArm) {
+    throw '-AppIdentityOnly cannot be combined with -RequireDelegatedArm.'
+}
 $started = Get-Date
 
 $Profiles = [ordered]@{
@@ -140,7 +152,7 @@ function Invoke-Az {
 
 function Resolve-CloudLensScope([string]$Value, [string]$HostingSubscription) {
     $text = $Value.Trim().TrimEnd('/')
-    if (-not $text) { return [pscustomobject]@{ Kind = 'subscription'; Id = $HostingSubscription; Path = "/subscriptions/$HostingSubscription" } }
+    if (-not $text -or $text -ieq 'all') { return [pscustomobject]@{ Kind = 'all'; Id = $HostingSubscription; Path = 'every enabled subscription visible to you in this tenant' } }
     if ($text -match '^/subscriptions/([^/]+)$') { $text = $Matches[1] }
     if ($text -match $Guid) {
         return [pscustomobject]@{ Kind = 'subscription'; Id = $text.ToLowerInvariant(); Path = "/subscriptions/$($text.ToLowerInvariant())" }
@@ -148,7 +160,7 @@ function Resolve-CloudLensScope([string]$Value, [string]$HostingSubscription) {
     if ($text -match '^/providers/Microsoft\.Management/managementGroups/([A-Za-z0-9._()-]{1,90})$') {
         return [pscustomobject]@{ Kind = 'managementGroup'; Id = $Matches[1]; Path = "/providers/Microsoft.Management/managementGroups/$($Matches[1])" }
     }
-    throw "-Scope must be a subscription ID, /subscriptions/<id>, or /providers/Microsoft.Management/managementGroups/<id>; got '$Value'. Nothing has been changed."
+    throw "-Scope must be 'all', a subscription ID, /subscriptions/<id>, or /providers/Microsoft.Management/managementGroups/<id>; got '$Value'. Nothing has been changed."
 }
 
 function Get-ManagementGroupSubscriptions([string]$GroupId) {
@@ -276,7 +288,30 @@ Info "initial data : $InitialHistoryMonths calendar month(s), newest first"
 
 $target = Resolve-CloudLensScope $Scope $hosting
 Step "Resolving the monitored scope ($($target.Path))"
-if ($target.Kind -eq 'subscription') {
+if ($target.Kind -eq 'all') {
+    $visible = @(Invoke-Az @('account', 'list', '--all') | Where-Object { $_.tenantId -ieq $account.tenantId -and $_.state -eq 'Enabled' })
+    $monitored = @(@($hosting) + @($visible | ForEach-Object { $_.id.ToLowerInvariant() }) | Select-Object -Unique)
+    Info "all visible  : $($monitored.Count) enabled subscription(s) in this tenant"
+    # A grant on the tenant root group is inherited by every subscription, including ones created or
+    # shared with people later, so nothing needs re-granting. It needs a role-assignment right there.
+    $rootId = $account.tenantId
+    $canGrantRoot = $false
+    try {
+        $perm = Invoke-Az @('rest', '--method', 'get', '--url',
+            "https://management.azure.com/providers/Microsoft.Management/managementGroups/$rootId/providers/Microsoft.Authorization/permissions?api-version=2022-04-01")
+        foreach ($entry in @($perm.value)) {
+            $allowed = @($entry.actions) | Where-Object { $_ -eq '*' -or $_ -eq 'Microsoft.Authorization/*' -or $_ -eq 'Microsoft.Authorization/roleAssignments/write' }
+            $denied = @($entry.notActions) | Where-Object { $_ -like 'Microsoft.Authorization/roleAssignments*' -or $_ -like 'Microsoft.Authorization/*' }
+            if ($allowed -and -not $denied) { $canGrantRoot = $true }
+        }
+    } catch { Write-Verbose "tenant root group not readable: $($_.Exception.Message)" }
+    if ($canGrantRoot) {
+        $target = [pscustomobject]@{ Kind = 'managementGroup'; Id = $rootId; Path = "/providers/Microsoft.Management/managementGroups/$rootId" }
+        Info "tenant root  : granting once at the root group; subscriptions you or others gain later are covered automatically"
+    } else {
+        Write-Warning 'No role-assignment right on the tenant root management group, so access is granted per subscription. Subscriptions added later need a re-run, the Setup "Add subscriptions" card, or a one-time grant at the root group by a tenant administrator.'
+    }
+} elseif ($target.Kind -eq 'subscription') {
     $info = Invoke-Az @('account', 'show', '--subscription', $target.Id)
     if ($info.tenantId -ine $account.tenantId) { throw "Subscription $($target.Id) is in another tenant; CloudLens monitors its own tenant only." }
     if ($info.state -ne 'Enabled') { throw "Subscription $($target.Id) is $($info.state), not Enabled." }
@@ -349,11 +384,15 @@ $deploy = [ordered]@{
     EnableExportManagement = $true
     ManagedExports         = $true
     InitialHistoryMonths   = $InitialHistoryMonths
+    AiLocation             = $AiLocation
+    EntraAppUniqueName      = $EntraAppUniqueName
 }
 if ($target.Kind -eq 'managementGroup') { $deploy.CostScopeManagementGroup = $target.Id }
+elseif ($target.Kind -eq 'all') { $deploy.CostScopeAllVisible = $true }
 else { $deploy.CostScopeSubscriptions = @($target.Id) }
 if ($EntraClientId) { $deploy.EntraClientId = $EntraClientId }
 if (-not $RequireDelegatedArm) { $deploy.AllowAppIdentityFallback = $true }
+if ($AppIdentityOnly) { $deploy.AppIdentityOnly = $true }
 if ($NamePrefix) { $deploy.NamePrefix = $NamePrefix }
 if ($NameSuffix) { $deploy.NameSuffix = $NameSuffix }
 $localPassword = $null
@@ -403,14 +442,16 @@ Step 'Creating the FOCUS exports (once, as you)'
 if (-not $monitored.Count) {
     Info 'no subscriptions to export yet'
 } elseif (-not $site) {
-    Write-Warning "The web app was not found in $ResourceGroup; exports were not created."
+    throw "The web app was not found in $ResourceGroup; exports were not created and installation is incomplete."
 } else {
     try {
-        & (Join-Path (Join-Path $root 'infra') 'focus-exports.ps1') -ResourceGroup $ResourceGroup `
+        $exportResult = & (Join-Path (Join-Path $root 'infra') 'focus-exports.ps1') -ResourceGroup $ResourceGroup `
             -WebAppName $site.name -Subscriptions $monitored -HostingSubscriptionId $hosting -Paused
+        if ($exportResult.status -ne 'complete') { throw 'FOCUS provisioning did not return a complete result.' }
     } catch {
         Write-Warning "Exports were not all created: $($_.Exception.Message)"
         Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
+        throw
     }
 }
 # deploy.ps1 already waited for readiness; confirm the URL printed below is that same app, so a mix-up can never show as success.

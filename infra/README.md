@@ -19,7 +19,7 @@ The customer path. Open Cloud Shell in **PowerShell** mode, get and extract the 
 CloudLens source bundle (or a clone; see *Distribution* below), then:
 
 ```powershell
-./infra/install.ps1 -Location centralindia     # asks which subscription and what to call the app; or pass -SubscriptionId <id> -NamePrefix <app> -NameSuffix <customer> -NonInteractive. If the tenant has not approved delegated ARM consent it continues in limited mode (add -RequireDelegatedArm to stop instead). Also: -Scope <sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
+./infra/install.ps1 -Location centralindia     # asks which subscription and what to call the app; or pass -SubscriptionId <id> -NamePrefix <app> -NameSuffix <customer> -NonInteractive. If the tenant has not approved delegated ARM consent it continues in limited mode (add -RequireDelegatedArm to stop instead). Also: -Scope <all (default: every enabled subscription you can see) | sub | /providers/Microsoft.Management/managementGroups/<id>> -Size small|medium|large
 ```
 
 `install.ps1` checks PowerShell 7, the Azure CLI and the account; resolves what to monitor (the
@@ -64,15 +64,19 @@ the app only its PBKDF2 hash (`AUTH_USERS`) and shows the password once in your 
 keeps it; `-ResetLocalPassword` replaces it) — for tenants where app registration or admin consent
 is unavailable; `-WhatIf` previews without registering or deploying anything.
 
-The first Python build on a small plan outlasts the publish gateway, so `az webapp deploy` often
-reports `504 GatewayTimeout` for a deployment that then succeeds. `deploy.ps1` treats that as an
-unknown state and follows the App Service deployment record to its real outcome (success, or the
-failed build's log) before checking readiness.
+The first Python build can outlast the publish gateway. The deployment scripts
+upload through SCM with a unique deployer correlation, validate the returned
+same-site receipt, bind the correlated deployment ID and poll only that ID.
+Receipt polling uses PowerShell HTTP with an ARM bearer token, preserving opaque
+query strings such as `&time=` that Windows `az.cmd` can otherwise split.
+Upload/polling failures are unknown states, not permission to retry against a
+different successful deployment. Readiness also requires the running process's
+`/release.json` identity to match the packaged release; no global stop/restart is used.
 
 **Source distribution:** build a versioned customer artifact locally with the existing packager:
 
 ```powershell
-.\tools\package.ps1 -InstallerSource -Version <reviewed-commit-SHA> -Destination <new-source-zip-path>
+.\tools\package.ps1 -InstallerSource -Version <reviewed-release-label> -Destination <new-source-zip-path>
 ```
 
 Use Python 3.11+, PowerShell 7 and Node.js 20+. The command builds v3 using `ui/package-lock.json`;
@@ -80,6 +84,9 @@ Use Python 3.11+, PowerShell 7 and Node.js 20+. The command builds v3 using `ui/
 packaging). The root `release-manifest.json` labels the artifact `installer-source`, records the
 supplied version and each file's size/SHA-256. Retain the separately reported ZIP SHA-256 and verify
 both the ZIP and extracted file hashes before use. A version label is not a signature.
+The manifest's `releaseId` is SHA-256 over sorted UTF-8 `path:sha256` records,
+each terminated by LF. The process captures that identity at startup; changing
+files on disk does not make an older process the new release.
 
 Verify a downloaded or locally generated ZIP without extracting or starting the app:
 
@@ -93,6 +100,19 @@ an internally consistent manifest alone does not establish authenticity. CI reta
 verified runtime and installer-source candidates for 30 days; these are not
 production approvals. Keep approved customer releases in durable release storage,
 not a temporary agent-session directory.
+
+**Maintainer publication:** an authorised push of a version tag invokes the
+gated release workflow; it does not bypass the required checks. Before tagging,
+update `tools/install-customer.ps1`'s default `Version` and the customer runbook's
+versioned raw-script URLs to the intended release version. The workflow requires
+that default to match the tag. A successful release publishes
+`CloudLens-<version>-source.zip`, `CloudLens-<version>-runtime.zip`,
+`SHA256SUMS.txt` and provenance JSON recording the exact commit SHA. Pass the
+release label through `package.ps1 -Version`; keep the commit SHA in provenance,
+not inferred from a label or payload hash. Never overwrite an existing version's
+published assets. This describes the publication path, not a claim that the
+current local candidates have been published; stale rc1/rc2 ZIPs must not be used
+as artifacts for these fixes.
 
 The ZIP contains `app/main.py` beside `infra/install.ps1`, all Bicep installer helpers/modules,
 classic web assets, the tested v3 build, buildable UI source and its dependency lock, Python
@@ -273,7 +293,13 @@ afterwards, so an infrastructure-only redeploy cannot silently flip it back. If 
 later succeeds while the switch is still being passed, `deploy.ps1` upgrades to delegated
 mode and says so.
 
-To move to delegated mode after the fact:
+For the administrator-led managed-identity handoff, pass `-AppIdentityOnly` to
+`install.ps1` or `deploy.ps1`. It skips delegated ARM admin consent and keeps
+`AUTH_DELEGATED_ARM=false`, even if consent already exists. Keep this option on
+subsequent redeployments. It cannot be combined with the installer's
+`-RequireDelegatedArm`. See [the customer runbook](CUSTOMER-DEPLOYMENT.md).
+
+To move to delegated mode after the fact (omit `-AppIdentityOnly`):
 
 ```powershell
 az ad app permission admin-consent --id <client-id>
@@ -691,7 +717,7 @@ policy, delegated consent, private DNS connectivity or live billing access.
 
 ## Health and failure behaviour
 
-Errors in role grants, app settings, code publication and health polling stop the script
+Errors in role grants, required FOCUS exports, app settings, code publication and health polling stop the script
 rather than ending with a successful hand-off message. `-SkipCode` reports infrastructure-only
 completion explicitly.
 

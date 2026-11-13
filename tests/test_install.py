@@ -46,6 +46,9 @@ function global:az {
         if (-not $sub) { $sub = $fixture.host }
         return (ConvertTo-Json -Depth 10 -InputObject $fixture.accounts[$sub])
     }
+    if ($call.StartsWith('account list')) {
+        return (ConvertTo-Json -Depth 10 -InputObject @($fixture.visible))
+    }
     if ($call.StartsWith('account management-group show')) {
         return (ConvertTo-Json -Depth 10 -InputObject $fixture.groups[(arg '--name')])
     }
@@ -79,9 +82,10 @@ STUB_DEPLOY = r"""
 [CmdletBinding()]
 param(
     [string]$Location, [string]$ResourceGroup, [string]$PostgresSku, [int]$PostgresStorageGb,
+    [string]$AiLocation, [string]$EntraAppUniqueName,
     [string]$AppServicePlanSku, [switch]$SkipFocusExports, [switch]$EnableExportManagement,
-    [bool]$ManagedExports, [int]$InitialHistoryMonths, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup,
-    [string]$EntraClientId, [string]$NamePrefix, [string]$NameSuffix, [switch]$AllowAppIdentityFallback, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
+    [bool]$ManagedExports, [int]$InitialHistoryMonths, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup, [switch]$CostScopeAllVisible,
+    [string]$EntraClientId, [string]$NamePrefix, [string]$NameSuffix, [switch]$AllowAppIdentityFallback, [switch]$AppIdentityOnly, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
 )
 if ($fixture.deployed) { $env:CLOUDLENS_WEBAPP_NAME = $fixture.deployed }
 $bound = [ordered]@{}
@@ -105,7 +109,8 @@ foreach ($key in $PSBoundParameters.Keys) {
     if ($value -is [System.Management.Automation.SwitchParameter]) { $bound[$key] = $value.IsPresent }
     else { $bound[$key] = $value }
 }
-Write-Output ('EXPORTS:' + (ConvertTo-Json -Compress -Depth 5 -InputObject $bound))
+Write-Host ('EXPORTS:' + (ConvertTo-Json -Compress -Depth 5 -InputObject $bound))
+return [pscustomobject]@{ status='complete'; readyCount=$Subscriptions.Count; subscriptions=@() }
 """
 
 
@@ -119,6 +124,8 @@ def fixture():
         "host": HOST,
         "accounts": {HOST: account(HOST, "Hosting"), OTHER: account(OTHER, "Monitored"),
                      FOREIGN: account(FOREIGN, "Elsewhere", tenant=FOREIGN)},
+        "visible": [account(HOST, "Hosting"), account(OTHER, "Monitored"), account(FOREIGN, "Elsewhere", tenant=FOREIGN),
+                    {**account(S1, "Disabled"), "state": "Disabled"}],
         "groups": {GROUP: {"name": GROUP, "displayName": "Finance", "tenantId": TENANT}},
         "pages": {
             DESCENDANTS: {"value": [
@@ -183,7 +190,7 @@ exit $code
         return sorted((c.split("--namespace ")[1].split()[0], c.split("--subscription ")[1].split()[0])
                       for c in recorded["writes"])
 
-    def test_default_install_monitors_the_current_subscription_with_managed_exports(self):
+    def test_default_install_monitors_every_visible_subscription_in_the_tenant(self):
         result, recorded, deploy = self.install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(deploy, {
@@ -191,17 +198,40 @@ exit $code
             "PostgresSku": "Standard_D2ds_v5", "PostgresStorageGb": 128, "AppServicePlanSku": "B2",
             "SkipFocusExports": True, "EnableExportManagement": True, "ManagedExports": True,
             "InitialHistoryMonths": 3,
-            "CostScopeSubscriptions": [HOST], "AllowAppIdentityFallback": True})
-        # Only what is missing: two hosting providers and the export provider.
-        self.assertEqual(self.registered(recorded), sorted([
-            ("Microsoft.Insights", HOST), ("Microsoft.CognitiveServices", HOST),
-            ("Microsoft.CostManagementExports", HOST)]))
+            "AiLocation": "eastus2", "EntraAppUniqueName": "cloudlens",
+            "CostScopeAllVisible": True, "AllowAppIdentityFallback": True})
+        # Hosting gaps plus the export provider on the hosting and the other same-tenant subscription;
+        # foreign-tenant and disabled subscriptions are left alone.
+        self.assertEqual(self.registered(recorded), sorted(
+            [("Microsoft.Insights", HOST), ("Microsoft.CognitiveServices", HOST),
+             ("Microsoft.CostManagementExports", HOST)]
+            + [(ns, OTHER) for ns in ("Microsoft.CostManagement", "Microsoft.CostManagementExports")]))
         self.assertIn("https://cloudlens-web-abc.azurewebsites.net", result.stdout)
         self.assertIn("/v2/admin/setup", result.stdout)
         # The operator creates the export, paused; the app's identity may run but not create one.
         self.assertEqual(self.exports, {"ResourceGroup": "rg-cloudlens", "WebAppName": "cloudlens-web-abc",
-                                        "Subscriptions": [HOST], "HostingSubscriptionId": HOST,
+                                        "Subscriptions": [HOST, OTHER], "HostingSubscriptionId": HOST,
                                         "Paused": True})
+
+    def test_all_scope_grants_once_at_the_tenant_root_when_allowed(self):
+        data = fixture()
+        data["pages"]["https://management.azure.com/providers/Microsoft.Management/managementGroups/"
+                      f"{TENANT}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01"] = {
+            "value": [{"actions": ["*"], "notActions": []}]}
+        result, _, deploy = self.install(data=data)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(deploy["CostScopeManagementGroup"], TENANT)
+        self.assertNotIn("CostScopeAllVisible", deploy)
+        self.assertNotIn("CostScopeSubscriptions", deploy)
+    def test_customer_app_identity_mode_reaches_deployment(self):
+        result, _, deploy = self.install("-AppIdentityOnly")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(deploy["AppIdentityOnly"])
+        result, recorded, deploy = self.install("-AppIdentityOnly -RequireDelegatedArm")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot be combined", result.stdout)
+        self.assertIsNone(deploy)
+        self.assertFalse(recorded["calls"])
 
     def test_two_stacks_in_one_group_finish_with_the_one_just_deployed(self):
         data = fixture()
@@ -258,6 +288,13 @@ exit $code
                 self.assertEqual((deploy["AppServicePlanSku"], deploy["PostgresStorageGb"]), ("B1", 64))
                 self.assertIn(("Microsoft.CostManagementExports", OTHER), self.registered(recorded))
 
+    def test_customer_region_and_isolated_registration_are_passed_through(self):
+        result, _, deploy = self.install(
+            "-AiLocation swedencentral -EntraAppUniqueName rg-cloudlens-ewb -WhatIf")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(deploy["AiLocation"], "swedencentral")
+        self.assertEqual(deploy["EntraAppUniqueName"], "rg-cloudlens-ewb")
+
     def test_invalid_or_foreign_scope_is_refused_before_any_change(self):
         for scope, message in (("rg-something", "-Scope must be"),
                                (FOREIGN, "in another tenant")):
@@ -281,6 +318,7 @@ exit $code
     def test_rerun_with_everything_registered_writes_nothing(self):
         data = fixture()
         data["registered"][HOST] = [*HOSTING, "Microsoft.CostManagement", "Microsoft.CostManagementExports"]
+        data["registered"][OTHER] = ["Microsoft.CostManagement", "Microsoft.CostManagementExports"]
         result, recorded, deploy = self.install(data=data)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(recorded["writes"], [])
@@ -392,13 +430,22 @@ $script:index = 0
 function global:Start-Sleep {{}}
 function global:az {{
     $global:LASTEXITCODE = 0
+    if (($args -join ' ') -notmatch '^account get-access-token ') {{ throw 'SCM receipt must not pass through az.cmd' }}
+    return 'mock-token'
+}}
+function global:Invoke-RestMethod {{
+    param($Uri, $Headers, $TimeoutSec)
+    if ($Headers.Authorization -ne 'Bearer mock-token') {{ throw 'Missing SCM bearer token' }}
     $page = $script:pages[[math]::Min($script:index, $script:pages.Count - 1)]
     $script:index++
-    return (ConvertTo-Json -Depth 5 -InputObject @($page))
+    if ($Uri -match '/api/deployments$') {{ throw 'Unbound listing is forbidden' }}
+    return @($page)[-1]
 }}
 . '{checks}'
 try {{
-    $done = Wait-CloudLensDeployment -ScmHost 'app.scm.azurewebsites.net' -Previous '{previous}' -AppearSeconds {appear} -PollSeconds 10
+    $done = Wait-CloudLensDeployment -ScmHost 'app.scm.azurewebsites.net' `
+        -ReceiptUrl 'https://app.scm.azurewebsites.net/api/deployments/latest?deployer=cloudlens-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' `
+        -Deployer 'cloudlens-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' -AppearSeconds {appear} -PollSeconds 10 -MaxAttempts 6
     Write-Output ('DONE:' + $done.id)
 }} catch {{ Write-Output ('FAILURE:' + $_.Exception.Message) }}
 Write-Output ('HOST:' + (Get-CloudLensScmHost 'https://cloudlens-5f6eh.azurewebsites.net'))
@@ -409,7 +456,8 @@ Write-Output ('REGIONAL:' + (Get-CloudLensScmHost 'https://app-x.centralindia-01
         return {line.split(":", 1)[0]: line.split(":", 1)[1] for line in result.stdout.splitlines() if ":" in line}
 
     def record(self, rid, status, complete=False, start="2026-09-30T13:32:27Z"):
-        return {"id": rid, "status": status, "complete": complete, "start_time": start, "progress": ""}
+        return {"id": rid, "status": status, "complete": complete, "start_time": start, "progress": "",
+                "deployer": "foreign" if rid == "old" else "cloudlens-" + "a" * 32}
 
     def test_a_timed_out_publish_that_then_succeeds_is_a_success(self):
         old = self.record("old", 4, True, "2026-09-30T10:00:00Z")
@@ -426,6 +474,11 @@ Write-Output ('REGIONAL:' + (Get-CloudLensScmHost 'https://app-x.centralindia-01
 
     def test_no_new_record_means_the_upload_never_landed(self):
         out = self.follow([[self.record("old", 4, True)]], appear=10)
-        self.assertIn("did not land", out.get("FAILURE", ""))
+        self.assertIn("No new deployment was seen", out.get("FAILURE", ""))
+
+    def test_bound_deployment_cannot_be_replaced_by_another_success(self):
+        out = self.follow([[self.record("ours", 1)], [self.record("other", 4, True)]])
+        self.assertIn("different deployment ID", out.get("FAILURE", ""))
+        self.assertNotIn("DONE", out)
 if __name__ == "__main__":
     unittest.main()
