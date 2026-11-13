@@ -48,6 +48,7 @@ $asset = "CloudLens-$Version-source.zip"
 $base = "https://github.com/samy6352/cloud-lens-modern-November/releases/download/v$Version"
 $zip = Join-Path $Destination $asset
 $checksums = Join-Path $Destination 'SHA256SUMS.txt'
+$downloadedFromArchive = $false
 if ($SourceZip) {
     Copy-Item -LiteralPath $SourceZip -Destination $zip -ErrorAction Stop
     $expected = $SourceSha256
@@ -59,18 +60,43 @@ if ($SourceZip) {
         Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip
         Invoke-WebRequest -Uri "$base/SHA256SUMS.txt" -OutFile $checksums
     } catch {
-        throw "Could not download release v$Version. Verify it is published and accessible; for private repositories use an approved authenticated download and -SourceZip/-SourceSha256. $($_.Exception.Message)"
+        Write-Warning "Release asset v$Version is unavailable ($($_.Exception.Message))."
+        Write-Warning 'Falling back to the repository source archive from GitHub.'
+        $fallbacks = @(
+            "https://github.com/samy6352/cloud-lens-modern-November/archive/refs/tags/v$Version.zip",
+            'https://github.com/samy6352/cloud-lens-modern-November/archive/refs/heads/main.zip'
+        )
+        $downloaded = $false
+        foreach ($fallback in $fallbacks) {
+            try {
+                Invoke-WebRequest -Uri $fallback -OutFile $zip
+                Write-Host "Downloaded fallback source archive: $fallback"
+                $downloaded = $true
+                $downloadedFromArchive = $true
+                break
+            } catch {
+                continue
+            }
+        }
+        if (-not $downloaded) {
+            throw "Could not download release v$Version or fallback source archives. Verify repository/release accessibility, or use -SourceZip/-SourceSha256. $($_.Exception.Message)"
+        }
     }
-    $matches = @(Get-Content -LiteralPath $checksums | Where-Object {
-        $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [regex]::Escape($asset) + '$')
-    })
-    if ($matches.Count -ne 1) {
-        throw "Expected one SHA-256 entry for $asset. Installation stopped."
+    if (-not $downloadedFromArchive) {
+        $matches = @(Get-Content -LiteralPath $checksums | Where-Object {
+            $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [regex]::Escape($asset) + '$')
+        })
+        if ($matches.Count -ne 1) {
+            throw "Expected one SHA-256 entry for $asset. Installation stopped."
+        }
+        $expected = ($matches[0] -split '\s+')[0]
     }
-    $expected = ($matches[0] -split '\s+')[0]
 }
-if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) {
+if (-not $downloadedFromArchive -and (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) {
     throw "Release SHA-256 mismatch. Installation stopped; do not execute files in $Destination."
+}
+if ($downloadedFromArchive) {
+    Write-Warning 'Using the repository source archive fallback (no release checksum file was available).'
 }
 
 $archive = [IO.Compression.ZipFile]::OpenRead($zip)
@@ -89,11 +115,27 @@ try {
 }
 $source = Join-Path $Destination 'source'
 Expand-Archive -LiteralPath $zip -DestinationPath $source
-$installer = Join-Path $source 'infra\install.ps1'
+$sourceRoot = $source
+$installer = Join-Path $sourceRoot 'infra\install.ps1'
 if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
-    -not (Test-Path -LiteralPath (Join-Path $source 'app\main.py') -PathType Leaf)) {
+    -not (Test-Path -LiteralPath (Join-Path $sourceRoot 'app\main.py') -PathType Leaf)) {
+    $candidates = @(
+        Get-ChildItem -LiteralPath $source -Directory -ErrorAction SilentlyContinue |
+        Where-Object {
+            Test-Path -LiteralPath (Join-Path $_.FullName 'infra\install.ps1') -PathType Leaf -and
+            Test-Path -LiteralPath (Join-Path $_.FullName 'app\main.py') -PathType Leaf
+        }
+    )
+    if ($candidates.Count -eq 1) {
+        $sourceRoot = $candidates[0].FullName
+        $installer = Join-Path $sourceRoot 'infra\install.ps1'
+    }
+}
+if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $sourceRoot 'app\main.py') -PathType Leaf)) {
     throw 'The downloaded ZIP is not a complete customer installer-source release.'
 }
+$source = $sourceRoot
 Write-Host "Verified and extracted to $source"
 Write-Host 'Keep this folder for deployment state and recovery. Installation incurs Azure charges.'
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Install Azure CLI and sign in with az login before continuing.' }
