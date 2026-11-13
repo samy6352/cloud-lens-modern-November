@@ -46,6 +46,7 @@ function global:az {
         if (-not $sub) { $sub = $fixture.host }
         return (ConvertTo-Json -Depth 10 -InputObject $fixture.accounts[$sub])
     }
+    if ($call.StartsWith('account set')) { return '' }
     if ($call.StartsWith('account list')) {
         return (ConvertTo-Json -Depth 10 -InputObject @($fixture.visible))
     }

@@ -43,8 +43,8 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [string]$Location,
+    # Azure region for CloudLens. Empty = choose from a list in a terminal.
+    [string]$Location = '',
 
     # Subscription that hosts CloudLens. Empty = pick from a list in a terminal, otherwise the current one.
     [string]$SubscriptionId = '',
@@ -150,6 +150,17 @@ function Invoke-Az {
     return $text | ConvertFrom-Json
 }
 
+function Select-CloudLensOption([string]$Title, [object[]]$Options, [int]$Default = 1) {
+    <# Numbered menu: Enter takes the default. Options are @{ Label = ...; Value = ... }. #>
+    Write-Host "`n$Title"
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        Write-Host ("  {0}. {1}{2}" -f ($i + 1), $Options[$i].Label, $(if (($i + 1) -eq $Default) { '  <- recommended' } else { '' }))
+    }
+    $answer = (Read-Host "Choose 1-$($Options.Count) [$Default]").Trim()
+    $pick = if ($answer) { 0 + $answer } else { $Default }
+    if ($pick -lt 1 -or $pick -gt $Options.Count) { throw "Choose a number from 1 to $($Options.Count). Nothing has been changed." }
+    return $Options[$pick - 1].Value
+}
 function Resolve-CloudLensScope([string]$Value, [string]$HostingSubscription) {
     $text = $Value.Trim().TrimEnd('/')
     if (-not $text -or $text -ieq 'all') { return [pscustomobject]@{ Kind = 'all'; Id = $HostingSubscription; Path = 'every enabled subscription visible to you in this tenant' } }
@@ -265,7 +276,45 @@ if ($SubscriptionId) {
     if ($SubscriptionId -notmatch $Guid) { throw '-SubscriptionId must be a subscription GUID.' }
     Invoke-Az @('account', 'set', '--subscription', $SubscriptionId) | Out-Null
 }
-$PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'  # 2-12, as main.bicep allows
+if ($interactive) {
+    if (-not $Location) {
+        $Location = Select-CloudLensOption 'Azure region for CloudLens:' @(
+            @{ Label = 'Central India (centralindia)'; Value = 'centralindia' }
+            @{ Label = 'South India (southindia)'; Value = 'southindia' }
+            @{ Label = 'Southeast Asia (southeastasia)'; Value = 'southeastasia' }
+            @{ Label = 'West Europe (westeurope)'; Value = 'westeurope' }
+            @{ Label = 'North Europe (northeurope)'; Value = 'northeurope' }
+            @{ Label = 'East US (eastus)'; Value = 'eastus' }
+            @{ Label = 'West US 2 (westus2)'; Value = 'westus2' }
+            @{ Label = 'Australia East (australiaeast)'; Value = 'australiaeast' }
+        )
+    }
+    if (-not $PSBoundParameters.ContainsKey('Size')) {
+        $Size = Select-CloudLensOption 'How large is your Azure estate?' @(
+            @{ Label = 'Small  - up to about 20 subscriptions'; Value = 'small' }
+            @{ Label = 'Medium - up to about 200 subscriptions'; Value = 'medium' }
+            @{ Label = 'Large  - more than 200 subscriptions'; Value = 'large' }
+        ) 2
+    }
+    if (-not $PSBoundParameters.ContainsKey('Scope')) {
+        $Scope = Select-CloudLensOption 'Which subscriptions should CloudLens show?' @(
+            @{ Label = 'Every subscription I can see (new ones appear automatically where possible)'; Value = 'all' }
+            @{ Label = 'Only the subscription hosting CloudLens'; Value = (Invoke-Az @('account', 'show')).id }
+            @{ Label = 'A management group (you will be asked for its ID)'; Value = 'mg' }
+        )
+        if ($Scope -eq 'mg') {
+            $Scope = "/providers/Microsoft.Management/managementGroups/$((Read-Host 'Management group ID').Trim())"
+        }
+    }
+    if (-not $AppIdentityOnly -and -not $RequireDelegatedArm -and -not $LocalSignIn -and -not $EntraClientId) {
+        $mode = Select-CloudLensOption 'How should CloudLens read your Azure data?' @(
+            @{ Label = 'As the app (managed identity): no admin approval; people see subscriptions the app can read and they hold a role on'; Value = 'identity' }
+            @{ Label = 'As each signed-in person: needs a one-time tenant administrator approval, falls back to the app until granted'; Value = 'delegated' }
+        )
+        if ($mode -eq 'identity') { $AppIdentityOnly = [switch]::new($true) }
+    }
+}
+if (-not $Location) { throw '-Location is required when not running in a terminal. Nothing has been changed.' }$PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'  # 2-12, as main.bicep allows
 $SuffixRule = '^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$'  # 1-10
 if ($interactive -and -not $NamePrefix -and -not $NameSuffix) {
     Write-Host "`nResource names: {name}-web-{suffix}, {name}-postgres-{suffix}, and so on."
@@ -371,6 +420,8 @@ if (-not $pending.Count -and -not $unregistrable.Count -and -not $WhatIf) { Info
 
 # ------------------------------------------------------------------ 3. deploy
 Step 'Deploying CloudLens (infra/deploy.ps1)'
+# Pin the hosting subscription again: deploy.ps1 uses the CLI's current one, which another shell can change.
+Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
 $env:CLOUDLENS_INSTALL_START = $started.ToUniversalTime().ToString('o')
 $env:CLOUDLENS_PARENT_STEP = $script:StepNumber
 $deploy = [ordered]@{
