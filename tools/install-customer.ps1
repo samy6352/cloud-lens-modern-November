@@ -122,8 +122,8 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
     $candidates = @(
         Get-ChildItem -LiteralPath $source -Directory -ErrorAction SilentlyContinue |
         Where-Object {
-            Test-Path -LiteralPath (Join-Path $_.FullName 'infra\install.ps1') -PathType Leaf -and
-            Test-Path -LiteralPath (Join-Path $_.FullName 'app\main.py') -PathType Leaf
+            (Test-Path -LiteralPath (Join-Path $_.FullName 'infra\install.ps1') -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName 'app\main.py') -PathType Leaf)
         }
     )
     if ($candidates.Count -eq 1) {
