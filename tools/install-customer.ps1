@@ -318,18 +318,28 @@ try {
     $global:LASTEXITCODE = 0
     $pgSku = if ($Size -eq 'large') { 'Standard_E4ds_v5' } else { 'Standard_D2ds_v5' }
     $planSku = if ($Size -eq 'small') { 'B1' } else { 'B2' }
-    if ($managementGroupId) {
-        & (Join-Path $source 'infra\preflight.ps1') -Location $Location -AiLocation $AiLocation `
-            -ResourceGroup $ResourceGroup -ManagementGroupId $managementGroupId `
-            -PostgresSku $pgSku -AppServicePlanSku $planSku -AppIdentityOnly
-    } else {
-        & (Join-Path $source 'infra\preflight.ps1') -Location $Location -AiLocation $AiLocation `
-            -ResourceGroup $ResourceGroup -CostScopeSubscriptions $costScopeSubscriptions `
-            -PostgresSku $pgSku -AppServicePlanSku $planSku -AppIdentityOnly
+    $preflight = Join-Path $source 'infra\preflight.ps1'
+    $preflightRaw = Get-Content -LiteralPath $preflight -Raw
+    $preflightSupportsAppIdentityOnly = $preflightRaw -match '(?ms)\bAppIdentityOnly\b'
+    $preflightOptions = @{
+        Location = $Location
+        AiLocation = $AiLocation
+        ResourceGroup = $ResourceGroup
+        PostgresSku = $pgSku
+        AppServicePlanSku = $planSku
     }
+    if ($preflightSupportsAppIdentityOnly) { $preflightOptions.AppIdentityOnly = $true }
+    if ($managementGroupId) {
+        $preflightOptions.ManagementGroupId = $managementGroupId
+    } else {
+        $preflightOptions.CostScopeSubscriptions = $costScopeSubscriptions
+    }
+    & $preflight @preflightOptions
     if ($LASTEXITCODE -ne 0) { throw 'Readiness checks reported blockers. Resolve them before installation.' }
     $installerRaw = Get-Content -LiteralPath $installer -Raw
     $installerSupportsAllScope = $installerRaw -match "Kind = 'all'" -or $installerRaw -match "-Scope must be 'all'"
+    $installerSupportsAppIdentityOnly = $installerRaw -match '(?ms)\bAppIdentityOnly\b'
+    $installerSupportsNonInteractive = $installerRaw -match '(?ms)\bNonInteractive\b'
     $effectiveScope = $Scope
     $postInstallExpandAllVisible = $false
     if ($Scope -ieq 'all' -and -not $installerSupportsAllScope) {
@@ -340,9 +350,10 @@ try {
     $options = @{
         Location = $location; AiLocation = $aiLocation; SubscriptionId = $SubscriptionId
         Scope = $effectiveScope; ResourceGroup = $ResourceGroup; EntraAppUniqueName = $ResourceGroup
-        AppIdentityOnly = $true; NonInteractive = $true
         Size = $Size; InitialHistoryMonths = $InitialHistoryMonths
     }
+    if ($installerSupportsAppIdentityOnly) { $options.AppIdentityOnly = $true }
+    if ($installerSupportsNonInteractive) { $options.NonInteractive = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
     if ($NameSuffix) { $options.NameSuffix = $NameSuffix }
     & $installer @options -WhatIf
