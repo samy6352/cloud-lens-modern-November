@@ -421,7 +421,18 @@ if (-not $pending.Count -and -not $unregistrable.Count -and -not $WhatIf) { Info
 # ------------------------------------------------------------------ 3. deploy
 Step 'Deploying CloudLens (infra/deploy.ps1)'
 # Pin the hosting subscription again: deploy.ps1 uses the CLI's current one, which another shell can change.
-Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
+# deploy.ps1 relies on the CLI's current subscription, and the CLI profile is shared with every other shell
+# on this machine: one `az account set` elsewhere silently redirects a long install. Work on a private copy.
+if ((Get-Command az).CommandType -eq 'Application') {
+    $source = if ($env:AZURE_CONFIG_DIR) { $env:AZURE_CONFIG_DIR } else { Join-Path $HOME '.azure' }
+    $private = Join-Path ([IO.Path]::GetTempPath()) "cloudlens-az-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $private | Out-Null
+    Get-ChildItem -LiteralPath $source -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notin 'logs', 'commands', 'telemetry', 'cliextensions' } |
+        Copy-Item -Destination $private -Recurse -Force -ErrorAction SilentlyContinue
+    $env:AZURE_CONFIG_DIR = $private
+    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Remove-Item -LiteralPath $using:private -Recurse -Force -ErrorAction SilentlyContinue } | Out-Null
+}Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
 $env:CLOUDLENS_INSTALL_START = $started.ToUniversalTime().ToString('o')
 $env:CLOUDLENS_PARENT_STEP = $script:StepNumber
 $deploy = [ordered]@{
