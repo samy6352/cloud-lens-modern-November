@@ -513,7 +513,9 @@ if (-not $monitored.Count) {
     } catch {
         Write-Warning "Exports were not all created: $($_.Exception.Message)"
         Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
-        throw
+        # Some subscriptions you cannot grant on are expected when monitoring everything: the app itself is up.
+        if (-not $_.Exception.Data['CloudLensExportResult']) { throw }
+        $exportsPartial = $true
     }
 }
 # deploy.ps1 already waited for readiness; confirm the URL printed below is that same app, so a mix-up can never show as success.
@@ -532,6 +534,7 @@ if ($site) {
     Info "Setup progress: https://$($site.host)/v2/admin/setup"
 }
 Info "Monitoring   : $($target.Path)"
+if ($exportsPartial) { Write-Warning 'Installed, but some subscriptions still need a role grant or export from someone with access there (commands are printed above and on the Setup page). Re-run this installer or infra\add-subscriptions.ps1 afterwards.' }
 Info 'First cost data usually arrives within a few hours; a brand-new export can take up to 24 h.'
 if ($localPassword) {
     Write-Host ''
