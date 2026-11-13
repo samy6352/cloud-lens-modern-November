@@ -213,6 +213,14 @@ type AddResult = {
   onboarding: { onboarding?: string[] } | null;
 };
 
+type ExclusionsResult = {
+  excluded: string[];
+  onboarding?: string[];
+  extending?: string[];
+  skipped?: string;
+  error?: string | null;
+};
+
 const GUID = /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi;
 
 /** Adding a subscription later: the app reports what it can already see and hands back grant commands for the rest. */
@@ -299,6 +307,90 @@ function AddSubscriptions({ onDone }: { onDone: (message: string) => void }) {
   );
 }
 
+function Exclusions({ data, onDone }: { data: SetupProgress; onDone: (message: string) => void }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const excluded = new Set(data.excluded.map((s) => s.id));
+  const all = [...data.subscriptions.map((s) => ({ id: s.id, name: s.name })), ...data.excluded]
+    .reduce<Record<string, { id: string; name: string }>>((acc, row) => {
+      acc[row.id] = row;
+      return acc;
+    }, {});
+  const rows = Object.values(all).sort((a, b) => a.name.localeCompare(b.name));
+  const [included, setIncluded] = useState<string[]>(rows.filter((r) => !excluded.has(r.id)).map((r) => r.id));
+
+  const toggle = (id: string) => {
+    setIncluded((current) => (current.includes(id) ? current.filter((s) => s !== id) : [...current, id]));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    const includedSet = new Set(included);
+    const toExclude = rows.map((r) => r.id).filter((id) => !includedSet.has(id));
+    try {
+      const out = await api<ExclusionsResult>("cost-data/exclusions", undefined, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription_ids: toExclude }),
+      });
+      onDone(
+        out.error
+          ? `Saved exclusions, but the setup check failed: ${out.error}`
+          : out.excluded.length
+            ? `${out.excluded.length} subscription${out.excluded.length === 1 ? " is" : "s are"} excluded from managed sync/export.`
+            : "All visible subscriptions are included for managed sync/export.",
+      );
+    } catch (e) {
+      setError(e instanceof ApiError || e instanceof Error ? e.message : "Saving exclusions failed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="mb-5">
+      <CardHeader
+        title="Subscription inclusion"
+        subtitle="Checked subscriptions are included in managed sync/export. Uncheck any subscription you want CloudLens to skip."
+      />
+      <CardBody>
+        {!rows.length ? (
+          <p className="text-sm text-muted">No visible subscriptions to configure.</p>
+        ) : (
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {rows.map((row) => (
+              <li key={row.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={included.includes(row.id)}
+                    onChange={() => toggle(row.id)}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{row.name}</span>
+                    <span className="block break-all font-mono text-xs text-muted">{row.id}</span>
+                    <span className="block text-xs text-muted">
+                      {included.includes(row.id) ? "Included in sync/export" : "Excluded from sync/export"}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-3 flex items-center gap-3">
+          <Button variant="primary" size="sm" onClick={save} disabled={saving}>
+            Save inclusion
+          </Button>
+          {error && <span className="text-sm text-bad">{error}</span>}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 export function SetupPage() {
   const search = useSearch({ strict: false }) as { scope?: string };
   const me = useQuery(meQuery);
@@ -377,6 +469,16 @@ export function SetupPage() {
               </Link>{" "}
               page.
             </Card>
+          )}
+          {admin && data.enabled && (
+            <Exclusions
+              key={`exclude:${data.subscriptions.map((s) => s.id).join(",")}|${data.excluded.map((s) => s.id).join(",")}`}
+              data={data}
+              onDone={(message) => {
+                setNotice(message);
+                void client.invalidateQueries({ queryKey: ["setup-progress"] });
+              }}
+            />
           )}
           {admin && <Blockers data={data} />}
           {admin && data.enabled && (

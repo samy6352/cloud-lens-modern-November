@@ -43,7 +43,7 @@ try:
 except ImportError:  # pragma: no cover - env vars can always be exported instead
     pass
 
-from . import web_v2
+from . import install_page, web_v2
 from .agent import CostAgent
 from .assets import PrecompressedStatic, stamp_asset_urls
 from .auth import COOKIE, Auth, User
@@ -52,6 +52,7 @@ from .entra import needs_admin_consent as entra_needs_consent
 from .entra import normalise_email as entra_email
 from .entra import sign as entra_sign
 from .job_policy import initial_history_months
+from .release import release_id
 from .snapshot_cache import (
     CacheContext,
     SnapshotCache,
@@ -93,7 +94,7 @@ def _content_security_policy() -> str:
     """
     inline = re.compile(r"<script(?![^>]*\ssrc=)[^>]*>(.*?)</script>", re.S | re.I)
     hashes: set[str] = set()
-    for page in ("login.html", "v2/index.html"):
+    for page in ("login.html", "v2/index.html", "install.html"):
         try:
             body = (WEB / page).read_text(encoding="utf-8")
         except OSError:  # a partial checkout must not stop the app from starting
@@ -932,6 +933,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # Before the app is created: FastAPI instrumentation wraps the class at this point.
 _configure_telemetry()
 app = FastAPI(title="CloudLens", version="1.0.0", lifespan=lifespan)
+app.include_router(install_page.router)
 _instrument_requests(app)
 
 # SSE is already chunked and must not be buffered, so exclude it by minimum size rather than
@@ -948,10 +950,11 @@ def auth_service() -> Auth:
     return _auth
 
 
-# Signing in, the login page itself and the static assets it needs. Everything else — including
-# the app shell — requires a session, so an unauthenticated visitor learns nothing about the
-# estate, not even how many subscriptions there are.
-PUBLIC_PATHS = {"/login", "/healthz", "/readyz", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+# Sign-in and installation material are public, but only at the exact paths listed here.
+# Everything else — including the app shell — requires a session, so an unauthenticated
+# visitor learns nothing about the estate, not even how many subscriptions there are.
+PUBLIC_PATHS = {"/login", "/healthz", "/readyz", "/release.json", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+                "/install", "/install/", "/install/azuredeploy.json", "/install/bootstrap.ps1",
                 # Admin consent has to be reachable by someone who cannot sign in yet — that is
                 # the entire situation it exists to resolve.
                 "/auth/login", "/auth/callback", "/auth/admin-consent"}
@@ -1204,6 +1207,8 @@ class Ask(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     history: list[dict] = Field(default_factory=list, max_length=60)
     scope: list[str] = Field(default_factory=list)
+    days: int = Field(30, ge=1, le=365)
+    currency: str = Field("", pattern=r"^(?:[A-Za-z]{3}|)$", max_length=3)
 
 
 def agent() -> CostAgent:
@@ -1784,6 +1789,15 @@ async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/release.json", include_in_schema=False)
+async def running_release() -> JSONResponse:
+    identity = release_id()
+    return JSONResponse(
+        {"releaseId": identity}, status_code=200 if identity is not None else 503,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/readyz", include_in_schema=False)
 async def readyz(request: Request) -> JSONResponse:
     """Public readiness exposes only availability, never database or tenant details."""
@@ -2021,6 +2035,7 @@ async def ask(body: Ask, request: Request) -> StreamingResponse:
                 # transcripts make the model slower and more expensive.
                 async for event in a.ask(body.question, body.history,
                                          scope=scope, scope_names=names,
+                                         days=body.days, currency=body.currency.upper(),
                                          authorize_budget=lambda target: authorize_budget(
                                              user, target, scope or allowed)):
                     yield event.sse()
@@ -3140,6 +3155,28 @@ async def add_cost_data_subscriptions(body: AddSubscriptionsRequest, request: Re
     if any(s["visible"] for s in plan["subscriptions"]) and bootstrap.enabled() and not read_only_mode():
         plan["onboarding"] = await bootstrap.run_once()
     return JSONResponse(plan)
+
+
+class ExclusionsRequest(BaseModel):
+    subscription_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.post("/api/cost-data/exclusions")
+async def set_cost_data_exclusions(body: ExclusionsRequest, request: Request) -> JSONResponse:
+    """Exclude subscriptions from managed export setup and automatic sync."""
+    from . import bootstrap
+    user = require_admin(request)
+    if not bootstrap.enabled():
+        raise HTTPException(409, f"Managed exports are off on this deployment. The installer sets "
+                                 f"{bootstrap.FLAG}=true; set it and restart to enable them.")
+    try:
+        excluded = await offload(bootstrap.set_excluded_subscriptions, body.subscription_ids,
+                                 getattr(user, "name", None))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    latest = await bootstrap.run_once()
+    latest.pop("excluded", None)  # keep this endpoint's excluded field as canonical ID list
+    return JSONResponse({"excluded": excluded, **latest})
 
 
 @app.get("/api/cost-data/subscriptions")
@@ -4386,6 +4423,27 @@ async def dashboard_advisor(request: Request, category: str = "Cost",
     except Exception as exc:  # noqa: BLE001
         log.warning("advisor tab failed: %s", str(exc)[:200])
         return JSONResponse({"error": str(exc)[:300], "recommendations": []}, status_code=502)
+
+
+@app.get("/api/dashboard/advisor-score")
+async def dashboard_advisor_score(request: Request, scope: str = "") -> JSONResponse:
+    from .advisor_score import advisor_scores
+    from .cost import CostError
+
+    user = current_user(request)
+    allowed = await permitted(user)
+    picked = selected_scope(scope.split(","), allowed)
+    try:
+        async with as_user(user):
+            result = await advisor_scores(subscription_ids=picked)
+        failed = result["subscriptions"] and all(
+            row["status"] == "error" for row in result["subscriptions"])
+        return JSONResponse(result, status_code=502 if failed else 200)
+    except ValueError as exc:
+        raise HTTPException(400, "Advisor Score scope must contain subscription IDs.") from exc
+    except CostError as exc:
+        log.warning("Advisor Score discovery failed: %s", str(exc)[:200])
+        raise HTTPException(502, str(exc)[:300]) from exc
 
 
 @app.get("/api/dashboard/governance")

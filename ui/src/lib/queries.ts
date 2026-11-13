@@ -192,6 +192,7 @@ export interface SetupBlocker {
 export interface SetupProgress {
   enabled: boolean;
   months: string[];
+  excluded: Array<{ id: string; name: string }>;
   subscriptions: Array<{
     id: string;
     name: string;

@@ -5,11 +5,34 @@
 CloudLens brings your Azure costs, resources and savings opportunities into one dashboard.
 You can explore spending, compare periods, download reports and ask the AI analyst for help.
 
+**Advisor Score** in Optimize shows Azure's latest scores for Cost, Security,
+Reliability, Operational Excellence and Performance, with a compact summary on
+Overview. Multiple-subscription summaries are CloudLens unweighted averages of
+available scores, not an official Azure aggregate. Missing/denied scores are
+shown explicitly and excluded from averages. These live scores respect the
+selected subscriptions but do not follow the billing date or currency filters.
+
+**Analyst** applies the selected reporting period to warehouse queries. Supported
+monetary tools and charts can use the requested display currency, preserving
+native amounts and named FX rate/date provenance. Missing rates, unknown
+currencies and unsupported monetary expressions are reported per tool rather
+than silently converted or shown as zero. Each answer reports its actual
+conversion status; live tools retain their stated observation windows.
+
 CloudLens runs in **your Azure subscription**. Installing it creates Azure services that
 incur charges, including a web app, database, private storage and an AI service.
 
 [Full documentation](Cloudlens-Documentation.Md) |
 [Detailed deployment guide](infra/README.md)
+
+For a new customer deployment, start with the
+[customer deployment and IAM handoff runbook](infra/CUSTOMER-DEPLOYMENT.md).
+The versioned bootstrap requires an explicit hosting subscription and new dedicated
+resource group, runs preflight/preview, and asks for target-specific approval.
+Existing targets require intentional resume; a new download folder is not a new Azure stack.
+
+For EastWest Bank, use the [guided customer installer](infra/EWB-INSTALL.md).
+The customer supplies the subscription ID; no customer credentials are embedded.
 
 For local engineering/recovery rehearsals, use the
 [explicit, read-only-by-default launcher](infra/README.md#reproducible-local-startup).
@@ -35,6 +58,42 @@ recommended Bicep/PowerShell installer. Do not use them to replace an existing d
 For upgrades or an existing sign-in registration, use the [deployment guide](infra/README.md).
 
 ## Install CloudLens
+
+### Public installation page
+
+Open **`/install`** (or `/install/`) on a CloudLens host. This page needs no CloudLens
+password; **`/`**, **`/v2/`** and data/API routes remain protected. The page has a
+dashboard sign-in link and two clearly separated installation paths:
+
+- **Deploy to Azure** opens the Azure portal using an encoded, absolute template URL
+  from the browser's current origin. The host must be publicly reachable over HTTPS;
+  Azure signs the customer into their own account. The subscription-scope template
+  creates **infrastructure only**: it does not publish application code or finish
+  sign-in/access setup. PowerShell is still needed to complete installation. If
+  finishing a portal-created target, use the same parameters and explicit `-Resume`.
+- **PowerShell** offers the reviewed bootstrap and copyable commands. **GitHub release
+  `v2026.11.12-rc5` is not published**: the default GitHub download cannot complete
+  until its source ZIP and `SHA256SUMS.txt` are published and accessible. The page
+  states this limitation; copying commands is not a successful installation.
+  An approved offline source ZIP can instead be supplied with a separately verified
+  `-SourceSha256`; never bypass integrity verification.
+
+Only `/install/azuredeploy.json` and `/install/bootstrap.ps1` are public installation
+downloads; no infrastructure directory, customer parameters or runtime configuration
+is exposed. The bootstrap is a generated copy of `tools/install-customer.ps1`, refreshed
+by `tools/package.ps1` for both runtime and installer-source ZIPs. JSON/PowerShell
+packaging exceptions are restricted to those two exact files.
+
+After changing Bicep, regenerate the **committed, generated** public ARM template:
+
+```powershell
+az bicep build --file .\infra\main.bicep --outfile .\web\install\azuredeploy.json
+Copy-Item .\tools\install-customer.ps1 .\web\install\bootstrap.ps1
+```
+
+The page is self-contained with no CDN assets; the existing CSP hashes its inline
+scripts alongside the login/dashboard scripts, without adding `unsafe-inline` script
+permission. Do not turn `/install/` into a public prefix or mount a public directory.
 
 ### 1. Install three tools
 
@@ -274,6 +333,9 @@ An administrator can add subscriptions to cost analysis at any time, without red
 
 - **In the app:** Setup page → *Add subscriptions*. Paste the IDs. CloudLens checks which it can
   already read and sets those up; for the rest it shows the exact grant commands.
+- **In the app (optional):** Setup page → *Subscription inclusion*. Subscriptions are checked by
+  default; uncheck any subscription you do not want CloudLens to auto-configure or auto-sync.
+  Re-check it any time; the next check resumes managed setup.
 - **By script:** `.\infra\add-subscriptions.ps1 -ResourceGroup <rg> -SubscriptionId '<sub-a>','<sub-b>'`
   grants the app's managed identity Reader, Cost Management Reader and Cost Management
   Contributor (the last lets it create exports; skip it with `-ReadOnlyCostAccess`), then

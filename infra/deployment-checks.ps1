@@ -47,6 +47,7 @@ function Get-CloudLensModelQuota($Models, $Usages, [string]$ModelName, [string]$
 function Wait-CloudLensApplication {
     param(
         [Parameter(Mandatory)][string]$BaseUrl,
+        [string]$ExpectedReleaseId = '',
         [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600,
         [ValidateRange(1, 120)][int]$Attempts = 40
     )
@@ -57,7 +58,14 @@ function Wait-CloudLensApplication {
         if ($remaining -le 0) { break }
         try {
             $readiness = Invoke-RestMethod -Uri "$BaseUrl/readyz" -TimeoutSec ([math]::Min(20, $remaining))
-            if ($readiness.status -eq 'ready') { $ready = $true; break }
+            if ($readiness.status -eq 'ready') {
+                if ($ExpectedReleaseId) {
+                    $release = Invoke-RestMethod -Uri "$BaseUrl/release.json" -TimeoutSec ([math]::Min(20, $remaining))
+                    if ($release.releaseId -cne $ExpectedReleaseId) {
+                        Write-Verbose 'The running process has not activated the expected release.'
+                    } else { $ready = $true; break }
+                } else { $ready = $true; break }
+            }
         } catch {
             Write-Verbose "Readiness check $attempt failed: $($_.Exception.Message)"
             if ($attempt % 3 -eq 1) { Write-Host ("    waiting for the app to start (check {0}; the first start can take a few minutes)" -f $attempt) }
@@ -68,7 +76,7 @@ function Wait-CloudLensApplication {
         }
     }
     if (-not $ready) {
-        throw "The app did not become ready within $TimeoutSeconds seconds. Check application startup and PostgreSQL connectivity/schema."
+        throw "The app did not become ready with the expected running release within $TimeoutSeconds seconds. Check application startup, release activation and PostgreSQL connectivity/schema."
     }
 
     # Do not follow a login redirect and mistake its 200 response for anonymous access.
@@ -87,6 +95,31 @@ function Wait-CloudLensApplication {
 function Get-CloudLensScmHost([string]$WebAppUrl) {
     <# The Kudu host: first DNS label + ".scm." -- also right for regional default hostnames. #>
     return ([uri]$WebAppUrl).Host -replace '^([^.]+)\.', '$1.scm.'
+}
+
+function Publish-CloudLensPackage {
+    param(
+        [Parameter(Mandatory)][string]$ScmHost,
+        [Parameter(Mandatory)][string]$PackagePath
+    )
+    $token = az account get-access-token --resource 'https://management.core.windows.net/' `
+        --query accessToken -o tsv --only-show-errors
+    if ($LASTEXITCODE -ne 0 -or -not $token) { throw 'Could not obtain an ARM token for package publication.' }
+    $deployer = "cloudlens-$([guid]::NewGuid().ToString('N'))"
+    $headers = @{ Authorization = "Bearer $token" }
+    try {
+        $response = Invoke-WebRequest -Method Post `
+            -Uri "https://$ScmHost/api/zipdeploy?isAsync=true&deployer=$deployer" `
+            -Headers $headers -ContentType 'application/zip' -InFile $PackagePath `
+            -MaximumRedirection 0 -TimeoutSec 600
+        $location = [string](@($response.Headers.Location)[0])
+        $receipt = [uri]::new([uri]"https://$ScmHost", $location)
+        if ($response.StatusCode -ne 202 -or -not $location -or $receipt.Scheme -ne 'https' -or
+            $receipt.Host -ine $ScmHost -or -not $receipt.AbsolutePath.StartsWith('/api/deployments/')) {
+            throw 'Upload did not return a valid same-site deployment receipt. Publication state is unknown; inspect SCM before retrying.'
+        }
+        return [pscustomobject]@{ ReceiptUrl = $receipt.AbsoluteUri; Deployer = $deployer }
+    } finally { $token = $null; $headers.Clear() }
 }
 
 function Get-CloudLensNewestDeployment([string]$ScmHost) {
@@ -108,22 +141,45 @@ function Wait-CloudLensDeployment {
         The first Python build on a small plan takes longer than the publish gateway waits, so a
         synchronous `az webapp deploy` reports "504 GatewayTimeout" for a deployment that goes on
         to succeed (measured: B1, build 8 min, 30 Sep 2026). A timeout is an unknown state, not a
-        failure. This polls the deployment record newer than -Previous until it succeeds (status 4)
-        or fails (status 3). No new record within -AppearSeconds means the upload never landed.
+        failure. This follows the upload's receipt, accepts only its unique deployer correlation,
+        then binds the actual deployment ID until success (status 4) or failure (status 3).
+        Unreadable/unmatched receipts remain unknown states, never another release's success.
     #>
     param(
         [Parameter(Mandatory)][string]$ScmHost,
-        [string]$Previous = '',
+        [Parameter(Mandatory)][string]$ReceiptUrl,
+        [Parameter(Mandatory)][string]$Deployer,
         [ValidateRange(10, 7200)][int]$TimeoutSeconds = 1800,
         [ValidateRange(10, 3600)][int]$AppearSeconds = 300,
+        [ValidateRange(1, 1000)][int]$MaxAttempts = 180,
         [ValidateRange(1, 120)][int]$PollSeconds = 20
     )
     $started = [DateTime]::UtcNow
     $deadline = $started.AddSeconds($TimeoutSeconds)
     $seen = $null
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $latest = Get-CloudLensNewestDeployment $ScmHost
-        if ($latest -and $latest.id -ne $Previous) {
+    $deploymentId = ''
+    $receipt = [uri]$ReceiptUrl
+    if ($receipt.Scheme -ne 'https' -or $receipt.Host -ine $ScmHost -or
+        -not $receipt.AbsolutePath.StartsWith('/api/deployments/') -or $Deployer -notmatch '^cloudlens-[a-f0-9]{32}$') {
+        throw 'Invalid upload receipt or deployment correlation.'
+    }
+    for ($attempt = 0; $attempt -lt $MaxAttempts -and [DateTime]::UtcNow -lt $deadline; $attempt++) {
+        $url = if ($deploymentId) { "https://$ScmHost/api/deployments/$deploymentId" } else { $ReceiptUrl }
+        # Windows az.cmd can split the receipt's &time= query before reaching --resource.
+        # Keep the opaque receipt intact by sending it through PowerShell's HTTP client.
+        $token = az account get-access-token --resource 'https://management.core.windows.net/' `
+            --query accessToken -o tsv --only-show-errors
+        if ($LASTEXITCODE -ne 0 -or -not $token) { throw 'Could not obtain an ARM token for deployment polling.' }
+        $headers = @{ Authorization = "Bearer $token" }
+        try {
+            $latest = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 60
+        } catch {
+            throw "Cannot read this upload's receipt. Publication state is unknown; inspect $url before retrying. $($_.Exception.Message)"
+        } finally { $token = $null; $headers.Clear() }
+        if ($latest -and $latest.deployer -ceq $Deployer -and $latest.id -match '^[A-Za-z0-9_-]+$' -and
+            -not ([string]$latest.id).StartsWith('temp-')) {
+            if ($deploymentId -and $latest.id -cne $deploymentId) { throw 'SCM returned a different deployment ID; refusing to infer success.' }
+            $deploymentId = [string]$latest.id
             $seen = $latest
             if ([int]$latest.status -eq 4 -and $latest.complete) { return $latest }
             if ([int]$latest.status -eq 3) {
@@ -131,7 +187,7 @@ function Wait-CloudLensDeployment {
             }
             Write-Host ("    [{0:00}:{1:00}] building     : status {2} {3}" -f [int][math]::Floor(([DateTime]::UtcNow - $started).TotalMinutes), ([DateTime]::UtcNow - $started).Seconds, $latest.status, $latest.progress)
         } elseif (([DateTime]::UtcNow - $started).TotalSeconds -gt $AppearSeconds) {
-            throw "No new App Service deployment appeared within $AppearSeconds seconds; the upload did not land."
+            throw "This upload's correlated deployment did not appear within $AppearSeconds seconds; publication state is unknown."
         }
         Start-Sleep -Seconds $PollSeconds
     }

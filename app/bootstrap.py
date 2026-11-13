@@ -51,6 +51,7 @@ FLAG = "CLOUDLENS_MANAGED_EXPORTS"
 STATUS_KEY = "bootstrap:status"
 LEASE_KEY = "bootstrap:lease"
 HISTORY_KEY = "bootstrap:history_months"
+EXCLUDED_KEY = "bootstrap:excluded_subscriptions"
 LEASE_SECONDS = 900
 EXPECTATION = ("First data usually arrives within a few hours. Azure can take up to 24 hours to start "
                "a brand-new export, and each month of history is a separate run.")
@@ -110,6 +111,65 @@ def set_history_months(months: int, by: str | None = None) -> int:
     with jobs.transaction() as con:
         jobs._put(con, HISTORY_KEY, {"months": months, "by": by, "at": jobs.now()})
     return months
+
+
+def excluded_subscriptions() -> list[str]:
+    """Subscriptions intentionally excluded from managed export setup and sync."""
+    from .warehouse import warehouse
+
+    try:
+        saved = json.loads(warehouse.get_meta(EXCLUDED_KEY) or "{}")
+    except (TypeError, ValueError, AttributeError):
+        return []
+    rows = saved.get("subscriptions")
+    if not isinstance(rows, list):
+        return []
+    unique: list[str] = []
+    for value in rows:
+        sid = str(value).strip().lower()
+        if _GUID.match(sid) and sid not in unique:
+            unique.append(sid)
+    return unique
+
+
+def set_excluded_subscriptions(subscription_ids: list[str], by: str | None = None) -> list[str]:
+    """Persist exclusions and immediately stop managed polling for those subscriptions."""
+    require_writable()
+    unique: list[str] = []
+    for value in subscription_ids:
+        sid = str(value).strip().lower()
+        if not _GUID.match(sid):
+            raise ValueError(f"Invalid subscription id: {value}")
+        if sid not in unique:
+            unique.append(sid)
+    if len(unique) > 500:
+        raise ValueError("Choose at most 500 excluded subscriptions.")
+    excluded_set = set(unique)
+    with jobs.transaction() as con:
+        jobs._put(con, EXCLUDED_KEY, {"subscriptions": unique, "by": by, "at": jobs.now()})
+        for sid in unique:
+            key = "focus-daily:" + sid
+            config = jobs._read(con, key) or {}
+            if not config:
+                continue
+            config.update(
+                enabled=False,
+                next_check=None,
+                setup_job=None,
+                detail="Excluded from managed sync by an administrator.",
+                excluded=True,
+            )
+            jobs._put(con, key, config)
+        # Remove stale exclusion marker from subscriptions re-enabled by list changes.
+        for (key,) in con.execute("SELECT key FROM meta WHERE key LIKE 'focus-daily:%'").fetchall():
+            sid = key.split("focus-daily:", 1)[-1].lower()
+            if sid in excluded_set:
+                continue
+            config = jobs._read(con, key) or {}
+            if config.get("excluded"):
+                config.pop("excluded", None)
+                jobs._put(con, key, config)
+    return unique
 
 
 def _assignee() -> str:
@@ -285,19 +345,24 @@ async def run_once() -> dict[str, Any]:
     result: dict[str, Any] = {"enabled": True, "checked_at": started, "error": None}
     try:
         await focus_workflow.recover()
-        subs = [{"id": s["id"].lower(), "name": s.get("name") or s["id"]}
-                for s in (await cost.list_subscriptions())["subscriptions"]]
+        listed = [{"id": s["id"].lower(), "name": s.get("name") or s["id"]}
+                  for s in (await cost.list_subscriptions())["subscriptions"]]
+        excluded = set(excluded_subscriptions())
+        excluded_rows = [s for s in listed if s["id"] in excluded]
+        subs = [s for s in listed if s["id"] not in excluded]
         pending = await asyncio.to_thread(jobs.listing, None, active_only=True, limit=500)
         busy = {sub for job in pending for sub in job["scope"]}
         configs = {s["id"]: await asyncio.to_thread(cost_data.read, s["id"]) for s in subs}
-        managed = [s for s in subs if configs[s["id"]].get("version") == 2]
-        unmanaged = [s for s in subs if configs[s["id"]].get("version") != 2 and s["id"] not in busy]
+        managed = [s for s in subs if configs[s["id"]].get("version") == 2 and
+                   (configs[s["id"]].get("enabled") or configs[s["id"]].get("setup_job"))]
+        unmanaged = [s for s in subs if s["id"] not in busy and s not in managed]
         months = await asyncio.to_thread(history_months)
         lo, hi, _ = cost_data.managed_history(months=months)
         result.update(subscriptions=len(subs), managed=len(managed), history={"from": lo, "to": hi},
                       history_months=months, onboarding=[], job_id=None, blockers={},
                       deployment_blockers=[], in_progress=sorted(busy & {s["id"] for s in subs}),
-                      resumed=[], extending=[], history_jobs=[], history_waiting=[])
+                      resumed=[], extending=[], history_jobs=[], history_waiting=[],
+                      excluded=excluded_rows)
         # Subscriptions whose setup stopped at "configure" -- almost always an export that only
         # an operator can create. Show the command, and resume the job on every pass so setup
         # continues by itself once the export exists.
@@ -448,6 +513,10 @@ def progress(subscriptions: list[dict], *, admin: bool = False) -> dict[str, Any
     from .warehouse import warehouse
 
     saved = status()
+    excluded_set = set(excluded_subscriptions())
+    excluded_rows = [{"id": sub["id"].lower(), "name": sub.get("name") or sub["id"]}
+                     for sub in subscriptions if sub["id"].lower() in excluded_set]
+    subscriptions = [sub for sub in subscriptions if sub["id"].lower() not in excluded_set]
     chosen = history_months()
     today = datetime.now(UTC).date()
     lo, hi, _ = cost_data.managed_history(today, chosen)
@@ -500,6 +569,7 @@ def progress(subscriptions: list[dict], *, admin: bool = False) -> dict[str, Any
         "checked_at": saved.get("checked_at"), "error": saved.get("error") if admin else None,
         "deployment_blockers": saved.get("deployment_blockers", []) if admin else [],
         "concurrency": focus_workflow.export_concurrency(),
+        "excluded": excluded_rows,
         "states": {
             "queued": "Waiting for a free export slot",
             "running": "Azure is generating this month",
