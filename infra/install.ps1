@@ -509,7 +509,14 @@ if (-not $monitored.Count) {
     try {
         $exportResult = & (Join-Path (Join-Path $root 'infra') 'focus-exports.ps1') -ResourceGroup $ResourceGroup `
             -WebAppName $site.name -Subscriptions $monitored -HostingSubscriptionId $hosting -Paused
-        if ($exportResult.status -ne 'complete') { throw 'FOCUS provisioning did not return a complete result.' }
+        if ($null -eq $exportResult) {
+            throw 'FOCUS provisioning returned no result.'
+        }
+        if ($exportResult.status -ne 'complete') {
+            Write-Warning "Exports were not all created (status: $($exportResult.status))."
+            Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
+            $exportsPartial = $true
+        }
     } catch {
         Write-Warning "Exports were not all created: $($_.Exception.Message)"
         Write-Warning 'CloudLens shows the exact command per subscription on its Setup progress page.'
