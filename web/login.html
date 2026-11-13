@@ -231,6 +231,8 @@
 
     // Entra hands failures back through ?error=, e.g. when someone declines consent or the
     // tenant requires an administrator to approve the app first.
+    const consentBlocked = params.get("consent") === "1";
+    let consentStillNeeded = false;
     if (params.get("error")) {
       fail(params.get("error"));
 
@@ -238,7 +240,7 @@
       // It points at our own endpoint rather than carrying the Entra URL in the query string:
       // a consent link is exactly the sort of thing worth phishing with, and a page that will
       // render any URL handed to it is an open invitation to try.
-      if (params.get("consent") === "1") {
+      if (consentBlocked) {
         const help = document.createElement("p");
         help.className = "fineprint";
         help.append("Send this to an administrator of your directory: ");
@@ -279,7 +281,8 @@
         // its first user to hit a refusal in order to discover the step that was left out.
         // Suppressed when an error is already on screen: that path offers the same link with
         // more specific wording, and two consent links would read as two different problems.
-        if (me.consent_needed && !params.get("error")) $("setup").hidden = false;
+        consentStillNeeded = Boolean(me.consent_needed);
+        if (consentStillNeeded) $("setup").hidden = false;
 
         if (sso) {
           const btn = $("ssoBtn");
@@ -361,6 +364,9 @@
       $("authOr").hidden = false;
       fail("Could not check how this server signs people in. Try again, or use a local account.");
     }
+
+    // Only show setup guidance when this step is genuinely still missing.
+    if (!consentStillNeeded) $("setup").hidden = true;
 
     // -- email first: no request of ours, just a better-aimed trip to Microsoft
     emailForm.addEventListener("submit", (event) => {
