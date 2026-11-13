@@ -320,7 +320,7 @@ try {
     $planSku = if ($Size -eq 'small') { 'B1' } else { 'B2' }
     $preflight = Join-Path $source 'infra\preflight.ps1'
     $preflightRaw = Get-Content -LiteralPath $preflight -Raw
-    $preflightSupportsAppIdentityOnly = $preflightRaw -match '(?ms)\bAppIdentityOnly\b'
+    $preflightSupportsAppIdentityOnly = $preflightRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
     $preflightOptions = @{
         Location = $Location
         AiLocation = $AiLocation
@@ -338,8 +338,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Readiness checks reported blockers. Resolve them before installation.' }
     $installerRaw = Get-Content -LiteralPath $installer -Raw
     $installerSupportsAllScope = $installerRaw -match "Kind = 'all'" -or $installerRaw -match "-Scope must be 'all'"
-    $installerSupportsAppIdentityOnly = $installerRaw -match '(?ms)\bAppIdentityOnly\b'
-    $installerSupportsNonInteractive = $installerRaw -match '(?ms)\bNonInteractive\b'
+    $installerSupportsAppIdentityOnly = $installerRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
+    $installerSupportsNonInteractive = $installerRaw -match '(?m)^\s*\[switch\]\s*\$NonInteractive\b'
     $effectiveScope = $Scope
     $postInstallExpandAllVisible = $false
     if ($Scope -ieq 'all' -and -not $installerSupportsAllScope) {
