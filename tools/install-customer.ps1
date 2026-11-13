@@ -337,8 +337,10 @@ try {
     & $preflight @preflightOptions
     if ($LASTEXITCODE -ne 0) { throw 'Readiness checks reported blockers. Resolve them before installation.' }
     $installerRaw = Get-Content -LiteralPath $installer -Raw
+    $deployRaw = Get-Content -LiteralPath (Join-Path $source 'infra\deploy.ps1') -Raw
     $installerSupportsAllScope = $installerRaw -match "Kind = 'all'" -or $installerRaw -match "-Scope must be 'all'"
     $installerSupportsAppIdentityOnly = $installerRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
+    $deploySupportsAppIdentityOnly = $deployRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
     $installerSupportsNonInteractive = $installerRaw -match '(?m)^\s*\[switch\]\s*\$NonInteractive\b'
     $effectiveScope = $Scope
     $postInstallExpandAllVisible = $false
@@ -352,7 +354,11 @@ try {
         Scope = $effectiveScope; ResourceGroup = $ResourceGroup; EntraAppUniqueName = $ResourceGroup
         Size = $Size; InitialHistoryMonths = $InitialHistoryMonths
     }
-    if ($installerSupportsAppIdentityOnly) { $options.AppIdentityOnly = $true }
+    if ($installerSupportsAppIdentityOnly -and $deploySupportsAppIdentityOnly) {
+        $options.AppIdentityOnly = $true
+    } elseif ($installerSupportsAppIdentityOnly -or $deploySupportsAppIdentityOnly) {
+        Write-Warning 'This installer release has partial AppIdentityOnly support; continuing without that switch for compatibility.'
+    }
     if ($installerSupportsNonInteractive) { $options.NonInteractive = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
     if ($NameSuffix) { $options.NameSuffix = $NameSuffix }
