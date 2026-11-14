@@ -17,5 +17,6 @@
     "types": ["vite/client"],
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/lib/*-native.test.ts"]
 }

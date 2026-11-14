@@ -92,6 +92,8 @@ const commitmentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/
   component: lazyRouteComponent(() => import("./routes/Commitments"), "CommitmentsPage") });
 const performanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/performance",
   component: lazyRouteComponent(() => import("./routes/Performance"), "PerformancePage") });
+const advisorScoreRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/advisor-score",
+  component: lazyRouteComponent(() => import("./routes/AdvisorScore"), "AdvisorScorePage") });
 const budgetsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/budgets",
   component: lazyRouteComponent(() => import("./routes/Budgets"), "BudgetsPage") });
 const governanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/governance",
@@ -113,7 +115,7 @@ const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/
 
 const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute,
   tagsRoute, uptimeRoute, historyRoute, setupRoute, aiBillingRoute, savingsRoute, commitmentsRoute,
-  performanceRoute, budgetsRoute, governanceRoute, esuRoute, retirementsRoute, changesRoute,
+  performanceRoute, advisorScoreRoute, budgetsRoute, governanceRoute, esuRoute, retirementsRoute, changesRoute,
   updatesRoute, reportsRoute, costDataRoute, auditRoute, classicRoute]);
 
 export function makeRouter(queryClient: QueryClient) {
