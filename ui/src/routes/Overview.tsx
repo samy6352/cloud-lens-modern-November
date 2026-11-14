@@ -17,6 +17,7 @@ import { formatRange, periodParam, validRange } from "@/lib/period";
 import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked, type Scope } from "@/lib/queries";
 import { DayContributorsPanel, dayLabel } from "@/components/DayContributors";
 import { ChangeBridge, MonthOverMonth } from "@/components/SpendPatterns";
+import { AdvisorScorePanel } from "@/components/AdvisorScore";
 
 /** A mixed-currency estate has no honest single total, so the page shows one currency at a time. */
 function useCurrencyViews(views: ExecutiveView[]) {
@@ -527,6 +528,7 @@ export function OverviewPage() {
         }
       />
       {query.data?.notice && <p className="mb-2 text-xs text-muted">{query.data.notice}</p>}
+      <AdvisorScorePanel />
 
       <SummaryBar view={view} money={(v) => money(v)} numbers={numbers} loading={loading} />
       {view && ordered.length > 1 && <p className="mt-1 text-right text-[11px] text-muted">One currency at a time. Totals are never combined or converted.</p>}
