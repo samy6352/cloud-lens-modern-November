@@ -53,6 +53,41 @@ authenticate `Invoke-WebRequest`. Do not embed a token in the one-liner. In that
 case, obtain the source ZIP through the customer's approved authenticated download
 process and use the extracted installer instead.
 
+### Azure Portal Cloud Shell (Azure CLI) path
+
+For customers who prefer Azure Portal, the same bootstrap can be run from
+Cloud Shell (Bash) with Azure CLI plus `pwsh`. Replace placeholders before
+running and use a new dedicated resource group:
+
+```bash
+set -euo pipefail
+
+VERSION="2026.11.12-rc5"
+TENANT_ID="<customer-tenant-id>"
+SUBSCRIPTION_ID="<hosting-subscription-id>"
+RESOURCE_GROUP="<new-dedicated-resource-group>"
+APP_REGION="<approved-app-region>"
+AI_REGION="<approved-ai-region>"
+
+az login --tenant "$TENANT_ID" --only-show-errors >/dev/null
+az account set --subscription "$SUBSCRIPTION_ID"
+
+TMP_DIR="$(mktemp -d)"
+SCRIPT_PATH="$TMP_DIR/install-customer.ps1"
+curl -fsSL "https://raw.githubusercontent.com/samy6352/cloud-lens-modern-November/v${VERSION}/tools/install-customer.ps1" -o "$SCRIPT_PATH"
+
+pwsh -NoLogo -NoProfile -File "$SCRIPT_PATH" \
+  -Version "$VERSION" \
+  -SubscriptionId "$SUBSCRIPTION_ID" \
+  -ResourceGroup "$RESOURCE_GROUP" \
+  -Location "$APP_REGION" \
+  -AiLocation "$AI_REGION" \
+  -Size medium \
+  -InitialHistoryMonths 1
+```
+
+Add `-Approve` only for explicitly approved non-interactive runs.
+
 Maintainers must update the bootstrap's default `Version` and these versioned
 examples before creating a new release tag; the release workflow rejects a tag
 whose version differs from the tagged bootstrap default. The release assets are
