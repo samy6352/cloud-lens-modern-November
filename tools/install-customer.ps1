@@ -23,6 +23,14 @@ param(
     [int]$InitialHistoryMonths = 1,
     [string]$NamePrefix = '',
     [string]$NameSuffix = '',
+    # Existing single-tenant Entra app registration client ID to reuse for sign-in.
+    [string]$EntraClientId = '',
+    # Sign-in bootstrap choice for deployment.
+    [ValidateSet('precreated', 'create-during-deploy')]
+    [string]$SignInAppMode = '',
+    # Runtime Azure access mode choice for deployment.
+    [ValidateSet('managed-identity', 'delegated-user')]
+    [string]$RuntimeAccessMode = '',
     # Approved offline download or unpublished release rehearsal; hash must be supplied separately.
     [string]$SourceZip = '',
     [string]$SourceSha256 = '',
@@ -36,6 +44,9 @@ if ($SourceZip -and $SourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
     throw '-SourceZip requires the separately supplied -SourceSha256 (64 hexadecimal characters).'
 }
 if ($SourceSha256 -and -not $SourceZip) { throw '-SourceSha256 requires -SourceZip.' }
+if ($EntraClientId -and $EntraClientId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+    throw '-EntraClientId must be a GUID.'
+}
 if (-not $Destination) {
     $Destination = Join-Path $HOME ("CloudLens\{0}-{1}" -f $Version, [guid]::NewGuid().ToString('N'))
 }
@@ -243,6 +254,33 @@ try {
             throw 'Use an approved Azure region code such as southeastasia. Installation stopped.'
         }
     }
+    if (-not $RuntimeAccessMode -and $interactive) {
+        $RuntimeAccessMode = Select-InstallOption 'Select Azure runtime access mode:' @(
+            @{ Label = 'Managed identity only (no delegated admin-consent requirement)'; Value = 'managed-identity' }
+            @{ Label = 'Delegated user access (requires delegated ARM consent)'; Value = 'delegated-user' }
+        ) 1
+    }
+    if (-not $SignInAppMode -and $interactive) {
+        $SignInAppMode = Select-InstallOption 'Select sign-in app bootstrap mode:' @(
+            @{ Label = 'Use pre-created Entra app client ID (recommended for restricted tenants)'; Value = 'precreated' }
+            @{ Label = 'Create sign-in app during deployment (needs Graph app-registration privileges)'; Value = 'create-during-deploy' }
+        ) $(if ($EntraClientId) { 1 } else { 2 })
+    }
+    if (-not $SignInAppMode) {
+        $SignInAppMode = if ($EntraClientId) { 'precreated' } else { 'create-during-deploy' }
+    }
+    if (-not $RuntimeAccessMode) { $RuntimeAccessMode = 'managed-identity' }
+    if ($SignInAppMode -eq 'precreated' -and -not $EntraClientId) {
+        if ($interactive) {
+            $EntraClientId = (Read-Host 'Pre-created Entra app client ID (GUID)').Trim()
+        }
+    }
+    if ($SignInAppMode -eq 'precreated' -and ($EntraClientId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')) {
+        throw "Sign-in app mode '$SignInAppMode' requires -EntraClientId (GUID)."
+    }
+    if ($SignInAppMode -eq 'create-during-deploy' -and $EntraClientId) {
+        throw "Sign-in app mode '$SignInAppMode' cannot be combined with -EntraClientId. Choose -SignInAppMode precreated to reuse an app."
+    }
     if (-not $PSBoundParameters.ContainsKey('Scope') -and $interactive) {
         $scopeChoice = Select-InstallOption 'Select monitoring scope:' @(
             @{ Label = 'All enabled subscriptions I can see in this tenant'; Value = 'all' }
@@ -328,7 +366,9 @@ try {
         PostgresSku = $pgSku
         AppServicePlanSku = $planSku
     }
-    if ($preflightSupportsAppIdentityOnly) { $preflightOptions.AppIdentityOnly = $true }
+    if ($preflightSupportsAppIdentityOnly -and $RuntimeAccessMode -eq 'managed-identity') {
+        $preflightOptions.AppIdentityOnly = $true
+    }
     if ($managementGroupId) {
         $preflightOptions.ManagementGroupId = $managementGroupId
     } else {
@@ -340,6 +380,8 @@ try {
     $deployRaw = Get-Content -LiteralPath (Join-Path $source 'infra\deploy.ps1') -Raw
     $installerSupportsAllScope = $installerRaw -match "Kind = 'all'" -or $installerRaw -match "-Scope must be 'all'"
     $installerSupportsAppIdentityOnly = $installerRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
+    $installerSupportsRequireDelegatedArm = $installerRaw -match '(?m)^\s*\[switch\]\s*\$RequireDelegatedArm\b'
+    $installerSupportsEntraClientId = $installerRaw -match '(?m)^\s*\[string\]\s*\$EntraClientId\b'
     $deploySupportsAppIdentityOnly = $deployRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
     $installerSupportsNonInteractive = $installerRaw -match '(?m)^\s*\[switch\]\s*\$NonInteractive\b'
     $effectiveScope = $Scope
@@ -354,10 +396,26 @@ try {
         Scope = $effectiveScope; ResourceGroup = $ResourceGroup; EntraAppUniqueName = $ResourceGroup
         Size = $Size; InitialHistoryMonths = $InitialHistoryMonths
     }
-    if ($installerSupportsAppIdentityOnly -and $deploySupportsAppIdentityOnly) {
-        $options.AppIdentityOnly = $true
-    } elseif ($installerSupportsAppIdentityOnly -or $deploySupportsAppIdentityOnly) {
-        Write-Warning 'This installer release has partial AppIdentityOnly support; continuing without that switch for compatibility.'
+    if ($RuntimeAccessMode -eq 'managed-identity') {
+        if ($installerSupportsAppIdentityOnly -and $deploySupportsAppIdentityOnly) {
+            $options.AppIdentityOnly = $true
+        } elseif ($installerSupportsAppIdentityOnly -or $deploySupportsAppIdentityOnly) {
+            Write-Warning 'This installer release has partial AppIdentityOnly support; continuing without that switch for compatibility.'
+        }
+    } elseif ($RuntimeAccessMode -eq 'delegated-user') {
+        if ($installerSupportsRequireDelegatedArm) {
+            $options.RequireDelegatedArm = $true
+        } else {
+            Write-Warning 'This installer release does not expose -RequireDelegatedArm; delegated mode may fall back if consent is unavailable.'
+        }
+    } else {
+        throw "Unsupported runtime access mode: $RuntimeAccessMode"
+    }
+    if ($SignInAppMode -eq 'precreated') {
+        if (-not $installerSupportsEntraClientId) {
+            throw 'This installer release does not support -EntraClientId, but precreated sign-in app mode was requested.'
+        }
+        $options.EntraClientId = $EntraClientId
     }
     if ($installerSupportsNonInteractive) { $options.NonInteractive = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
