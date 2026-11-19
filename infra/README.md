@@ -28,6 +28,9 @@ added later); registers the resource providers the stack needs plus `Microsoft.C
 in every monitored subscription (the app's identity may not register providers, and cannot create
 an export without that one); then runs `deploy.ps1` sized by `-Size` with **managed exports** on.
 It prints the URL and the setup-progress page (`/v2/admin/setup`). Re-running upgrades in place.
+Infrastructure deployment retries once by default for transient ARM write failures and, on final
+failure, prints the failed deployment operations (including nested deployment failures) so support
+can fix the exact blocked resource without guesswork.
 
 | `-Size` | Estate | PostgreSQL | Storage | App Service |
 |---|---|---|---|---|

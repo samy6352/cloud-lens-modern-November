@@ -59,6 +59,9 @@ param(
     # Explicit opt-in only: limited mode uses the application's ARM identity.
     [switch]$AllowAppIdentityFallback,
 
+    # Deliberately skip delegated ARM consent and never upgrade to delegated mode.
+    [switch]$AppIdentityOnly,
+
     # Required when deploying as a service principal; its display name is not a user sign-in.
     [string[]]$Admins = @(),
 
@@ -173,6 +176,14 @@ param(
     # subscription.
     [switch]$WhatIf,
 
+    # Transient ARM write failures are common under private networking and role-assignment
+    # propagation; retry infra deployment attempts before failing the whole install.
+    [ValidateRange(0, 3)]
+    [int]$InfrastructureRetryCount = 1,
+
+    [ValidateRange(15, 300)]
+    [int]$InfrastructureRetryDelaySeconds = 45,
+
     # Also write the compiled ARM template to infra/main.json, for customers
     # whose platform team deploys through Terraform. See infra/terraform.
     [switch]$EmitArm
@@ -249,9 +260,47 @@ function Wait-CloudLensInfrastructure([string]$Name, [string]$Group, [hashtable]
     }
     if ($state -ne 'Succeeded') {
         $detail = az deployment sub show --name $Name --query properties.error -o json --only-show-errors 2>$null
-        throw "Provisioning the infrastructure ended as $state. $detail"
+        $failedOps = @(Get-CloudLensFailedDeploymentOperations -DeploymentName $Name -ResourceGroup $Group)
+        $opsText = if ($failedOps.Count) {
+            "`nFailed deployment operations:`n  - " + ($failedOps -join "`n  - ")
+        } else {
+            ''
+        }
+        throw "Provisioning the infrastructure ended as $state. $detail$opsText"
     }
     Write-Host ("    [{0}] infrastructure ready ({1} resources in the group, {2} new)" -f (Get-ElapsedText), $seen.Count, ($seen.Count - $existing)) -ForegroundColor Green
+}
+
+function Get-CloudLensFailedDeploymentOperations([string]$DeploymentName, [string]$ResourceGroup) {
+    $summaries = [System.Collections.Generic.List[string]]::new()
+    $failedOps = @()
+    $raw = az deployment operation sub list --name $DeploymentName `
+        --query "[?properties.provisioningState=='Failed'].{type:properties.targetResource.resourceType,name:properties.targetResource.resourceName,code:properties.statusMessage.error.code,message:properties.statusMessage.error.message}" `
+        -o json --only-show-errors 2>$null
+    if ($LASTEXITCODE -eq 0 -and $raw) {
+        try { $failedOps = @($raw | ConvertFrom-Json) } catch { $failedOps = @() }
+    }
+
+    foreach ($op in $failedOps) {
+        $summaries.Add("$($op.type)/$($op.name): $($op.code) -- $($op.message)")
+    }
+
+    $nestedNames = @($failedOps |
+        Where-Object { $_.type -eq 'Microsoft.Resources/deployments' -and $_.name } |
+        ForEach-Object { $_.name } |
+        Select-Object -Unique)
+    foreach ($nested in $nestedNames) {
+        $nestedRaw = az deployment operation group list --resource-group $ResourceGroup --name $nested `
+            --query "[?properties.provisioningState=='Failed'].{type:properties.targetResource.resourceType,name:properties.targetResource.resourceName,code:properties.statusMessage.error.code,message:properties.statusMessage.error.message}" `
+            -o json --only-show-errors 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $nestedRaw) { continue }
+        $nestedFailed = @()
+        try { $nestedFailed = @($nestedRaw | ConvertFrom-Json) } catch { $nestedFailed = @() }
+        foreach ($op in $nestedFailed) {
+            $summaries.Add("[$nested] $($op.type)/$($op.name): $($op.code) -- $($op.message)")
+        }
+    }
+    return @($summaries | Select-Object -Unique | Select-Object -First 12)
 }
 
 function Assert-AzSuccess([string]$Operation) {
@@ -376,6 +425,8 @@ function Assert-AdoptableRegistration([string]$ClientId) {
 }
 
 # ------------------------------------------------------------ preconditions
+
+if ($EntraClientId) { Assert-AdoptableRegistration $EntraClientId }
 
 Step "Checking sign-in"
 $account = az account show -o json | ConvertFrom-Json
@@ -515,10 +566,10 @@ if ($NameSuffix) {
 
 # ------------------------------------------------------------- provisioning
 
-# The sign-in registration is shared by every stack in the tenant and the template rewrites its redirect list,
-# so remember what other stacks had registered and put it back after the deployment.
+# Preserve redirect URIs only from the registration this deployment will use.
 $priorRedirectUris = @()
-$priorClientId = if ($EntraClientId) { $EntraClientId } else { (az ad app list --filter "displayName eq 'CloudLens'" --query "[0].appId" -o tsv 2>$null) }
+$registrationName = $EntraAppUniqueName.Replace("'", "''")
+$priorClientId = if ($EntraClientId) { $EntraClientId } else { (az ad app list --filter "uniqueName eq '$registrationName'" --query "[0].appId" -o tsv 2>$null) }
 if ($priorClientId) { $priorRedirectUris = @(az ad app show --id $priorClientId --query "publicClient.redirectUris" -o tsv 2>$null | Where-Object { $_ }) }
 
 Step "Deploying infrastructure to $ResourceGroup ($Location)"
@@ -563,7 +614,7 @@ $templateParameters = @(
     "appServicePlanSku=$AppServicePlanSku"
     "entraAppUniqueName=$EntraAppUniqueName"
     "deployEntraApp=$((-not $SkipEntra -and -not $EntraClientId).ToString().ToLower())"
-    "authDelegatedArm=$((-not $AllowAppIdentityFallback).ToString().ToLower())"
+    "authDelegatedArm=$((-not ($AllowAppIdentityFallback -or $AppIdentityOnly)).ToString().ToLower())"
     "managedExports=$($ManagedExports.ToString().ToLower())"
 )
 
@@ -589,19 +640,47 @@ if ($WhatIf) {
     return
 }
 
-$baseline = @{}
-$rawBase = az resource list --resource-group $ResourceGroup --query '[].[type,name]' -o json --only-show-errors 2>$null
-if ($LASTEXITCODE -eq 0 -and $rawBase) { foreach ($r in ($rawBase | ConvertFrom-Json)) { $baseline["$($r[0])/$($r[1])"] = $true } }
-az deployment sub create `
-    --name $deploymentName `
-    --location $Location `
-    --template-file $templateFile `
-    --parameters $templateParameters `
-    --no-wait --only-show-errors -o none
-Assert-AzSuccess 'Starting the infrastructure deployment'
-Write-Host "    started: this usually takes 10-25 minutes; new resources are listed as they appear"
-Wait-CloudLensInfrastructure -Name $deploymentName -Group $ResourceGroup -Baseline $baseline
-$result = az deployment sub show --name $deploymentName --query properties.outputs -o json --only-show-errors | ConvertFrom-Json
+$maxAttempts = [math]::Max(1, $InfrastructureRetryCount + 1)
+$attempt = 0
+$finalDeploymentName = ''
+$provisioningError = $null
+while ($attempt -lt $maxAttempts) {
+    $attempt++
+    $attemptName = if ($attempt -eq 1) { $deploymentName } else { "$deploymentName-r$attempt" }
+    if ($attempt -gt 1) {
+        Write-Warning "Retrying infrastructure deployment ($attempt/$maxAttempts) in $InfrastructureRetryDelaySeconds seconds..."
+        Start-Sleep -Seconds $InfrastructureRetryDelaySeconds
+    }
+
+    $baseline = @{}
+    $rawBase = az resource list --resource-group $ResourceGroup --query '[].[type,name]' -o json --only-show-errors 2>$null
+    if ($LASTEXITCODE -eq 0 -and $rawBase) { foreach ($r in ($rawBase | ConvertFrom-Json)) { $baseline["$($r[0])/$($r[1])"] = $true } }
+
+    az deployment sub create `
+        --name $attemptName `
+        --location $Location `
+        --template-file $templateFile `
+        --parameters $templateParameters `
+        --no-wait --only-show-errors -o none
+    Assert-AzSuccess "Starting the infrastructure deployment (attempt $attempt of $maxAttempts)"
+    Write-Host "    started: this usually takes 10-25 minutes; new resources are listed as they appear"
+
+    try {
+        Wait-CloudLensInfrastructure -Name $attemptName -Group $ResourceGroup -Baseline $baseline
+        $finalDeploymentName = $attemptName
+        $provisioningError = $null
+        break
+    } catch {
+        $provisioningError = $_
+        if ($attempt -lt $maxAttempts) {
+            Write-Warning "Infrastructure attempt $attempt failed: $($_.Exception.Message)"
+            continue
+        }
+    }
+}
+if ($provisioningError) { throw $provisioningError }
+
+$result = az deployment sub show --name $finalDeploymentName --query properties.outputs -o json --only-show-errors | ConvertFrom-Json
 Assert-AzSuccess 'Reading the deployment outputs'
 
 if (-not $result) { throw "Deployment produced no outputs." }
@@ -638,8 +717,8 @@ if ($costAccess.pendingSubscriptions.Count) {
 # Administrator"). The operator running this deployment already holds those rights
 # legitimately; spending them once here is what keeps the application read-only forever.
 #
-# Never fatal. The stack is complete and usable without exports -- Quick refresh reads cost
-# through ARM -- so a missing grant is reported and the deployment stands.
+# Preserve infrastructure on failure, but stop the installation handoff until required
+# exports are complete. -SkipFocusExports explicitly defers this operator-owned step.
 if (-not $SkipFocusExports) {
     Step 'Provisioning FOCUS exports'
     $focusScope = @($costAccess.subscriptions |
@@ -649,16 +728,18 @@ if (-not $SkipFocusExports) {
 
     try {
         # -WhatIf already returned above, so this only ever runs for real.
-        & (Join-Path $PSScriptRoot 'focus-exports.ps1') `
+        $focusResult = & (Join-Path $PSScriptRoot 'focus-exports.ps1') `
             -ResourceGroup $ResourceGroup -WebAppName $webAppName `
             -Subscriptions $focusScope -HostingSubscriptionId $account.id -RunNow
+        if ($focusResult.status -ne 'complete') { throw 'FOCUS provisioning did not return a complete result.' }
         $focusProvisioned = $true
     } catch {
         $focusProvisioned = $false
         Write-Warning "FOCUS exports were not provisioned: $($_.Exception.Message)"
-        Write-Warning 'The deployment is complete and Quick refresh works. Hourly Billing,'
+        Write-Warning 'The infrastructure exists, but installation is incomplete. Hourly Billing,'
         Write-Warning 'Applications & Tags and scheduling savings stay empty until exports exist.'
         Write-Warning 'Re-run infra\focus-exports.ps1 once the reported access is granted.'
+        throw
     }
 } else {
     $focusProvisioned = $false
@@ -690,11 +771,7 @@ if ($clientId) {
     }
 
     if ($EntraClientId) {
-        # Verify before writing. Everything below this line modifies the registration
-        # or consents on its behalf, so the one chance to notice it is the wrong one
-        # is here, before the first write.
-        Assert-AdoptableRegistration $EntraClientId
-
+        # Adoption was validated before infrastructure creation or Graph writes.
         # An existing registration. Its redirect URIs are whatever the identity
         # team set, which will not include this deployment's hostname -- add it
         # without disturbing the others.
@@ -708,7 +785,7 @@ if ($clientId) {
         $armScope = @($armAccess.resourceAccess | Where-Object {
             $_.id -eq '41094075-9dad-400e-a0bd-54e686782033' -and $_.type -eq 'Scope'
         })
-        if (-not $armScope.Count) {
+        if (-not $AppIdentityOnly -and -not $armScope.Count) {
             az ad app permission add --id $clientId --api '797f4846-ba00-4fd7-ba43-dac1f8f63013' `
                 --api-permissions '41094075-9dad-400e-a0bd-54e686782033=Scope' --only-show-errors -o none
             Assert-AzSuccess 'Requesting delegated ARM permission'
@@ -733,10 +810,17 @@ if ($clientId) {
     # admin consent for `user_impersonation`, without which nobody can sign in at all -- so try
     # it here rather than leaving a deployment that looks finished and refuses everyone at the
     # door. AUTH_DELEGATED_ARM itself is carried by the template, not patched on here.
-    Step "Granting admin consent for delegated ARM access"
-    az ad app permission admin-consent --id $clientId --only-show-errors -o none 2>$null
-    $consented = $LASTEXITCODE -eq 0
-    if ($consented -and -not $AllowAppIdentityFallback) {
+    $consented = $false
+    if (-not $AppIdentityOnly) {
+        Step "Granting admin consent for delegated ARM access"
+        az ad app permission admin-consent --id $clientId --only-show-errors -o none 2>$null
+        $consented = $LASTEXITCODE -eq 0
+    }
+    if ($AppIdentityOnly) {
+        Write-Host '    App-identity mode selected: delegated ARM consent is not requested.'
+        Write-Host '    Subscription administrators must grant the runtime identity access to each approved scope.'
+    }
+    elseif ($consented -and -not $AllowAppIdentityFallback) {
         Write-Host "    consented    : ARM user_impersonation" -ForegroundColor Green
     }
     elseif ($consented) {
@@ -792,33 +876,17 @@ if (-not $SkipCode) {
 
     Step "Publishing to $webAppName"
     $scmHost = Get-CloudLensScmHost $webAppUrl
-    $previousDeployment = (Get-CloudLensNewestDeployment $scmHost).id
     try {
-        # The CLI can keep polling for many minutes after Azure reports the build finished (measured:
-        # 14 min on a deployment that succeeded in 4). Run it as a job and decide on the deployment
-        # record instead, then stop the job.
-        $uploadJob = Start-Job -ArgumentList $ResourceGroup, $webAppName, $zip -ScriptBlock {
-            param($Group, $Name, $Path)
-            az webapp deploy --resource-group $Group --name $Name --src-path $Path --type zip --async true --only-show-errors -o none 2>&1
-            "exit=$LASTEXITCODE"
-        }
+        $receipt = Publish-CloudLensPackage -ScmHost $scmHost -PackagePath $zip
         Write-Host '    uploading, then building on Azure (the first build takes 5-10 minutes)'
-        try {
-            $published = Wait-CloudLensDeployment -ScmHost $scmHost -Previous $previousDeployment
-            Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green
-        } finally {
-            if ($uploadJob.State -eq 'Completed') {
-                $uploadOutput = (Receive-Job $uploadJob) -join ' '
-                if ($uploadOutput -notmatch 'exit=0') { Write-Warning "The upload call reported: $uploadOutput" }
-            }
-            Stop-Job $uploadJob -ErrorAction SilentlyContinue
-            Remove-Job $uploadJob -Force -ErrorAction SilentlyContinue
-        }    } finally {
+        $published = Wait-CloudLensDeployment -ScmHost $scmHost -ReceiptUrl $receipt.ReceiptUrl -Deployer $receipt.Deployer
+        Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green
+    } finally {
         Remove-Item -LiteralPath $zip -Force
     }
 
     Step "Checking application readiness and sign-in"
-    Wait-CloudLensApplication -BaseUrl $webAppUrl
+    Wait-CloudLensApplication -BaseUrl $webAppUrl -ExpectedReleaseId $package.ReleaseId
 }
 
 Step "Done"
@@ -828,7 +896,7 @@ Write-Host ""
 # State the data path explicitly. Without exports the dashboard still loads and Quick refresh
 # still works, so "it looks fine" is exactly the wrong signal to leave someone with.
 if ($ManagedExports) {
-    Write-Host "Cost detail  : CloudLens creates its own FOCUS exports and imports the last 3 months," -ForegroundColor Green
+    Write-Host "Cost detail  : CloudLens creates its own FOCUS exports and imports $InitialHistoryMonths calendar month(s)," -ForegroundColor Green
     Write-Host "               newest month first. First data usually within hours (a new export can" -ForegroundColor Green
     Write-Host "               take up to 24 h). Earlier months (up to 13) are optional on the Setup page:" -ForegroundColor Green
     Write-Host "               $webAppUrl/v2/admin/setup" -ForegroundColor Green
@@ -848,8 +916,8 @@ if ($SkipCode) {
 }
 if ($clientId -and $consented) {
     Write-Host "Sign in with the Microsoft button. Nothing further is required." -ForegroundColor Green
-} elseif ($clientId -and $AllowAppIdentityFallback) {
-    Write-Host "Sign in with the Microsoft button. Running in app-identity mode -- see the warning above." -ForegroundColor Yellow
+} elseif ($clientId -and ($AllowAppIdentityFallback -or $AppIdentityOnly)) {
+    Write-Host "Sign in with the Microsoft button. Running in app-identity mode; visibility is limited to the approved runtime grants." -ForegroundColor Yellow
 } elseif ($clientId) {
     Write-Host "Sign-in is configured but not yet consented -- see the warning above." -ForegroundColor Yellow
 } else {
