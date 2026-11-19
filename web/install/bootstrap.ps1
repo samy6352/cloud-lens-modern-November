@@ -13,7 +13,7 @@ param(
     # subscription visible to the installer account. You may also pass a specific
     # subscription ID, /subscriptions/<id>, or
     # /providers/Microsoft.Management/managementGroups/<id>.
-    [string]$Scope = 'all',
+    [string]$Scope = '',
     [string]$ResourceGroup = '',
     [string]$Location = '',
     [string]$AiLocation = '',
@@ -41,10 +41,19 @@ param(
     [switch]$NoToolInstall
 )
 $ErrorActionPreference = 'Stop'
+function Write-SetupStage([int]$Number, [string]$Title, [string]$Detail) {
+    Write-Host "`n[$Number/6] $Title" -ForegroundColor Cyan
+    Write-Host "      $Detail"
+}
+
+$mode = if ($Preview) { 'Preview only' } elseif ($Approve) { 'Unattended' } else { 'Guided' }
+Write-Host "`nCloudLens Setup | v$Version | $mode" -ForegroundColor Cyan
+Write-Host 'Verify release > Configure > Check readiness > Preview > Review > Install'
 if ($SourceZip -and $SourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
     throw '-SourceZip requires the separately supplied -SourceSha256 (64 hexadecimal characters).'
 }
 if ($SourceSha256 -and -not $SourceZip) { throw '-SourceSha256 requires -SourceZip.' }
+Write-SetupStage 1 'Verify the release' 'Check the archive checksum and paths before running anything from it.'
 if ($EntraClientId -and $EntraClientId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
     throw '-EntraClientId must be a GUID.'
 }
@@ -123,7 +132,7 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
 }
 $source = $sourceRoot
 Write-Host "Verified and extracted to $source"
-Write-Host 'Keep this folder for deployment state and recovery. Installation incurs Azure charges.'
+Write-SetupStage 2 'Configure CloudLens' 'Select where CloudLens runs and what it monitors. Type ? at a menu to see the trade-offs.'
 $prerequisites = Join-Path $source 'infra\install-prerequisites.ps1'
 if (Test-Path -LiteralPath $prerequisites -PathType Leaf) {
     . $prerequisites
@@ -137,16 +146,20 @@ function Invoke-BootstrapAz([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "Azure CLI failed: az $($Arguments -join ' '). Resolve the error before continuing." }
     if ($output) { return ($output -join "`n") | ConvertFrom-Json }
 }
-function Select-InstallOption([string]$Title, [object[]]$Options, [int]$Default = 1) {
+function Select-InstallOption([string]$Title, [object[]]$Options, [int]$Default = 1, [string]$HelpText) {
     Write-Host ''
     Write-Host $Title
     for ($i = 0; $i -lt $Options.Count; $i++) {
-            $hint = if (($i + 1) -eq $Default) { '  <- default' } else { '' }
+        $hint = if (($i + 1) -eq $Default) { '  <- default' } else { '' }
         Write-Host ("  {0}. {1}{2}" -f ($i + 1), $Options[$i].Label, $hint)
     }
     do {
-        $answer = (Read-Host "Choose 1-$($Options.Count) [$Default]").Trim()
+        $answer = (Read-Host "Choose 1-$($Options.Count) [Enter: $Default, ?: help]").Trim()
         if (-not $answer) { return $Options[$Default - 1].Value }
+        if ($answer -eq '?') {
+            Write-Host "  Setup guide: $HelpText" -ForegroundColor Cyan
+            continue
+        }
         $pick = 0
         if ([int]::TryParse($answer, [ref]$pick) -and $pick -ge 1 -and $pick -le $Options.Count) {
             return $Options[$pick - 1].Value
@@ -172,7 +185,8 @@ if (-not $SubscriptionId) {
         })
         $defaultIndex = [array]::FindIndex($enabledSubscriptions, [Predicate[object]]{ param($s) $s.isDefault }) + 1
         if ($defaultIndex -lt 1) { $defaultIndex = 1 }
-        $SubscriptionId = Select-InstallOption 'Select the hosting subscription:' $choices $defaultIndex
+        $SubscriptionId = Select-InstallOption 'Where should CloudLens run?' $choices $defaultIndex `
+            'This subscription hosts the infrastructure and receives its Azure charges. Choose the approved target; the default is your current CLI subscription when available.'
     } else {
         $defaultSub = $enabledSubscriptions | Where-Object { $_.isDefault } | Select-Object -First 1
         if (-not $defaultSub -and $original.id) {
@@ -197,14 +211,14 @@ try {
             @{ Label = 'Small  - lighter estates and lower steady-state cost'; Value = 'small' }
             @{ Label = 'Medium - balanced default for most deployments'; Value = 'medium' }
             @{ Label = 'Large  - heavier estates and larger query throughput'; Value = 'large' }
-        ) 2
+        ) 2 'Medium is a starting point. Small uses a smaller App Service plan. Large uses a larger PostgreSQL SKU and needs more capacity and budget.'
     }
     if (-not $PSBoundParameters.ContainsKey('InitialHistoryMonths') -and $interactive) {
         $InitialHistoryMonths = [int](Select-InstallOption 'Select initial import window:' @(
             @{ Label = '1 month (fastest first load)'; Value = 1 }
             @{ Label = '3 months'; Value = 3 }
             @{ Label = '6 months'; Value = 6 }
-        ) 1)
+        ) 1 'Start with one month for the fastest first load. Choose a longer window only if you need more history on day one.')
     }
     if (-not $Location) {
         if ($interactive) {
@@ -217,7 +231,7 @@ try {
                 @{ Label = 'East US (eastus)'; Value = 'eastus' }
                 @{ Label = 'West US 2 (westus2)'; Value = 'westus2' }
                 @{ Label = 'Malaysia West (malaysiawest)'; Value = 'malaysiawest' }
-            ) 1
+            ) 1 'Choose an approved region for the app and database. Central India is the installer default, not a capacity or residency recommendation.'
         } else {
             $Location = $DefaultAppLocation
             Write-Host "Using app/database region: $Location"
@@ -230,7 +244,7 @@ try {
                 @{ Label = 'Sweden Central (swedencentral)'; Value = 'swedencentral' }
                 @{ Label = 'West Europe (westeurope)'; Value = 'westeurope' }
                 @{ Label = 'Southeast Asia (southeastasia)'; Value = 'southeastasia' }
-            ) 1
+            ) 1 'Choose an approved region for the AI deployment. It can differ from the app region. Readiness checks look for model availability and quota.'
         } else {
             $AiLocation = $DefaultAiLocation
             Write-Host "Using AI region: $AiLocation"
@@ -245,13 +259,13 @@ try {
         $RuntimeAccessMode = Select-InstallOption 'Select Azure runtime access mode:' @(
             @{ Label = 'Managed identity only (no delegated admin-consent requirement)'; Value = 'managed-identity' }
             @{ Label = 'Delegated user access (requires delegated ARM consent)'; Value = 'delegated-user' }
-        ) 1
+        ) 1 'Managed identity uses permissions assigned to the app. Choose delegated user access only if your tenant has approved delegated ARM consent.'
     }
     if (-not $SignInAppMode -and $interactive) {
         $SignInAppMode = Select-InstallOption 'Select sign-in app bootstrap mode:' @(
             @{ Label = 'Use pre-created Entra app client ID (recommended for restricted tenants)'; Value = 'precreated' }
             @{ Label = 'Create sign-in app during deployment (needs Graph app-registration privileges)'; Value = 'create-during-deploy' }
-        ) $(if ($EntraClientId) { 1 } else { 2 })
+        ) $(if ($EntraClientId) { 1 } else { 2 }) 'Reuse an approved Entra app if you cannot register one in this tenant. This is separate from the Azure runtime access choice.'
     }
     if (-not $SignInAppMode) {
         $SignInAppMode = if ($EntraClientId) { 'precreated' } else { 'create-during-deploy' }
@@ -273,7 +287,7 @@ try {
             @{ Label = 'All enabled subscriptions I can see in this tenant'; Value = 'all' }
             @{ Label = "Only the hosting subscription ($SubscriptionId)"; Value = $SubscriptionId }
             @{ Label = 'A management group (enter ID)'; Value = 'mg' }
-        ) 1
+        ) 2 'Start with the hosting subscription to limit access. A management group or all visible subscriptions widens access and can require additional role assignments.'
         if ($scopeChoice -eq 'mg') {
             $mg = (Read-Host 'Management group ID').Trim()
             if (-not $mg) { throw 'Management group ID is required for that scope option.' }
@@ -288,7 +302,7 @@ try {
             $rgMode = Select-InstallOption 'Resource group name:' @(
                 @{ Label = "Use recommended new name ($defaultResourceGroup)"; Value = 'recommended' }
                 @{ Label = 'Enter a custom new name'; Value = 'custom' }
-            ) 1
+            ) 1 'A dedicated resource group keeps recovery separate from other workloads. To resume an existing CloudLens stack, reuse its original settings with -Resume.'
             if ($rgMode -eq 'custom') {
                 $input = (Read-Host "NEW dedicated CloudLens resource group name [$defaultResourceGroup]").Trim()
                 $ResourceGroup = if ($input) { $input } else { $defaultResourceGroup }
@@ -305,7 +319,7 @@ try {
         $nameMode = Select-InstallOption 'Resource naming mode:' @(
             @{ Label = 'Use generated default names'; Value = 'generated' }
             @{ Label = 'Set custom prefix/suffix'; Value = 'custom' }
-        ) 1
+        ) 1 'Generated names minimise naming collisions. Use a custom prefix and suffix when your organisation requires a naming convention.'
         if ($nameMode -eq 'custom') {
             $NamePrefix = (Read-Host 'Name prefix (2-12 lowercase letters/digits/hyphens)').Trim().ToLowerInvariant()
             $NameSuffix = (Read-Host 'Name suffix (1-10 lowercase letters/digits/hyphens)').Trim().ToLowerInvariant()
@@ -315,8 +329,8 @@ try {
     if ($NameSuffix -and $NameSuffix -notmatch $SuffixRule) { throw 'NameSuffix must be 1-10 lowercase letters, digits or hyphens, not starting or ending with a hyphen.' }
     if ($NamePrefix -and -not $NameSuffix) { throw 'Provide NameSuffix with NamePrefix.' }
     if ($NameSuffix -and -not $NamePrefix) { throw 'Provide NamePrefix with NameSuffix.' }
-    if (-not $Scope) { $Scope = 'all' }
     $Scope = $Scope.Trim()
+    if (-not $Scope) { $Scope = $SubscriptionId }
     $managementGroupId = ''
     $costScopeSubscriptions = @()
     if ($Scope -ieq 'all') {
@@ -340,6 +354,7 @@ try {
     $exists = Invoke-BootstrapAz @('group', 'exists', '--name', $ResourceGroup, '--subscription', $SubscriptionId)
     if ($exists -isnot [bool]) { throw 'Resource group existence could not be verified.' }
     if ($exists -and -not $Resume) { throw "Resource group '$ResourceGroup' exists. Use a new name, or -Resume only for this same CloudLens installation." }
+    Write-SetupStage 3 'Check Azure readiness' 'Check the target regions, capacity and access. Resolve any blockers before retrying.'
     $global:LASTEXITCODE = 0
     $pgSku = if ($Size -eq 'large') { 'Standard_E4ds_v5' } else { 'Standard_D2ds_v5' }
     $planSku = if ($Size -eq 'small') { 'B1' } else { 'B2' }
@@ -409,15 +424,43 @@ try {
     if ($installerSupportsNoToolInstall -and $NoToolInstall) { $options.NoToolInstall = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
     if ($NameSuffix) { $options.NameSuffix = $NameSuffix }
+    Write-SetupStage 4 'Preview Azure changes' 'Review the ARM What-If output. It does not show every Entra, access or export operation.'
     & $installer @options -WhatIf
-    if ($Preview) { return }
-    Write-Host "Hosting subscription: $($account.name) ($SubscriptionId); tenant: $($account.tenantId); scope: $Scope; resource group: $ResourceGroup"
+    if (-not $?) { throw "Deployment preview failed. No installation was started. Verified source remains in $source." }
+    Write-SetupStage 5 'Review the deployment plan' 'Check the billing subscription, monitoring scope and approved regions.'
+    $scopeSummary = if ($managementGroupId) { "Management group: $managementGroupId" }
+        elseif ($Scope -ieq 'all') { "All $($costScopeSubscriptions.Count) visible enabled subscriptions in this tenant" }
+        elseif ($costScopeSubscriptions[0] -ieq $SubscriptionId) { 'Hosting subscription only' }
+        else { "Subscription: $($costScopeSubscriptions[0])" }
+    $plan = [ordered]@{
+        'Target'               = $(if ($Resume) { 'Resume existing installation' } else { 'New installation' })
+        'Hosting subscription' = "$($account.name) ($SubscriptionId)"
+        'Tenant'               = $account.tenantId
+        'Resource group'       = $ResourceGroup
+        'Monitoring scope'     = $scopeSummary
+        'App / database'       = $Location
+        'AI region'            = $AiLocation
+        'Sizing'               = "$Size (App Service $planSku / PostgreSQL $pgSku)"
+        'First import'         = "$InitialHistoryMonths month(s)"
+        'Naming'               = $(if ($NamePrefix) { "$NamePrefix / $NameSuffix (prefix / suffix)" } else { 'Generated' })
+        'Runtime access'       = "$RuntimeAccessMode (requested)"
+        'Entra sign-in app'    = $(if ($EntraClientId) { "$SignInAppMode ($EntraClientId)" } else { $SignInAppMode })
+        'Recovery folder'      = $source
+    }
+    foreach ($item in $plan.GetEnumerator()) {
+        Write-Host ('  {0,-21} {1}' -f ($item.Key + ':'), $item.Value)
+    }
+    if ($Preview) {
+        Write-Host "`nPreview complete. No Azure resources were provisioned. Run without -Preview to reach approval." -ForegroundColor Green
+        return
+    }
+    Write-Host "`nProvisioning can incur Azure charges and create Entra, role-assignment and FOCUS export configuration." -ForegroundColor Yellow
     if (-not $Approve) {
         if ($interactive) {
             $approval = Select-InstallOption 'Provision CloudLens with these settings?' @(
                 @{ Label = 'Proceed with provisioning'; Value = 'proceed' }
                 @{ Label = 'Cancel'; Value = 'cancel' }
-            ) 2
+            ) 2 'Cancel if the target or scope is not approved. Review the What-If output before proceeding; pressing Enter cancels.'
             if ($approval -ne 'proceed') {
                 throw "Installation not approved. Verified source remains in $source."
             }
@@ -425,7 +468,14 @@ try {
             throw 'Non-interactive run requires -Approve to proceed after preview.'
         }
     }
-    & $installer @options
+    Write-SetupStage 6 'Provision CloudLens' 'Wait for deployment and export setup. The installer will report app readiness and any remaining export work.'
+    try {
+        & $installer @options
+        if (-not $?) { throw "Installation failed (installer exit $LASTEXITCODE)." }
+    } catch {
+        Write-Warning "Provisioning stopped and Azure changes may already exist. Keep $source and its deployment state. Check '$ResourceGroup' in '$SubscriptionId' before retrying; use the original settings and preview first."
+        throw
+    }
     if ($postInstallExpandAllVisible -and -not $managementGroupId -and $costScopeSubscriptions.Count -gt 1) {
         Write-Warning 'Applying compatibility follow-up: extending runtime access and exports across visible subscriptions for -Scope all.'
         $cloudLensApps = @((Invoke-BootstrapAz @('webapp', 'list', '--resource-group', $ResourceGroup,

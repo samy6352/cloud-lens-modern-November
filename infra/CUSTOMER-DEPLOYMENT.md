@@ -78,9 +78,13 @@ branch. It requires
 approved regions, an explicit hosting subscription ID and a new dedicated
 resource-group name. By default it now drives setup with numbered pick-lists
 (subscription, region, scope, sizing and import window), with recommended
-defaults selected on Enter. It selects and verifies that subscription, runs
-preflight and ARM preview, then asks for a final proceed/cancel confirmation
-before provisioning; pressing Enter at that prompt cancels. Preview can install
+defaults selected on Enter. Type `?` at a menu to see the trade-offs without
+calling an AI service. Monitoring defaults to the hosting subscription; select
+`-Scope all` or a management group only after approving the wider access.
+The installer verifies the subscription, runs preflight and ARM What-If, and
+displays the deployment plan, including sign-in and runtime access choices.
+ARM What-If does not cover every Entra, access or export operation. Guided setup
+asks for approval before provisioning; pressing Enter cancels. Preview can install
 local tools but does not register Azure providers or provision resources.
 If Azure requires a provider before it can preview, ask an approved subscription
 administrator to register it and retry. The prior Azure CLI subscription selection

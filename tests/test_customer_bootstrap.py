@@ -92,6 +92,7 @@ exit $global:preflightCode
 
             if pipeline:
                 answers = [
+                    "?",  # explain the subscription choice without consuming it
                     "1",  # hosting subscription
                     "1",  # sizing profile
                     "1",  # initial history
@@ -99,7 +100,7 @@ exit $global:preflightCode
                     "1",  # AI region: eastus2
                     "1",  # runtime: managed identity
                     "2",  # sign-in: create registration
-                    "2",  # scope: hosting subscription only
+                    "",  # accept the default scope: hosting subscription only
                     "1",  # resource group naming mode: recommended
                     "1",  # resource naming mode: generated
                     "1" if approve else "2",  # proceed / cancel
@@ -107,7 +108,7 @@ exit $global:preflightCode
             elif approve:
                 answers = []
             else:
-                answers = ["2"]  # cancel at final approval prompt
+                answers = ["?", ""]  # read approval guidance, then cancel with Enter
             answers_literal = ",".join("'" + answer.replace("'", "''") + "'" for answer in answers)
             command = f"""
 $ErrorActionPreference = 'Stop'
@@ -177,6 +178,10 @@ exit $code
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("preview=False", result.stdout)
         self.assertIn("group=rg-cloudlens-", result.stdout)
+        self.assertIn("This subscription hosts the infrastructure", result.stdout)
+        self.assertIn("Hosting subscription only", result.stdout)
+        self.assertIn("managed-identity (requested)", result.stdout)
+        self.assertLess(result.stdout.index("[5/6] Review"), result.stdout.index("[6/6] Provision"))
 
     def test_offline_candidate_uses_the_same_verified_install_path(self):
         result = self.run_bootstrap(offline=True, explicit_options=True)
@@ -217,6 +222,8 @@ exit $code
         result = self.run_bootstrap(approve=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Installation not approved", result.stdout)
+        self.assertIn("pressing Enter cancels", result.stdout)
+        self.assertNotIn("[6/6]", result.stdout)
         self.assertIn("preview=True", result.stdout)
         self.assertNotIn("preview=False", result.stdout)
 
@@ -238,6 +245,7 @@ exit $code
         result = self.run_bootstrap(preview=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("preview=True", result.stdout)
+        self.assertIn("Preview complete", result.stdout)
         self.assertNotIn("preview=False", result.stdout)
         blocked = self.run_bootstrap(blocked=True)
         self.assertNotEqual(blocked.returncode, 0)

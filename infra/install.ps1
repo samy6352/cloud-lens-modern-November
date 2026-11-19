@@ -554,14 +554,14 @@ if ($site -and $env:CLOUDLENS_WEBAPP_NAME) {
 }
 
 $elapsed = (Get-Date) - $started
-Step "CloudLens is installed ($([int][math]::Floor($elapsed.TotalMinutes)) min $($elapsed.Seconds) s)"
+Step "Installation handoff ($([int][math]::Floor($elapsed.TotalMinutes)) min $($elapsed.Seconds) s)"
 if ($site) {
-    Write-Host "    https://$($site.host)" -ForegroundColor Green
-    Info "Setup progress: https://$($site.host)/v2/admin/setup"
+    Write-Host "    Open CloudLens: https://$($site.host)" -ForegroundColor Green
+    Info "Track exports and first import: https://$($site.host)/v2/admin/setup"
 }
 Info "Monitoring   : $($target.Path)"
 if ($exportsPartial) { Write-Warning 'Installed, but some subscriptions still need a role grant or export from someone with access there (commands are printed above and on the Setup page). Re-run this installer or infra\add-subscriptions.ps1 afterwards.' }
-Info 'First cost data usually arrives within a few hours; a brand-new export can take up to 24 h.'
+Info 'App installation and billing data readiness are separate. First cost data usually arrives within a few hours; a brand-new export can take up to 24 h.'
 if ($localPassword) {
     Write-Host ''
     Write-Host '    Sign in as   : admin' -ForegroundColor Green
@@ -572,6 +572,7 @@ if ($localPassword) {
     Info 'Sign in as the existing local administrator.'
 }
 } finally {
+    Write-Progress -Activity 'CloudLens install' -Completed
     $env:AZURE_CONFIG_DIR = $priorConfig
     if ($private -and (Test-Path -LiteralPath $private)) {
         Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction Continue
