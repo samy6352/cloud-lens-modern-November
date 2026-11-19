@@ -218,7 +218,7 @@ try {
                 @{ Label = 'North Europe (northeurope)'; Value = 'northeurope' }
                 @{ Label = 'East US (eastus)'; Value = 'eastus' }
                 @{ Label = 'West US 2 (westus2)'; Value = 'westus2' }
-                @{ Label = 'Australia East (australiaeast)'; Value = 'australiaeast' }
+                @{ Label = 'Malaysia West (malaysiawest)'; Value = 'malaysiawest' }
             ) 1
         } else {
             $Location = $DefaultAppLocation
