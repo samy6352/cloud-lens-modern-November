@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
+import { DayContributorsPanel, dayLabel } from "@/components/DayContributors";
 import { columnHelper, DataTable } from "@/components/DataTable";
 import { ErrorState, KpiTile, PageHeader, Segmented } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -9,8 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { periodParam } from "@/lib/period";
-import { anomaliesQuery, windowDays, type AnomalyIncident, type AnomalyReport } from "@/lib/queries";
+import { periodParam, rangeDays, validRange } from "@/lib/period";
+import { anomaliesQuery, windowDays, type AnomalyIncident } from "@/lib/queries";
 
 
 const SEVERITY_CLASS: Record<string, string> = {
@@ -19,13 +20,12 @@ const SEVERITY_CLASS: Record<string, string> = {
   low: "bg-surface-2 text-muted",
 };
 
-function trendOption(daily: AnomalyReport["daily"], incidents: AnomalyIncident[]) {
+function trendOption(days: string[], daily: Map<string, number>, incidents: AnomalyIncident[], selected?: string) {
   const marked = new Set(incidents.map((i) => i.peak_day));
-  const dates = daily.map((d) => d.day);
   return {
     grid: { left: 8, right: 8, top: 16, bottom: 8, containLabel: true },
-    tooltip: { trigger: "item" },
-    xAxis: { type: "time", axisLabel: { hideOverlap: true } },
+    tooltip: { trigger: "axis", valueFormatter: (v: unknown) => typeof v === "number" ? formatNumber(v) : "No billing data" },
+    xAxis: { type: "category", data: days, axisLabel: { hideOverlap: true, formatter: (day: string) => day.slice(5) } },
     yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatNumber(v, { compact: true }) } },
     series: [
       {
@@ -33,15 +33,10 @@ function trendOption(daily: AnomalyReport["daily"], incidents: AnomalyIncident[]
         name: "Daily cost",
         showSymbol: true,
         symbolSize: 4,
-        data: daily.flatMap((d, i) => {
-          const previous = dates[i - 1];
-          const point = {
-            value: [d.day, d.cost],
-            ...(marked.has(d.day) ? { symbolSize: 9, itemStyle: { color: "#e5484d" } } : {}),
-          };
-          if (!previous || Date.parse(d.day) - Date.parse(previous) <= 86_400_000) return [point];
-          return [{ value: [Date.parse(previous) + 86_400_000, null] }, point];
-        }),
+        data: days.map(day => ({
+          value: daily.get(day) ?? null,
+          ...(marked.has(day) ? { symbolSize: 9, itemStyle: { color: "#e5484d" } } : selected === day ? { symbolSize: 9 } : {}),
+        })),
         smooth: false,
       },
     ],
@@ -57,6 +52,7 @@ function AnomaliesContent() {
   const search = useSearch({ from: "__root__" });
   const { numbers } = usePrefs();
   const [currency, setCurrency] = useState("");
+  const [picked, setPicked] = useState<{ day: string; code: string | null } | null>(null);
   const inventory = useQuery(anomaliesQuery(search, windowDays(search), ""));
   const filtered = useQuery({ ...anomaliesQuery(search, windowDays(search), currency), enabled: !!currency, placeholderData: keepPreviousData });
   const query = currency ? filtered : inventory;
@@ -138,9 +134,18 @@ function AnomaliesContent() {
   const currencies = Array.from(new Set((inventory.data?.incidents ?? []).map((i) => i.currency).filter(Boolean)));
   const verified = Object.entries(data?.daily_by_currency ?? {}).filter(([, points]) => points.length);
   if (!verified.length && data?.daily?.length) verified.push([data.currency ?? "unknown", data.daily]);
-  const reported = Object.entries(data?.reported_daily_by_currency ?? {}).filter(([, points]) => points.length);
-  const trends = verified.length ? verified : reported;
-  const trendLabel = verified.length ? "Verified daily cost" : "Reported daily cost";
+  const checked = new Map(verified.map(([code, points]) => [code, new Set(points.map(p => p.day))]));
+  const reported = data?.reported_daily_by_currency ?? {};
+  const codes = [...new Set([...Object.keys(reported), ...checked.keys()])].sort();
+  const observed = [...Object.values(reported).flat(), ...verified.flatMap(([, points]) => points)].map(p => p.day).sort();
+  const datesFrom = data?.requested_from ?? observed[0];
+  const datesTo = data?.requested_to ?? observed.at(-1);
+  const dates = validRange(datesFrom, datesTo) && datesTo
+    ? Array.from({ length: rangeDays(datesFrom, datesTo) }, (_, index) =>
+        new Date(Date.parse(datesFrom) + index * 86_400_000).toISOString().slice(0, 10))
+    : [];
+  const selection = picked && dates.includes(picked.day) ? picked : null;
+  const trendLabel = !Object.values(reported).some(points => points.length) && verified.length ? "Verified daily cost" : "Reported daily cost";
   return (
     <div>
       <PageHeader
@@ -162,7 +167,7 @@ function AnomaliesContent() {
         actions={
           <>
             {currencies.length > 1 && (
-              <Segmented label="Display currency" value={currency} onChange={setCurrency} options={[{ value: "", label: "All" }, ...currencies.map((c) => ({ value: c, label: c.toUpperCase() }))]} />
+              <Segmented label="Display currency" value={currency} onChange={value => { setPicked(null); setCurrency(value); }} options={[{ value: "", label: "All" }, ...currencies.map((c) => ({ value: c, label: c.toUpperCase() }))]} />
             )}
           </>
         }
@@ -181,18 +186,32 @@ function AnomaliesContent() {
       </div>}
 
       <Card className="mt-4">
-        <CardHeader title={trendLabel} subtitle={verified.length ? "Red points mark incident peaks. Missing days are not filled with zero." : "Reported charges are not sufficient evidence to classify an anomaly."} />
+        <CardHeader title={trendLabel} subtitle="Select any day on the chart or from the date list to see its top cost contributors. Red points mark verified incident peaks; gaps mean no billing data." />
         <CardBody>
-          {!data ? <Skeleton className="h-[240px] w-full" /> : trends.length ? (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {trends.map(([code, points]) => (
-                <div key={code} className={trends.length === 1 ? "xl:col-span-2" : undefined}>
+          {!data ? <Skeleton className="h-[240px] w-full" /> : <>
+            {codes.length > 0 && dates.length > 0 ? <div className="grid gap-4 xl:grid-cols-2">
+              {codes.map(code => {
+                const points = new Map([...(verified.find(([key]) => key === code)?.[1] ?? []), ...(reported[code] ?? [])].map(p => [p.day, p.cost]));
+                return <div key={code} className={codes.length === 1 ? "xl:col-span-2" : undefined}>
                   <h3 className="text-sm font-medium">{code === "unknown" ? "Currency unspecified" : code}</h3>
-                  <Chart height={200} option={trendOption(points, verified.length ? data.incidents.filter((i) => i.currency === code) : [])} />
-                </div>
-              ))}
-            </div>
-          ) : <p className="text-sm text-muted">No billing data for the selected dates and subscriptions. Try a different reporting period or scope.</p>}
+                  <Chart height={200} option={trendOption(dates, points, data.incidents.filter(i => i.currency === code), selection?.day)}
+                    onCategoryClick={day => setPicked({ day, code })} />
+                </div>;
+              })}
+            </div> : <p className="text-sm text-muted">No billing data for the selected dates and subscriptions.</p>}
+            {dates.length > 0 && <label className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted">
+              Contributor date
+              <select className="rounded border border-border bg-surface px-2 py-1 text-fg" value={selection?.day ?? ""}
+                onChange={e => setPicked(e.target.value ? { day: e.target.value, code: null } : null)}>
+                <option value="">Select a day</option>
+                {dates.map(day => <option key={day} value={day}>{dayLabel(day)}</option>)}
+              </select>
+            </label>}
+            {selection && !query.isPlaceholderData && <DayContributorsPanel currentOnly day={selection.day} currency={selection.code}
+              scope={{ ...search, currency: currency || undefined }}
+              partial={selection.code ? !checked.get(selection.code)?.has(selection.day) : !verified.some(([, points]) => points.some(p => p.day === selection.day))}
+              onClose={() => setPicked(null)} />}
+          </>}
         </CardBody>
       </Card>
 

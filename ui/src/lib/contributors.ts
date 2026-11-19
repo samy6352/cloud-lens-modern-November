@@ -38,17 +38,30 @@ export interface DayContributors {
   other: Array<DayTotal & { count: number }>;
 }
 
-export const dayContributorsQuery = (s: Scope, day: string, dimension: Dimension) =>
+export const dayContributorsQuery = (s: Scope, day: string, dimension: Dimension, currentOnly = false) =>
   queryOptions({
-    queryKey: ["day-contributors", periodParam(s) ?? "", s.scope ?? "", s.currency ?? "", day, dimension],
+    queryKey: ["day-contributors", periodParam(s) ?? "", s.scope ?? "", s.currency ?? "", day, dimension, currentOnly],
     queryFn: ({ signal }) =>
       api<DayContributors>(
         "dashboard/day",
-        { day, dimension, scope: s.scope, currency: s.currency, period_month: periodParam(s) },
+        { day, dimension, scope: s.scope, currency: s.currency, period_month: periodParam(s), current_only: currentOnly ? "true" : undefined },
         { signal },
       ),
     staleTime: 60_000,
     retry: false,
+  });
+
+export interface DayComparison {
+  first_day: string;
+  second_day: string;
+  totals: Array<{ currency: string | null; first: number | null; second: number | null; delta: number | null; change_pct: number | null }>;
+}
+
+export const compareUsageDaysQuery = (s: Scope, first: string, second: string) =>
+  queryOptions({
+    queryKey: ["compare-usage-days", s.scope ?? "", s.currency ?? "", first, second],
+    queryFn: ({ signal }) => api<DayComparison>("dashboard/compare-days", { first, second, scope: s.scope, currency: s.currency }, { signal }),
+    staleTime: 60_000,
   });
 
 /**

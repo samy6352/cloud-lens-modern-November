@@ -492,7 +492,7 @@ class Dashboard:
     def day_contributors(self, scope: list[str] | None, day: str, dimension: str = "service",
                          currency: str | None = None,
                          filters: dict[str, list[str]] | None = None,
-                         limit: int = 10) -> dict[str, Any]:
+                         limit: int = 10, *, current_only: bool = False) -> dict[str, Any]:
         from datetime import date, timedelta
 
         if dimension not in self.DAY_DIMENSIONS:
@@ -501,12 +501,13 @@ class Dashboard:
         prior = chosen - timedelta(days=1)
         label = self.DAY_DIMENSIONS[dimension]
         with self.wh.reader(scope, currency, filters) as r:
+            dates = f"DATE '{chosen}'" if current_only else f"DATE '{prior}', DATE '{chosen}'"
             rows = r.rows(
                 f'SELECT {label} AS name, "BillingCurrency" AS currency, '
                 f'sum(CASE WHEN "ChargePeriodStart" = date \'{chosen}\' THEN "BilledCost" ELSE 0 END) AS cost, '
                 f'sum(CASE WHEN "ChargePeriodStart" = date \'{prior}\' THEN "BilledCost" ELSE 0 END) AS prior '
                 f'FROM {_aggregate(r)} '
-                f'WHERE "ChargePeriodStart" IN (date \'{prior}\', date \'{chosen}\') '
+                f'WHERE "ChargePeriodStart" IN ({dates}) '
                 'GROUP BY 1, 2', None)
 
         rows = [row for row in rows if (row.get("cost") or 0) or (row.get("prior") or 0)]
@@ -556,6 +557,33 @@ class Dashboard:
             "contributors": [shaped(row) for row in named],
             "other": list(others.values()),
         }
+
+    def compare_usage_days(self, scope: list[str] | None, first: str, second: str,
+                           currency: str | None = None,
+                           filters: dict[str, list[str]] | None = None) -> dict[str, Any]:
+        from datetime import date
+
+        a, b = date.fromisoformat(first), date.fromisoformat(second)
+        if a == b:
+            raise ValueError("Choose two different billing dates.")
+        with reporting.select(None), self.wh.reader(scope, currency, filters) as reader:
+            rows = reader.rows(
+                'SELECT "ChargePeriodStart" AS day, upper(trim("BillingCurrency")) AS currency, '
+                f'sum("BilledCost") AS cost FROM {_aggregate(reader)} '
+                f'WHERE "ChargePeriodStart" IN (DATE \'{a}\', DATE \'{b}\') GROUP BY 1, 2', None)
+        amounts: dict[str, dict[str, float]] = {}
+        for row in rows:
+            if row["cost"] is not None:
+                amounts.setdefault(row["currency"] or "", {})[str(row["day"])[:10]] = float(row["cost"])
+        totals = []
+        for code, values in sorted(amounts.items()):
+            left, right = values.get(a.isoformat()), values.get(b.isoformat())
+            delta = right - left if left is not None and right is not None else None
+            totals.append({"currency": code or None, "first": round(left, 2) if left is not None else None,
+                           "second": round(right, 2) if right is not None else None,
+                           "delta": round(delta, 2) if delta is not None else None,
+                           "change_pct": round(delta / abs(left) * 100, 1) if delta is not None and left else None})
+        return {"first_day": a.isoformat(), "second_day": b.isoformat(), "totals": totals}
 
     def _executive_payload(self, *, days: int, hi: str, totals: list[dict],
                            counts: list[dict], daily: list[dict], families: list[dict],

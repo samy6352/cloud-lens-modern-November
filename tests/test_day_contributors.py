@@ -134,6 +134,31 @@ def test_a_day_with_no_spend_is_empty_not_an_error(dashboard):
     assert result["contributors"] == [] and result["other"] == [] and result["totals"] == []
 
 
+def test_current_only_does_not_rank_prior_only_rows_above_a_credit(dashboard):
+    dashboard.wh.add(100, day="2026-09-09", service="Prior only")
+    dashboard.wh.add(-5, service="Credit")
+    result = dashboard.day_contributors(None, "2026-09-10", limit=1, current_only=True)
+    assert [row["name"] for row in result["contributors"]] == ["Credit"]
+    assert result["totals"][0]["cost"] == -5
+
+
+def test_compare_exact_nonadjacent_days_keeps_zero_missing_and_currencies_distinct(dashboard):
+    dashboard.wh.add(40, day="2026-09-01")
+    dashboard.wh.add(999, day="2026-09-09")
+    dashboard.wh.add(0)
+    dashboard.wh.add(1000, subscription="sub-b")
+    dashboard.wh.add(12, currency="EUR")
+    result = dashboard.compare_usage_days(["sub-a"], "2026-09-01", "2026-09-10")
+    assert result == {
+        "first_day": "2026-09-01", "second_day": "2026-09-10", "totals": [
+            {"currency": "EUR", "first": None, "second": 12, "delta": None, "change_pct": None},
+            {"currency": "USD", "first": 40, "second": 0, "delta": -40, "change_pct": -100},
+        ],
+    }
+    with pytest.raises(ValueError, match="different billing dates"):
+        dashboard.compare_usage_days(None, "2026-09-10", "2026-09-10")
+
+
 @pytest.mark.parametrize("kwargs", [{"dimension": "tenant"}, {"day": "10/09/2026"}])
 def test_rejects_an_unknown_dimension_or_a_malformed_day(dashboard, kwargs):
     arguments = {"day": "2026-09-10", **kwargs}

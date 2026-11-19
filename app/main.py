@@ -3933,7 +3933,7 @@ async def dashboard_executive(request: Request, days: int = 30, scope: str = "",
 
 @app.get("/api/dashboard/day")
 async def dashboard_day(request: Request, day: str, dimension: str = "service",
-                        scope: str = "", currency: str = "") -> JSONResponse:
+                        scope: str = "", currency: str = "", current_only: bool = False) -> JSONResponse:
     """What made up one day's spend, against the day before. Same scope and filters as Overview."""
     from .dashboard import get_dashboard
 
@@ -3943,9 +3943,23 @@ async def dashboard_day(request: Request, day: str, dimension: str = "service",
     try:
         return JSONResponse(await offload(get_dashboard().day_contributors, picked or None, day,
                                           dimension, currency=currency or None,
-                                          filters=request_filters(request)))
+                                          filters=request_filters(request), current_only=current_only))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/dashboard/compare-days")
+async def dashboard_compare_days(request: Request, first: date, second: date,
+                                 scope: str = "", currency: str = "") -> JSONResponse:
+    """Compare reported charges on two exact usage dates, not two archive snapshots."""
+    from .dashboard import get_dashboard
+
+    picked = await _billing_scope(current_user(request), scope)
+    if first == second:
+        raise HTTPException(422, "Choose two different billing dates.")
+    return JSONResponse(await offload(get_dashboard().compare_usage_days, picked or None,
+                                      first.isoformat(), second.isoformat(),
+                                      currency=currency or None, filters=request_filters(request)))
 
 
 async def _billing_scope(user: User, scope: str) -> list[str]:

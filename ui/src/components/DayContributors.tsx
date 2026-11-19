@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ErrorState, Segmented } from "@/components/blocks";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +39,8 @@ export function DayContributorsPanel({
   day,
   currency,
   partial,
+  currentOnly = false,
+  dimension: sharedDimension,
   onClose,
 }: {
   scope: Scope;
@@ -46,40 +48,57 @@ export function DayContributorsPanel({
   /** The currency the chart is showing; rows are limited to it. */
   currency: string | null;
   partial: boolean;
-  onClose: () => void;
+  currentOnly?: boolean;
+  dimension?: Dimension;
+  onClose?: () => void;
 }) {
-  const [dimension, setDimension] = useState<Dimension>("service");
+  const [localDimension, setDimension] = useState<Dimension>("service");
+  const dimension = sharedDimension ?? localDimension;
+  const titleId = useId();
   const { numbers } = usePrefs();
-  const query = useQuery(dayContributorsQuery(scope, day, dimension));
-  const data = useMemo(() => (query.data ? forCurrency(query.data, currency) : null), [query.data, currency]);
+  const query = useQuery(dayContributorsQuery(scope, day, dimension, currentOnly));
+  const data = useMemo(() => {
+    if (!query.data) return null;
+    if (!currentOnly) return forCurrency(query.data, currency);
+    const matches = (row: { currency: string | null }) =>
+      currency == null || (row.currency ?? "unknown") === currency;
+    const contributors = query.data.contributors.filter(matches);
+    const other = query.data.other.filter(matches);
+    const currencies = new Set([...contributors, ...other].map(row => row.currency));
+    return { ...query.data, contributors, other, mixed_currency: currencies.size > 1,
+      totals: query.data.totals.filter(row => currencies.has(row.currency)) };
+  }, [query.data, currency, currentOnly]);
   const money = (value: number | null | undefined, code: string | null) =>
     value == null || !Number.isFinite(value) ? "Unavailable" : formatMoney(value, code, { system: numbers });
 
-  const top = data?.contributors[0];
-  const dayTotal = data?.totals.reduce((sum, t) => sum + t.cost, 0) ?? 0;
+  const topByCurrency = new Map<string | null, number>();
+  const totalsByCurrency = new Map(data?.totals.map(row => [row.currency, row.cost]));
+  for (const row of data?.contributors ?? []) {
+    topByCurrency.set(row.currency, Math.max(topByCurrency.get(row.currency) ?? 0, row.cost));
+  }
 
   return (
-    <section aria-labelledby="day-contributors-title" className="mt-3 border-t border-border pt-3">
+    <section aria-labelledby={titleId} className="mt-3 min-w-0 border-t border-border pt-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 id="day-contributors-title" className="text-sm font-semibold">Top contributors on {dayLabel(day)}</h3>
+          <h3 id={titleId} className="text-sm font-semibold">Top contributors on {dayLabel(day)}</h3>
           {data && (
             <p className="text-xs text-muted">
-              Compared with {dayLabel(data.prior_day ?? day)}
-              {partial ? " · this day is partial, so totals are not complete" : ""}
+              {currentOnly ? "Reported charges" : `Compared with ${dayLabel(data.prior_day ?? day)}`}
+              {partial ? currentOnly ? " · billing coverage for this date is not verified" : " · this day is partial, so totals are not complete" : ""}
             </p>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Segmented
+          {sharedDimension == null && <Segmented
             label="Group contributors by"
             value={dimension}
             onChange={setDimension}
             options={(Object.keys(DIMENSION_LABEL) as Dimension[]).map(value => ({ value, label: DIMENSION_LABEL[value] }))}
-          />
-          <Button variant="ghost" size="icon" aria-label="Close day details" onClick={onClose}>
+          />}
+          {onClose && <Button variant="ghost" size="icon" aria-label="Close day details" onClick={onClose}>
             <X />
-          </Button>
+          </Button>}
         </div>
       </div>
 
@@ -92,7 +111,9 @@ export function DayContributorsPanel({
           <ErrorState error={query.error} onRetry={() => void query.refetch()} />
         </div>
       ) : !data || (data.contributors.length === 0 && data.other.length === 0) ? (
-        <p className="mt-3 text-sm text-muted">No spend was recorded on this day for the selected scope.</p>
+        <p className="mt-3 text-sm text-muted">{sharedDimension == null
+          ? "No spend was recorded on this day for the selected scope."
+          : "No non-zero contributors were found for this grouping."}</p>
       ) : (
         <div className="mt-3 overflow-x-auto">
           {data.mixed_currency && (
@@ -105,13 +126,14 @@ export function DayContributorsPanel({
                 <th scope="col" className="py-2 pr-3 text-left font-medium">{DIMENSION_LABEL[dimension]}</th>
                 <th scope="col" className="py-2 pr-3 text-right font-medium">Spend that day</th>
                 <th scope="col" className="py-2 pr-3 text-right font-medium">Share</th>
-                <th scope="col" className="py-2 text-right font-medium">Vs day before</th>
+                {!currentOnly && <th scope="col" className="py-2 text-right font-medium">Vs day before</th>}
               </tr>
             </thead>
             <tbody>
               {data.contributors.map((row, i) => {
                 const change = changeText(row);
-                const width = top && top.cost > 0 ? Math.max(2, (row.cost / top.cost) * 100) : 0;
+                const top = topByCurrency.get(row.currency) ?? 0;
+                const width = top > 0 && row.cost > 0 ? Math.max(2, (row.cost / top) * 100) : 0;
                 return (
                   <tr key={`${row.name}-${row.currency}-${i}`} className="border-b border-border align-top">
                     <td className="py-2 pr-3">
@@ -124,12 +146,12 @@ export function DayContributorsPanel({
                     <td className="num whitespace-nowrap py-2 pr-3 text-right">
                       {row.share_pct == null ? "—" : `${row.share_pct.toFixed(1)}%`}
                     </td>
-                    <td className={cn("num whitespace-nowrap py-2 text-right", change.tone)}>
+                    {!currentOnly && <td className={cn("num whitespace-nowrap py-2 text-right", change.tone)}>
                       {change.text}
                       <span className="sr-only">
                         {" "}— {money(row.prior, row.currency)} the day before
                       </span>
-                    </td>
+                    </td>}
                   </tr>
                 );
               })}
@@ -138,9 +160,9 @@ export function DayContributorsPanel({
                   <td className="py-2 pr-3">Other ({formatNumber(row.count, { system: numbers, digits: 0 })})</td>
                   <td className="num whitespace-nowrap py-2 pr-3 text-right">{money(row.cost, row.currency)}</td>
                   <td className="num whitespace-nowrap py-2 pr-3 text-right">
-                    {dayTotal > 0 ? `${((row.cost / dayTotal) * 100).toFixed(1)}%` : "—"}
+                    {totalsByCurrency.get(row.currency) ? `${((row.cost / totalsByCurrency.get(row.currency)!) * 100).toFixed(1)}%` : "—"}
                   </td>
-                  <td className="py-2 text-right">{changeText({ ...row, change_pct: row.prior ? ((row.cost - row.prior) / row.prior) * 100 : null }).text}</td>
+                  {!currentOnly && <td className="py-2 text-right">{changeText({ ...row, change_pct: row.prior ? ((row.cost - row.prior) / row.prior) * 100 : null }).text}</td>}
                 </tr>
               ))}
             </tbody>
@@ -149,10 +171,10 @@ export function DayContributorsPanel({
                 <tr key={`total-${t.currency}`} className="font-medium">
                   <th scope="row" className="py-2 pr-3 text-left">Total for the day</th>
                   <td className="num whitespace-nowrap py-2 pr-3 text-right">{money(t.cost, t.currency)}</td>
-                  <td className="num py-2 pr-3 text-right">100%</td>
-                  <td className="num whitespace-nowrap py-2 text-right text-muted">
+                  <td className="num py-2 pr-3 text-right">{t.cost === 0 ? "—" : "100%"}</td>
+                  {!currentOnly && <td className="num whitespace-nowrap py-2 text-right text-muted">
                     Before: {money(t.prior, t.currency)}
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tfoot>

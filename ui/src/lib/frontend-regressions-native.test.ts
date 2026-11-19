@@ -57,7 +57,23 @@ async function mount(path: string) {
       data = url.searchParams.get("scope") === second
         ? { ...executive, currency: null, by_currency: [{ ...executive, trend }, { ...executive, currency: "INR", trend }] }
         : executive;
-    } else if (path === "archive") data = { enabled: true, reachable: true, comparable: [], days: { focus: ["2026-10-03"] } };
+    } else if (path === "dashboard/day") {
+      const day = url.searchParams.get("day");
+      const name = url.searchParams.get("dimension") === "resource_group" ? `rg-${day}`
+        : day === "2026-08-03" ? "Storage workload" : "Compute workload";
+      data = {
+        day, contributors: [{ name, currency: "USD", cost: 9, prior: 0, share_pct: 100 }],
+        mixed_currency: false, other: [], totals: [{ currency: "USD", cost: 9, prior: 0 }],
+      };
+    }
+    else if (path === "dashboard/compare-days") data = {
+      first_day: url.searchParams.get("first"), second_day: url.searchParams.get("second"),
+      totals: [{ currency: "USD", first: 10, second: 15, delta: 5, change_pct: 50 },
+        { currency: "EUR", first: null, second: 20, delta: null, change_pct: null }]
+        .map(row => url.searchParams.get("second") === "2026-08-20"
+          ? { ...row, second: null, delta: null, change_pct: null } : row),
+    };
+    else if (path === "archive") data = { enabled: true, reachable: true, comparable: [], days: { focus: ["2026-10-03"] } };
     else if (path === "dashboard/advisor-score") return route.fulfill({ status: 503, json: { detail: "No Advisor fixture" } });
     else if (path === "dashboard/anomalies") {
       const currency = url.searchParams.get("currency");
@@ -121,9 +137,124 @@ beforeAll(async () => {
   const warm = await mount("/");
   await warm.page.close();
 }, 60_000);
-nativeTestCleanup(() => browser, () => server, 120_000);
+nativeTestCleanup(() => browser, () => server);
 
 describe("frontend assessment regressions", () => {
+  it("keeps all sidebar destinations reachable without scrolling the rail", async () => {
+    const { page } = await mount(`/?days=7&scope=${second}&currency=USD`);
+    const aside = page.locator("aside").filter({ has: page.getByRole("link", { name: "CloudLens home" }) });
+    const nav = aside.getByRole("navigation", { name: "Workspaces" });
+    const expectFits = async () => {
+      expect(await aside.evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+      expect(await nav.evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual((await aside.boundingBox())!.height);
+    };
+
+    await page.setViewportSize({ width: 1280, height: 784 });
+    await nav.getByRole("link", { name: "Audit log" }).waitFor();
+    expect(await nav.getByText("Reports", { exact: true }).isVisible()).toBe(true);
+    const categoryGaps = await nav.evaluate(el => Array.from(el.children).slice(1).map(group =>
+      group.getBoundingClientRect().top - group.previousElementSibling!.getBoundingClientRect().bottom));
+    expect(categoryGaps).toHaveLength(5);
+    expect(Math.min(...categoryGaps)).toBeGreaterThanOrEqual(8);
+    expect(await nav.getByRole("link", { name: "Audit log" }).evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThan(784);
+    await expectFits();
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const workspace = nav.getByRole("combobox", { name: "Choose workspace" });
+    const destination = nav.getByRole("combobox", { name: "Choose page" });
+    await workspace.selectOption("admin");
+    expect(await destination.locator("option").allTextContents()).toContain("Audit log");
+    await expectFits();
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expectFits();
+
+    await page.setViewportSize({ width: 390, height: 360 });
+    await workspace.selectOption("explore");
+    await destination.selectOption("history");
+    await expectFits();
+    await nav.getByRole("button", { name: "Go to History" }).click();
+    await page.locator("#main").getByRole("heading", { name: "History", exact: true }).waitFor();
+    const url = new URL(page.url());
+    expect(url.searchParams.get("days")).toBe("7");
+    expect(url.searchParams.get("scope")).toBe(second);
+    expect(url.searchParams.get("currency")).toBe("USD");
+    await page.close();
+  }, 30_000);
+
+  it("returns to Overview from the sidebar logo without dropping filters", async () => {
+    const { page } = await mount(`/explore/history?days=7&scope=${second}&currency=USD`);
+    const home = page.getByRole("link", { name: "CloudLens home", exact: true });
+    await home.locator("img").click();
+    await page.locator("#main").getByRole("heading", { name: "Overview", exact: true }).waitFor();
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/v2/");
+    expect(url.searchParams.get("days")).toBe("7");
+    expect(url.searchParams.get("scope")).toBe(second);
+    expect(url.searchParams.get("currency")).toBe("USD");
+
+    await page.goBack();
+    await page.locator("#main").getByRole("heading", { name: "History", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await home.focus();
+    await page.keyboard.press("Enter");
+    await page.locator("#main").getByRole("heading", { name: "Overview", exact: true }).waitFor();
+  }, 30_000);
+
+  it("opens top contributors from a chart date or the full calendar list", async () => {
+    const { page, requests } = await mount(`/explore/anomalies?scope=${first}`);
+    const dates = page.getByLabel("Contributor date");
+    await dates.waitFor();
+    expect(await dates.locator("option").evaluateAll(options => options.map(o => o.getAttribute("value"))))
+      .toEqual(["", "2026-10-02", "2026-10-03", "2026-10-04"]);
+    const canvas = page.locator("#main canvas").last();
+    await canvas.waitFor();
+    const box = await canvas.boundingBox();
+    await canvas.click({ position: { x: box!.width / 2, y: 80 } });
+    await expect.poll(() => dates.inputValue()).toBe("2026-10-03");
+    await page.getByText("Compute workload", { exact: true }).waitFor();
+    await dates.selectOption("2026-10-04");
+    await expect.poll(() => requests.some(url => url.pathname.endsWith("/day") &&
+      url.searchParams.get("day") === "2026-10-04" && url.searchParams.get("scope") === first &&
+      url.searchParams.get("current_only") === "true")).toBe(true);
+  }, 30_000);
+
+  it("compares two nonadjacent billing dates even without archive snapshots", async () => {
+    const { page, requests } = await mount(`/explore/history?scope=${second}&month=2026-09`);
+    await page.getByLabel("First billing date").fill("2026-08-03");
+    await page.getByLabel("Second billing date").fill("2026-08-19");
+    await page.getByText("(+50%)", { exact: true }).waitFor();
+    await page.getByText("Not comparable", { exact: true }).waitFor();
+    const usdChart = page.getByRole("img", { name: /^USD billed cost:/ });
+    const eurChart = page.getByRole("img", { name: /^EUR billed cost:.*No data/ });
+    await usdChart.locator("canvas").waitFor();
+    await eurChart.locator("canvas").waitFor();
+    expect(await usdChart.getAttribute("aria-label")).toMatch(/\$10(?:\.00)?;.*\$15/);
+    expect(requests.some(url => url.pathname.endsWith("/compare-days") && url.searchParams.get("scope") === second &&
+      url.searchParams.get("first") === "2026-08-03" && url.searchParams.get("second") === "2026-08-19")).toBe(true);
+    const contributors = page.getByRole("region", { name: "Top cost contributors for both dates" });
+    const early = contributors.getByRole("region", { name: /Top contributors on .*Aug.*3|Top contributors on .*3.*Aug/ });
+    const late = contributors.getByRole("region", { name: /Top contributors on .*19/ });
+    await early.getByText("Storage workload", { exact: true }).waitFor();
+    await late.getByText("Compute workload", { exact: true }).waitFor();
+    await contributors.getByRole("radio", { name: "Resource group", exact: true }).click();
+    await early.getByText("rg-2026-08-03", { exact: true }).waitFor();
+    await late.getByText("rg-2026-08-19", { exact: true }).waitFor();
+    for (const day of ["2026-08-03", "2026-08-19"]) {
+      expect(requests.some(url => url.pathname.endsWith("/dashboard/day") &&
+        url.searchParams.get("day") === day && url.searchParams.get("scope") === second &&
+        url.searchParams.get("current_only") === "true" && url.searchParams.get("dimension") === "resource_group" &&
+        !url.searchParams.has("period_month"))).toBe(true);
+    }
+    await page.getByLabel("Second billing date").fill("2026-08-20");
+    await contributors.getByText("No billing data for this date in the selected scope.").waitFor();
+    expect(await late.count()).toBe(0);
+    expect(requests.some(url => url.pathname.endsWith("/dashboard/day") && url.searchParams.get("day") === "2026-08-20")).toBe(false);
+    await page.getByLabel("Second billing date").fill("2026-08-03");
+    await page.getByText("Choose two different dates.", { exact: true }).waitFor();
+    expect(await usdChart.count()).toBe(0);
+    await page.close();
+  }, 30_000);
+
   it("removes redundant navigation and routes old Performance bookmarks to Savings", async () => {
     const { page } = await mount(`/optimize/performance?scope=${first}`);
     expect(new URL(page.url()).pathname).toBe("/v2/optimize/savings");

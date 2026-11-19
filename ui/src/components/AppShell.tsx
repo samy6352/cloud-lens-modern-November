@@ -2,8 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { DropdownMenu } from "radix-ui";
 import {
+  ArrowRight,
   Check,
   ChevronDown,
+  Compass,
   LogOut,
   Monitor,
   Moon,
@@ -42,6 +44,20 @@ function Sidebar() {
   const me = useQuery(meQuery);
   const current = useCurrentScreen();
   const search = useSearch({ from: "__root__" });
+  const navigate = useNavigate();
+  const workspaces = WORKSPACES.map(ws => ({
+    ...ws,
+    screens: ws.screens.filter(s => !s.adminOnly || me.data?.user?.admin),
+  })).filter(ws => ws.screens.length > 0);
+  const activeWorkspace = workspaces.find(ws => ws.screens.some(s => s.id === current.id)) ?? workspaces[0]!;
+  const [selection, setSelection] = useState<{ from: string; workspace: string; screen: string }>();
+  const pending = selection?.from === current.id ? selection : undefined;
+  const workspace = workspaces.find(ws => ws.id === pending?.workspace) ?? activeWorkspace;
+  const destination = workspace.screens.find(s => s.id === (pending?.screen ?? current.id)) ?? workspace.screens[0]!;
+  const compactSelect = cn(
+    "relative h-9 w-full appearance-none rounded-md border border-border bg-surface px-2 text-sm text-transparent focus-visible:outline-2 focus-visible:outline-accent [&_option]:text-fg",
+    !collapsed && "sm:pr-7 sm:text-fg",
+  );
 
   return (
     <aside
@@ -50,7 +66,14 @@ function Sidebar() {
         collapsed ? "w-16" : "w-16 sm:w-64",
       )}
     >
-      <div className="flex h-14 items-center gap-2.5 px-4">
+      <Link
+        to="/"
+        search={search}
+        activeOptions={{ exact: true }}
+        aria-label="CloudLens home"
+        title="CloudLens home"
+        className="flex h-11 shrink-0 items-center gap-2.5 px-4 transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+      >
         <img src={logo} alt="" className="size-7 shrink-0" />
         {!collapsed && (
           <div className="hidden min-w-0 sm:block">
@@ -58,19 +81,17 @@ function Sidebar() {
             <div className="text-[11px] text-muted">v3 preview</div>
           </div>
         )}
-      </div>
+      </Link>
 
-      <nav aria-label="Workspaces" className="flex-1 overflow-y-auto px-2 pb-4">
-        {WORKSPACES.map((ws) => {
-          const screens = ws.screens.filter((s) => !s.adminOnly || me.data?.user?.admin);
-          if (!screens.length) return null;
+      <nav aria-label="Workspaces" className="hidden space-y-2 px-2 py-1 [@media(min-height:49em)]:block">
+        {workspaces.map((ws) => {
           return (
-            <div key={ws.id} className="mt-4 first:mt-1">
-              {!collapsed && ws.screens.length > 1 && (
-                <div className="hidden px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted sm:block">{ws.label}</div>
+            <div key={ws.id}>
+              {!collapsed && ws.id !== "overview" && (
+                <div className="hidden px-2 text-[11px] font-semibold uppercase tracking-wider text-muted sm:block">{ws.label}</div>
               )}
-              <ul className="space-y-0.5">
-                {screens.map((s) => {
+              <ul>
+                {ws.screens.map((s) => {
                   const active = s.id === current.id;
                   const Icon = s.icon;
                   return (
@@ -81,7 +102,7 @@ function Sidebar() {
                         title={s.label}
                         aria-label={s.label}
                         className={cn(
-                          "group relative flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+                          "group relative flex h-7 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors",
                           active ? "text-fg" : "text-muted hover:bg-surface-2 hover:text-fg",
                         )}
                       >
@@ -113,7 +134,38 @@ function Sidebar() {
         })}
       </nav>
 
-      <div className="hidden border-t border-border p-2 sm:block">
+      <nav aria-label="Workspaces" className="grid gap-1 px-2 py-1 [@media(min-height:49em)]:hidden">
+        <div className="relative">
+          <select aria-label="Choose workspace" title={`Workspace: ${workspace.label}`} className={compactSelect}
+            value={workspace.id} onChange={(event) => {
+              const next = workspaces.find(ws => ws.id === event.target.value);
+              if (next) setSelection({ from: current.id, workspace: next.id, screen: next.screens[0]!.id });
+            }}>
+            {workspaces.map(ws => <option key={ws.id} value={ws.id}>{ws.label}</option>)}
+          </select>
+          <workspace.icon aria-hidden className={cn("pointer-events-none absolute inset-0 m-auto size-4", !collapsed && "sm:hidden")} />
+          {!collapsed && <ChevronDown aria-hidden className="pointer-events-none absolute inset-y-0 right-2 my-auto hidden size-4 sm:block" />}
+        </div>
+        <div className="relative">
+          <select aria-label="Choose page" title={`Page: ${destination.label}`} className={compactSelect}
+            value={destination.id} onChange={(event) => setSelection({ from: current.id, workspace: workspace.id, screen: event.target.value })}>
+            {workspace.screens.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+          <Compass aria-hidden className={cn("pointer-events-none absolute inset-0 m-auto size-4", !collapsed && "sm:hidden")} />
+          {!collapsed && <ChevronDown aria-hidden className="pointer-events-none absolute inset-y-0 right-2 my-auto hidden size-4 sm:block" />}
+        </div>
+        <Button type="button" variant="ghost" size="md" className="h-9 text-muted"
+          aria-label={`Go to ${destination.label}`} title={`Go to ${destination.label}`}
+          onClick={() => {
+            setSelection(undefined);
+            void navigate({ to: destination.to, search });
+          }}>
+          <ArrowRight />
+          {!collapsed && <span className="hidden sm:inline">Go to page</span>}
+        </Button>
+      </nav>
+
+      <div className="mt-auto hidden border-t border-border p-1 sm:block">
         <Button
           variant="ghost"
           size={collapsed ? "icon" : "md"}

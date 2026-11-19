@@ -318,6 +318,8 @@ export interface AnomalyReport {
   daily_by_currency?: Record<string, AnomalyReport["daily"]>;
   reported_daily_by_currency?: Record<string, AnomalyReport["daily"]>;
   coverage_reason?: string | null;
+  requested_from?: string | null;
+  requested_to?: string | null;
 }
 
 /** Days that did not look like the others, collapsed into incidents. Warehouse-only on the server. */
