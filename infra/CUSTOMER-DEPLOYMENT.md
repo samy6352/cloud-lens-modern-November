@@ -90,6 +90,11 @@ If Azure requires a provider before it can preview, ask an approved subscription
 administrator to register it and retry. The prior Azure CLI subscription selection
 is restored.
 Existing resource groups are refused by default, even with a new extraction folder.
+To try the same guided preview from a checkout with built UI assets, run
+`.\tools\preview-install.ps1` in PowerShell 7 from the repository root. It builds
+and verifies a temporary ZIP and runs Azure What-If without provisioning. Use
+`-NoToolInstall` to require existing local tools.
+
 For preview or an intentional resume, invoke the bootstrap script block with
 explicit parameters:
 
