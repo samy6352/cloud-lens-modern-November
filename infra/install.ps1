@@ -107,6 +107,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    throw "CloudLens setup requires PowerShell 7 in FullLanguage mode. This session is $($ExecutionContext.SessionState.LanguageMode). Use an organisation-approved environment, such as approved Azure Cloud Shell (PowerShell), or ask your administrator for an approved installation path."
+}
 if ($AppIdentityOnly -and $RequireDelegatedArm) {
     throw '-AppIdentityOnly cannot be combined with -RequireDelegatedArm.'
 }
@@ -499,6 +502,7 @@ if ($LocalSignIn) {
 if ($WhatIf) { $deploy.WhatIf = $true }
 $env:CLOUDLENS_WEBAPP_NAME = $null
 & (Join-Path (Join-Path $root 'infra') 'deploy.ps1') @deploy
+if (-not $?) { throw "CloudLens deployment did not complete (exit $LASTEXITCODE)." }
 if ($WhatIf) {
     Write-Host ''
     Write-Host 'Preview only: no provider was registered and nothing was deployed.' -ForegroundColor Yellow

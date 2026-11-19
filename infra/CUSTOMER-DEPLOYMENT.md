@@ -34,7 +34,14 @@ against the customer's network policy before proceeding.
 
 ### One-line download and installation
 
-Start in PowerShell 7. Releases containing `infra/install-prerequisites.ps1`
+Start in PowerShell 7 in `FullLanguage` mode. Check the current mode with
+`$ExecutionContext.SessionState.LanguageMode`. The bootstrap and checkout
+preview do not support `ConstrainedLanguage`. If your workstation enforces it,
+use an organisation-approved environment (for example, Azure Cloud Shell
+in PowerShell mode if approved) or ask your administrator for an approved
+installation path. Do not change workstation policy to run the installer.
+
+Releases containing `infra/install-prerequisites.ps1`
 check Azure CLI, Bicep and Python 3.11+ and install missing tools where supported:
 Windows Package Manager for Azure CLI and Python, and `az bicep install` for Bicep.
 The source ZIP contains the built interface, so a customer install needs neither

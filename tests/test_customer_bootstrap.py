@@ -17,10 +17,25 @@ ORIGINAL = "99999999-9999-4999-8999-999999999999"
 
 @unittest.skipUnless(PWSH, "PowerShell 7 required")
 class CustomerBootstrap(unittest.TestCase):
+    def test_restricted_language_stops_before_packaging_or_download(self):
+        for path in ("tools/preview-install.ps1", "tools/install-customer.ps1",
+                     "web/install/bootstrap.ps1", "infra/install.ps1"):
+            with self.subTest(path=path):
+                script = str(ROOT / path).replace("'", "''")
+                result = subprocess.run(
+                    [PWSH, "-NoProfile", "-Command",
+                     "$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; "
+                     f"& '{script}'"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("requires PowerShell 7 in FullLanguage mode", result.stderr)
+                self.assertNotIn("Verify the release", result.stdout)
+
     def run_bootstrap(self, *, bad_hash=False, unsafe=False, approve=True, exists=False,
                       cloud_exists=False, resume=False, preview=False, blocked=False,
                       pipeline=False, offline=False, missing_hash=False, download_fail=False,
-                      explicit_options=False):
+                      explicit_options=False, preview_exit=0, restore_failed=False):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             archive = root / "fixture.zip"
@@ -46,6 +61,7 @@ param(
 if ($SubscriptionId -ne $Scope -or $ResourceGroup -ne $EntraAppUniqueName) { throw 'Target drift' }
 Write-Output "INSTALLED:$Location,$AiLocation,$AppIdentityOnly,preview=$WhatIf,scope=$Scope,group=$ResourceGroup"
 Write-Output "OPTIONS:$Size,history=$InitialHistoryMonths,prefix=$NamePrefix,suffix=$NameSuffix"
+if ($WhatIf -and $f.previewExit) { exit $f.previewExit }
 """)
                 bundle.writestr("infra/deploy.ps1", """
 param(
@@ -70,7 +86,8 @@ exit $global:preflightCode
                 "script": str(ROOT / "tools/install-customer.ps1"),
                 "approval": f"INSTALL {SUB} rg-customer" if approve else "NO",
                 "cloudExists": cloud_exists, "blocked": blocked,
-                "downloadFail": download_fail,
+                "downloadFail": download_fail, "previewExit": preview_exit,
+                "restoreFailed": restore_failed,
             }).replace("'", "''")
             options = ("-Resume " if resume else "") + ("-Preview " if preview else "")
             if offline:
@@ -129,7 +146,12 @@ function az {{
             @{{name='Target';id='{SUB}';tenantId='fixture';isDefault=$false;state='Enabled'}}
         ))
     }}
-    if ($call.StartsWith('account set')) {{ $global:current=$args[[array]::IndexOf($args,'--subscription')+1]; return }}
+    if ($call.StartsWith('account set')) {{
+        $target = $args[[array]::IndexOf($args,'--subscription')+1]
+        if ($target -eq '{ORIGINAL}' -and $f.restoreFailed) {{ $global:LASTEXITCODE = 1; return }}
+        $global:current = $target
+        return
+    }}
     if ($call.StartsWith('group exists')) {{ return $f.cloudExists.ToString().ToLowerInvariant() }}
     throw "Unexpected cloud command: $call"
 }}
@@ -251,6 +273,13 @@ exit $code
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn("blockers", blocked.stdout)
         self.assertNotIn("INSTALLED:", blocked.stdout)
+
+    def test_preview_failure_blocks_apply_even_if_subscription_restore_fails(self):
+        result = self.run_bootstrap(preview_exit=7, restore_failed=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Deployment preview failed", result.stdout)
+        self.assertIn("Could not restore the previous Azure CLI subscription", result.stdout)
+        self.assertNotIn("preview=False", result.stdout)
 
 
 if __name__ == "__main__":

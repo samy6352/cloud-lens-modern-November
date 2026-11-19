@@ -41,6 +41,9 @@ param(
     [switch]$NoToolInstall
 )
 $ErrorActionPreference = 'Stop'
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    throw "CloudLens setup requires PowerShell 7 in FullLanguage mode. This session is $($ExecutionContext.SessionState.LanguageMode). Use an organisation-approved environment, such as approved Azure Cloud Shell (PowerShell), or ask your administrator for an approved installation path."
+}
 function Write-SetupStage([int]$Number, [string]$Title, [string]$Detail) {
     Write-Host "`n[$Number/6] $Title" -ForegroundColor Cyan
     Write-Host "      $Detail"
@@ -490,5 +493,9 @@ try {
             -HostingSubscriptionId $SubscriptionId -Subscriptions $costScopeSubscriptions -Paused
     }
 } finally {
-    Invoke-BootstrapAz @('account', 'set', '--subscription', $original.id) | Out-Null
+    try {
+        Invoke-BootstrapAz @('account', 'set', '--subscription', $original.id) | Out-Null
+    } catch {
+        Write-Warning "Could not restore the previous Azure CLI subscription. Run: az account set --subscription $($original.id)"
+    }
 }
