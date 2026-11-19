@@ -75,6 +75,9 @@ class Packaging(unittest.TestCase):
             for name in names:
                 self.assertNotIn(b"must-not-ship", archive.read(name))
             manifest = json.loads(archive.read("release-manifest.json"))
+            identity = "".join(f"{entry['path']}:{entry['sha256']}\n"
+                               for entry in sorted(manifest["files"], key=lambda entry: entry["path"]))
+            self.assertEqual(manifest["releaseId"], hashlib.sha256(identity.encode()).hexdigest())
             for entry in manifest["files"]:
                 content = archive.read(entry["path"])
                 self.assertEqual(entry["sha256"], hashlib.sha256(content).hexdigest())
@@ -141,7 +144,9 @@ class Packaging(unittest.TestCase):
             "requirements.in", "requirements-dev.txt", "pyproject.toml",
             "ingest.py", "verify_warehouse.py",
             "tools/package.ps1", "tools/validate_package.py", "tools/verify_package.py", "tools/start_local.py", "infra/README.md",
-            "infra/install.ps1", "infra/deploy.ps1", "infra/preflight.ps1",
+            "tools/install-customer.ps1",
+            "infra/install.ps1", "infra/deploy.ps1", "infra/preflight.ps1", "infra/install-prerequisites.ps1",
+            "infra/add-subscriptions.ps1", "infra/CUSTOMER-DEPLOYMENT.md",
             "infra/deployment-checks.ps1", "infra/cost-access.ps1", "infra/storage-naming.ps1",
             "infra/focus-exports.ps1", "infra/grant-cost-access.ps1", "infra/main.bicep",
             "infra/bicepconfig.json", "infra/modules/identity.bicep",
@@ -159,7 +164,8 @@ class Packaging(unittest.TestCase):
             '<script type="module" src="/src/main.tsx"></script>', encoding="utf-8")
         for name in (
             "ui/node_modules/private.js", "ui/src/private.test.ts", "ui/src/.private/secret.ts",
-            "ui/src/credentials.json", "infra/private.json", "infra/main.json",
+            "ui/src/credentials.json", "ui/src/lib/tests/native-test-cleanup.ts",
+            "infra/private.json", "infra/main.json",
             "infra/terraform/customer.tfstate", "HANDOVER.md", "tools/bench-tabs-latest.json",
         ):
             path = self.root / name

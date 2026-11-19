@@ -1,11 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BadgeIndianRupee,
-  BarChart3,
   Bell,
   Boxes,
   Brain,
-  CalendarClock,
   ClipboardList,
   Clock,
   CloudDownload,
@@ -79,8 +77,8 @@ export const WORKSPACES: Workspace[] = [
     icon: Gauge,
     screens: [
       native("savings", "Savings", PiggyBank, "/optimize/savings", ["advisor", "rightsizing", "waste"]),
+      native("advisor-score", "Advisor Score", Gauge, "/optimize/advisor-score", ["five pillars", "security", "reliability", "score"]),
       native("commitments", "Reservation & Savings", Wallet, "/optimize/commitments", ["reservation", "savings plan", "commitment"]),
-      native("performance", "Performance vs Spend", BarChart3, "/optimize/performance", ["metrics"]),
     ],
   },
   {
@@ -90,7 +88,6 @@ export const WORKSPACES: Workspace[] = [
     screens: [
       native("budgets", "Budgets", ClipboardList, "/govern/budgets", ["budget", "forecast"]),
       native("governance", "Governance", ShieldCheck, "/govern/governance", ["policy"]),
-      native("esu", "End of support", CalendarClock, "/govern/esu", ["esu", "extended security"]),
       native("health", "Retirements", ScrollText, "/govern/retirements", ["retirement", "deprecation"]),
       native("changes", "Change Analysis", GitCompare, "/govern/changes", ["change"]),
       native("azure-updates", "Azure Updates", Newspaper, "/govern/azure-updates", ["news", "status"]),

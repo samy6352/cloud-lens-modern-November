@@ -75,7 +75,7 @@ export interface ShutdownRow {
 }
 export interface ShutdownReport {
   candidates: ShutdownRow[]; count: number; examined: number; currency: string | null;
-  total_current: number | null; total_saving: number | null; hours_kept?: number;
+  total_current: number | null; total_saving: number | null; hours_kept?: number; schedule?: string;
   totals_by_currency?: Record<string, { total_current: number | null; total_saving: number | null }>;
   skipped_production?: number; skipped_steady?: number; partial?: boolean; note?: string; window?: string; days_analysed?: number; error?: string;
   errors?: string[];
@@ -267,6 +267,24 @@ export function nativeBuckets(buckets: Record<string, number | null> | undefined
   return buckets && Object.keys(buckets).length
     ? Object.entries(buckets).map(([code, value]) => nativeMoney(value, code, system)).join(" · ")
     : nativeMoney(fallback, currency, system);
+}
+export function compareNativeCosts(
+  a: { cost_by_currency?: Record<string, number | null>; cost?: number | null; currency?: string | null },
+  b: { cost_by_currency?: Record<string, number | null>; cost?: number | null; currency?: string | null },
+  fallbackCurrency?: string | null,
+): number {
+  const amounts = (row: typeof a) => Object.entries(row.cost_by_currency && Object.keys(row.cost_by_currency).length
+    ? row.cost_by_currency : { [row.currency || fallbackCurrency || "Unknown"]: row.cost ?? null }).sort(([x], [y]) => x.localeCompare(y));
+  const left = amounts(a), right = amounts(b);
+  const currencies = left.map(([c]) => c).join(",").localeCompare(right.map(([c]) => c).join(","));
+  if (currencies) return currencies;
+  for (let i = 0; i < left.length; i++) {
+    const x = left[i]![1], y = right[i]![1];
+    if (x == null || y == null) {
+      if (x !== y) return x == null ? 1 : -1;
+    } else if (x !== y) return x - y;
+  }
+  return 0;
 }
 export function metricValue(metric?: Metric, percent = false): string {
   if (metric?.status === "not_applicable") return "Not applicable";

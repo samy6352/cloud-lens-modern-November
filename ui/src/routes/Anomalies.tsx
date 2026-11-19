@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
+import { periodParam } from "@/lib/period";
 import { anomaliesQuery, windowDays, type AnomalyIncident, type AnomalyReport } from "@/lib/queries";
 
 
@@ -18,22 +19,29 @@ const SEVERITY_CLASS: Record<string, string> = {
   low: "bg-surface-2 text-muted",
 };
 
-function trendOption(report: AnomalyReport, incidents: AnomalyIncident[]) {
-  const marked = new Set(incidents.flatMap((i) => [i.peak_day]));
+function trendOption(daily: AnomalyReport["daily"], incidents: AnomalyIncident[]) {
+  const marked = new Set(incidents.map((i) => i.peak_day));
+  const dates = daily.map((d) => d.day);
   return {
     grid: { left: 8, right: 8, top: 16, bottom: 8, containLabel: true },
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "category", data: report.daily.map((d) => d.day), axisLabel: { hideOverlap: true } },
+    tooltip: { trigger: "item" },
+    xAxis: { type: "time", axisLabel: { hideOverlap: true } },
     yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatNumber(v, { compact: true }) } },
     series: [
       {
         type: "line",
         name: "Daily cost",
-        showSymbol: false,
-        data: report.daily.map((d) => ({
-          value: d.cost,
-          ...(marked.has(d.day) ? { symbol: "circle", symbolSize: 9, itemStyle: { color: "#e5484d" } } : {}),
-        })),
+        showSymbol: true,
+        symbolSize: 4,
+        data: daily.flatMap((d, i) => {
+          const previous = dates[i - 1];
+          const point = {
+            value: [d.day, d.cost],
+            ...(marked.has(d.day) ? { symbolSize: 9, itemStyle: { color: "#e5484d" } } : {}),
+          };
+          if (!previous || Date.parse(d.day) - Date.parse(previous) <= 86_400_000) return [point];
+          return [{ value: [Date.parse(previous) + 86_400_000, null] }, point];
+        }),
         smooth: false,
       },
     ],
@@ -42,9 +50,16 @@ function trendOption(report: AnomalyReport, incidents: AnomalyIncident[]) {
 
 export function AnomaliesPage() {
   const search = useSearch({ from: "__root__" });
+  return <AnomaliesContent key={JSON.stringify([periodParam(search), search.scope, windowDays(search), search.currency])} />;
+}
+
+function AnomaliesContent() {
+  const search = useSearch({ from: "__root__" });
   const { numbers } = usePrefs();
   const [currency, setCurrency] = useState("");
-  const query = useQuery({ ...anomaliesQuery(search, windowDays(search), currency), placeholderData: keepPreviousData });
+  const inventory = useQuery(anomaliesQuery(search, windowDays(search), ""));
+  const filtered = useQuery({ ...anomaliesQuery(search, windowDays(search), currency), enabled: !!currency, placeholderData: keepPreviousData });
+  const query = currency ? filtered : inventory;
   const data = query.data;
   const money = (v: number | null | undefined, c: string | null | undefined) => formatMoney(v, c ?? null, { system: numbers });
 
@@ -120,7 +135,12 @@ export function AnomaliesPage() {
 
   if (query.isError && !data) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
 
-  const currencies = data?.mixed_currency ? Array.from(new Set(data.incidents.map((i) => i.currency).filter(Boolean))) : [];
+  const currencies = Array.from(new Set((inventory.data?.incidents ?? []).map((i) => i.currency).filter(Boolean)));
+  const verified = Object.entries(data?.daily_by_currency ?? {}).filter(([, points]) => points.length);
+  if (!verified.length && data?.daily?.length) verified.push([data.currency ?? "unknown", data.daily]);
+  const reported = Object.entries(data?.reported_daily_by_currency ?? {}).filter(([, points]) => points.length);
+  const trends = verified.length ? verified : reported;
+  const trendLabel = verified.length ? "Verified daily cost" : "Reported daily cost";
   return (
     <div>
       <PageHeader
@@ -128,10 +148,10 @@ export function AnomaliesPage() {
         subtitle={
           data ? (
             <>
-              Days compared with a rolling median
+              {data.unavailable ? "Anomaly assessment unavailable for this selection" : "Days compared with a rolling median"}
               {data.window_from && data.window_to && (
                 <>
-                  {" "}· judged <span className="num">{data.window_from}</span> to <span className="num">{data.window_to}</span>
+                  {" "}· billing dates <span className="num">{data.window_from}</span> to <span className="num">{data.window_to}</span>
                 </>
               )}
             </>
@@ -149,17 +169,31 @@ export function AnomaliesPage() {
       />
 
       {data?.note && <Card className="mb-4 p-4 text-sm text-muted">{data.note}</Card>}
+      {data?.coverage_reason && data.coverage_reason !== data.note && (
+        <p className="mb-4 text-sm text-muted">{data.coverage_reason}</p>
+      )}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {!data?.unavailable && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiTile index={0} loading={!data} label="Incidents" value={formatNumber(data?.incident_count, { system: numbers, digits: 0 })} hint={`${formatNumber(data?.count, { system: numbers, digits: 0 })} anomalous days`} />
         <KpiTile index={1} loading={!data} label="High severity" value={formatNumber(data?.high, { system: numbers, digits: 0 })} hint="days rated high" />
         <KpiTile index={2} loading={!data} label="Increases" value={formatNumber(data?.increases, { system: numbers, digits: 0 })} hint={`${formatNumber(data?.decreases, { system: numbers, digits: 0 })} decreases`} />
         <KpiTile index={3} loading={!data} label="Extra spend" value={data?.currency ? money(data.impact, data.currency) : "Mixed"} hint="sum of increases in the window" />
-      </div>
+      </div>}
 
       <Card className="mt-4">
-        <CardHeader title="Daily cost" subtitle="Red points mark each incident's peak day." />
-        <CardBody>{data ? <Chart height={240} option={trendOption(data, data.incidents)} /> : <Skeleton className="h-[240px] w-full" />}</CardBody>
+        <CardHeader title={trendLabel} subtitle={verified.length ? "Red points mark incident peaks. Missing days are not filled with zero." : "Reported charges are not sufficient evidence to classify an anomaly."} />
+        <CardBody>
+          {!data ? <Skeleton className="h-[240px] w-full" /> : trends.length ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {trends.map(([code, points]) => (
+                <div key={code} className={trends.length === 1 ? "xl:col-span-2" : undefined}>
+                  <h3 className="text-sm font-medium">{code === "unknown" ? "Currency unspecified" : code}</h3>
+                  <Chart height={200} option={trendOption(points, verified.length ? data.incidents.filter((i) => i.currency === code) : [])} />
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-sm text-muted">No billing data for the selected dates and subscriptions. Try a different reporting period or scope.</p>}
+        </CardBody>
       </Card>
 
       <Card className="mt-4">
@@ -172,7 +206,7 @@ export function AnomaliesPage() {
               rowKey={(r) => r.id}
               busy={query.isFetching}
               height={Math.min(560, 56 + data.incidents.length * 56)}
-              empty={data.unavailable ? "Not enough verified history to assess this window." : "Nothing unusual in this window."}
+              empty={data.unavailable ? "Not enough verified history to assess this window." : data.partial ? "No incidents detected in the days that could be assessed." : "Nothing unusual in this window."}
             />
           ) : (
             <Skeleton className="h-[320px] w-full" />

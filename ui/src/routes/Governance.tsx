@@ -4,10 +4,35 @@ import { useMemo, useState } from "react";
 import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
 import { KpiTile, PageHeader } from "@/components/blocks";
-import { Card } from "@/components/ui/card";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { GovernDetails, GovernError, GovernField, GovernLink, GovernLoading, GovernNotice, GovernRefresh, GovernSelect, governInput } from "@/components/GovernControls";
-import { globalScope, governanceFindings, governanceQuery, nativeMoney, type GovernanceFinding } from "@/lib/govern-queries";
+import { globalScope, governanceFindings, governanceQuery, nativeMoney, type GovernanceFinding, type GovernanceReport, type GovernResource } from "@/lib/govern-queries";
+
+const nic = columnHelper<GovernResource>();
+const nicColumns = [
+  nic.accessor("vmName", { header: "Virtual machine", cell: c => <GovernLink resourceId={c.row.original.vmId}>{c.getValue() || "Open VM"}</GovernLink>, meta: { width: "minmax(160px,1.3fr)" } }),
+  nic.accessor("nicName", { header: "Network interface", cell: c => <GovernLink resourceId={c.row.original.nicId}>{c.getValue() || "Open NIC"}</GovernLink>, meta: { width: "minmax(160px,1.3fr)" } }),
+  nic.accessor("vmSize", { header: "VM size" }),
+  nic.accessor("powerState", { header: "Power state", cell: c => c.getValue() || "Not reported" }),
+  nic.accessor("resourceGroup", { header: "Resource group" }),
+  nic.accessor("location", { header: "Region" }),
+];
+
+function NetworkingCandidates({ report }: { report: GovernanceReport["accelerated_networking"] }) {
+  const rows = (report.catalogue ? report.eligible ?? [] : []).filter(row => row.nicId && row.vmId);
+  const count = report.eligible_count ?? rows.length;
+  return <Card>
+    <CardHeader title="Accelerated Networking candidates" subtitle="Attached NICs with Accelerated Networking off and verified Azure VM-size support." />
+    <CardBody className="space-y-3">
+      {rows.length > 0 && <DataTable data={rows} columns={nicColumns} rowKey={r => r.nicId ?? ""} height={Math.min(360, 56 + rows.length * 52)} />}
+      {!rows.length && !(report.error || report.reason) && <p className="text-sm text-muted">{report.unverified ? "No candidates could be confirmed from the available evidence." : "No eligible interfaces found in the scanned inventory."}</p>}
+      {!!report.unverified && <GovernNotice warning>{report.unverified} interfaces could not be verified and are excluded.</GovernNotice>}
+      {report.truncated && <GovernNotice warning>Showing {rows.length} of {count} verified candidates in the scanned inventory. Narrow the subscription scope if the inventory is incomplete.</GovernNotice>}
+      <p className="text-sm text-muted">Verify guest OS and driver support and plan downtime before enabling this in Azure. The VM must be deallocated first; CloudLens does not change it.</p>
+    </CardBody>
+  </Card>;
+}
 
 export function GovernancePage() {
   const scope = globalScope(useSearch({ strict: false }));
@@ -39,9 +64,10 @@ export function GovernancePage() {
   return <div className="space-y-5"><PageHeader title="Governance" subtitle="Read-only configuration findings: tag allocation, network eligibility and empty groups. This endpoint does not evaluate Azure Policy compliance." actions={<GovernRefresh busy={query.isFetching} onClick={() => void query.refetch()} />} />
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><KpiTile label="Tag coverage" value={data?.tagging.coverage_pct == null ? "Unavailable" : `${data.tagging.coverage_pct}%`} hint={`${data?.tagging.scanned?.tagged ?? "—"} of ${data?.tagging.scanned?.resources ?? "—"} taggable`} />
       <KpiTile label="Untagged inventory" value={data?.tagging.error ? "Unavailable" : data?.tagging.untagged_total ?? "—"} hint="Finding list contains billed resources only" />
-      <KpiTile label="Networking candidates" value={data?.accelerated_networking.error ? "Unavailable" : data?.accelerated_networking.eligible?.length ?? "—"} hint={data?.accelerated_networking.catalogue ? "Verified SKU catalogue" : "SKU eligibility unverified"} />
+      <KpiTile label="Networking candidates" value={data?.accelerated_networking.error || data?.accelerated_networking.reason ? "Unavailable" : data?.accelerated_networking.eligible_count ?? "—"} hint="Off on a supported VM size" />
       <KpiTile label="Empty groups listed" value={data?.orphaned_resource_groups.error ? "Unavailable" : data?.orphaned_resource_groups.groups?.length ?? "—"} hint={data?.orphaned_resource_groups.truncated ? "Partial inventory" : "Roles and locks not checked"} /></div>
     {data && [data.tagging, data.accelerated_networking, data.orphaned_resource_groups].map((section, i) => section.error || section.reason ? <GovernNotice key={i} warning>{["Tag coverage", "Accelerated networking", "Empty resource groups"][i]}: {section.error || section.reason}</GovernNotice> : null)}
+    {data && <NetworkingCandidates report={data.accelerated_networking} />}
     <Card className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4"><GovernField label="Search findings"><input className={governInput} type="search" value={q} onChange={e => setQ(e.target.value)} /></GovernField>
       <GovernSelect label="Finding" value={category} onChange={setCategory} options={all.map(r => r.category)} />
       <GovernSelect label="Review priority" value={severity} onChange={setSeverity} options={all.map(r => r.severity)} />

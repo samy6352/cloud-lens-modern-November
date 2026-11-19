@@ -42,7 +42,8 @@ $ui = Join-Path $root 'ui'
 $hasUi = Test-Path -LiteralPath (Join-Path $ui 'package.json') -PathType Leaf
 $builtUi = $false
 if ($hasUi -and -not $SkipUiBuild) {
-    $nodeOk = (Get-Command node -ErrorAction SilentlyContinue) -and (Get-Command npm -ErrorAction SilentlyContinue)
+    $npm = if ($IsWindows) { 'npm.cmd' } else { 'npm' }
+    $nodeOk = (Get-Command node -ErrorAction SilentlyContinue) -and (Get-Command $npm -ErrorAction SilentlyContinue)
     if ($nodeOk) { & node --version *> $null; $nodeOk = $LASTEXITCODE -eq 0 }
     if (-not $nodeOk) {
         # Not fatal while the classic interface at / is still the product: /v2 answers with an
@@ -52,9 +53,9 @@ if ($hasUi -and -not $SkipUiBuild) {
     } else {
         Push-Location -LiteralPath $ui
         try {
-            & npm ci --no-audit --no-fund --loglevel=error
+            & $npm ci --no-audit --no-fund --loglevel=error
             if ($LASTEXITCODE -ne 0) { throw 'npm ci failed for ui/.' }
-            & npm run build --silent
+            & $npm run build --silent
             if ($LASTEXITCODE -ne 0) { throw 'The v3 interface (ui/) failed to build.' }
             $builtUi = $true
         } finally {
@@ -106,8 +107,10 @@ if ($InstallerSource) {
         'requirements.in', 'requirements-dev.txt', 'pyproject.toml',
         'ingest.py', 'verify_warehouse.py',
         'tools/package.ps1', 'tools/validate_package.py', 'tools/verify_package.py', 'tools/start_local.py',
-        'infra/README.md', 'infra/install.ps1', 'infra/deploy.ps1',
-        'infra/preflight.ps1', 'infra/deployment-checks.ps1',
+        'tools/install-customer.ps1',
+        'infra/README.md', 'infra/CUSTOMER-DEPLOYMENT.md', 'infra/install.ps1', 'infra/deploy.ps1',
+        'infra/add-subscriptions.ps1',
+        'infra/preflight.ps1', 'infra/deployment-checks.ps1', 'infra/install-prerequisites.ps1',
         'infra/cost-access.ps1', 'infra/storage-naming.ps1',
         'infra/focus-exports.ps1', 'infra/grant-cost-access.ps1',
         'infra/main.bicep', 'infra/bicepconfig.json',
@@ -192,6 +195,14 @@ $manifest = [ordered]@{
         [ordered]@{ path = $_.Path; bytes = $_.Size; sha256 = (Get-FileHash -LiteralPath $_.Source -Algorithm SHA256).Hash.ToLowerInvariant() }
     })
 }
+$identityRecords = [string[]]@($manifest.files | ForEach-Object { "$($_.path):$($_.sha256)`n" })
+[Array]::Sort($identityRecords, [StringComparer]::Ordinal)
+$identityText = $identityRecords -join ''
+$sha = [Security.Cryptography.SHA256]::Create()
+try {
+    $manifest.releaseId = [BitConverter]::ToString($sha.ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes($identityText))).Replace('-', '').ToLowerInvariant()
+} finally { $sha.Dispose() }
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destinationPath)) | Out-Null
 $stream = [IO.File]::Open($destinationPath, [IO.FileMode]::CreateNew)
 $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
@@ -213,9 +224,16 @@ try {
     $archive.Dispose()
     $stream.Dispose()
 }
+$verification = Join-Path $PSScriptRoot 'verify_package.py'
+& $Python $verification $destinationPath --kind $manifest.kind --version $Version | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item -LiteralPath $destinationPath -Force
+    throw 'The completed package failed integrity verification; no release was produced.'
+}
 [pscustomobject]@{
     Path = $destinationPath
     Files = $files.Count
     Bytes = (Get-Item -LiteralPath $destinationPath).Length
     Sha256 = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    ReleaseId = $manifest.releaseId
 }

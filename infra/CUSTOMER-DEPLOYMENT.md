@@ -34,9 +34,17 @@ against the customer's network policy before proceeding.
 
 ### One-line download and installation
 
-Install PowerShell 7, Azure CLI and Python 3.11+ first. Sign in with `az login`
-to the approved customer tenant. The source ZIP contains the built interface;
-Node.js 20+ is needed only to rebuild it.
+Start in PowerShell 7. Releases containing `infra/install-prerequisites.ps1`
+check Azure CLI, Bicep and Python 3.11+ and install missing tools where supported:
+Windows Package Manager for Azure CLI and Python, and `az bicep install` for Bicep.
+The source ZIP contains the built interface, so a customer install needs neither
+Node.js nor access to the npm registry. A source checkout without built assets
+needs a current Node.js LTS and npm. Use `-NoToolInstall` to check without
+installing any tools, or use approved Azure Cloud Shell (PowerShell) and have
+your administrator supply anything missing. Older releases require manual setup.
+Sign in to the approved tenant with `az login --tenant <customer-tenant-id>` or
+follow the guided sign-in if prompted. `-Approve` uses an existing CLI session
+and does not prompt for configuration or sign-in.
 
 An authorised maintainer's version-tag push invokes the gated release workflow.
 Only after its required checks succeed and the matching GitHub Release contains
@@ -64,13 +72,19 @@ have been published. The existing locally prepared rc1/rc2 ZIPs are stale
 candidates, not approved artifacts for the corrected code.
 
 The bootstrap downloads the versioned release ZIP and checksum, checks the hash and archive
-paths, then extracts into a new folder under `$HOME\CloudLens`. It requires
+paths, then extracts into a new folder under `$HOME\CloudLens`. If either release
+asset is unavailable or verification fails, it stops rather than using a source
+branch. It requires
 approved regions, an explicit hosting subscription ID and a new dedicated
 resource-group name. By default it now drives setup with numbered pick-lists
 (subscription, region, scope, sizing and import window), with recommended
 defaults selected on Enter. It selects and verifies that subscription, runs
 preflight and ARM preview, then asks for a final proceed/cancel confirmation
-before provisioning. The prior Azure CLI subscription selection is restored.
+before provisioning; pressing Enter at that prompt cancels. Preview can install
+local tools but does not register Azure providers or provision resources.
+If Azure requires a provider before it can preview, ask an approved subscription
+administrator to register it and retry. The prior Azure CLI subscription selection
+is restored.
 Existing resource groups are refused by default, even with a new extraction folder.
 For preview or an intentional resume, invoke the bootstrap script block with
 explicit parameters:

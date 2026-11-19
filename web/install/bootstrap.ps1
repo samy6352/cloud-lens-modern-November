@@ -23,19 +23,31 @@ param(
     [int]$InitialHistoryMonths = 1,
     [string]$NamePrefix = '',
     [string]$NameSuffix = '',
+    # Existing single-tenant Entra app registration client ID to reuse for sign-in.
+    [string]$EntraClientId = '',
+    # Sign-in bootstrap choice for deployment.
+    [ValidateSet('', 'precreated', 'create-during-deploy')]
+    [string]$SignInAppMode = '',
+    # Runtime Azure access mode choice for deployment.
+    [ValidateSet('', 'managed-identity', 'delegated-user')]
+    [string]$RuntimeAccessMode = '',
     # Approved offline download or unpublished release rehearsal; hash must be supplied separately.
     [string]$SourceZip = '',
     [string]$SourceSha256 = '',
     # Skip the final interactive approval prompt (required for non-interactive runs).
     [switch]$Approve,
     [switch]$Resume,
-    [switch]$Preview
+    [switch]$Preview,
+    [switch]$NoToolInstall
 )
 $ErrorActionPreference = 'Stop'
 if ($SourceZip -and $SourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
     throw '-SourceZip requires the separately supplied -SourceSha256 (64 hexadecimal characters).'
 }
 if ($SourceSha256 -and -not $SourceZip) { throw '-SourceSha256 requires -SourceZip.' }
+if ($EntraClientId -and $EntraClientId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+    throw '-EntraClientId must be a GUID.'
+}
 if (-not $Destination) {
     $Destination = Join-Path $HOME ("CloudLens\{0}-{1}" -f $Version, [guid]::NewGuid().ToString('N'))
 }
@@ -48,7 +60,6 @@ $asset = "CloudLens-$Version-source.zip"
 $base = "https://github.com/samy6352/cloud-lens-modern-November/releases/download/v$Version"
 $zip = Join-Path $Destination $asset
 $checksums = Join-Path $Destination 'SHA256SUMS.txt'
-$downloadedFromArchive = $false
 if ($SourceZip) {
     Copy-Item -LiteralPath $SourceZip -Destination $zip -ErrorAction Stop
     $expected = $SourceSha256
@@ -57,46 +68,21 @@ if ($SourceZip) {
     Write-Host "Downloading CloudLens $Version from GitHub."
     Write-Host 'The release must be published and accessible. Private releases require repository access.'
     try {
-        Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip
-        Invoke-WebRequest -Uri "$base/SHA256SUMS.txt" -OutFile $checksums
+        Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -TimeoutSec 120
+        Invoke-WebRequest -Uri "$base/SHA256SUMS.txt" -OutFile $checksums -TimeoutSec 30
     } catch {
-        Write-Warning "Release asset v$Version is unavailable ($($_.Exception.Message))."
-        Write-Warning 'Falling back to the repository source archive from GitHub.'
-        $fallbacks = @(
-            "https://github.com/samy6352/cloud-lens-modern-November/archive/refs/tags/v$Version.zip",
-            'https://github.com/samy6352/cloud-lens-modern-November/archive/refs/heads/main.zip'
-        )
-        $downloaded = $false
-        foreach ($fallback in $fallbacks) {
-            try {
-                Invoke-WebRequest -Uri $fallback -OutFile $zip
-                Write-Host "Downloaded fallback source archive: $fallback"
-                $downloaded = $true
-                $downloadedFromArchive = $true
-                break
-            } catch {
-                continue
-            }
-        }
-        if (-not $downloaded) {
-            throw "Could not download release v$Version or fallback source archives. Verify repository/release accessibility, or use -SourceZip/-SourceSha256. $($_.Exception.Message)"
-        }
+        throw "Could not download the release ZIP and checksum for v$Version. Verify repository/release accessibility, or use -SourceZip/-SourceSha256. $($_.Exception.Message)"
     }
-    if (-not $downloadedFromArchive) {
-        $matches = @(Get-Content -LiteralPath $checksums | Where-Object {
-            $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [regex]::Escape($asset) + '$')
-        })
-        if ($matches.Count -ne 1) {
-            throw "Expected one SHA-256 entry for $asset. Installation stopped."
-        }
-        $expected = ($matches[0] -split '\s+')[0]
+    $matches = @(Get-Content -LiteralPath $checksums | Where-Object {
+        $_ -match ('^[a-fA-F0-9]{64}\s+\*?' + [regex]::Escape($asset) + '$')
+    })
+    if ($matches.Count -ne 1) {
+        throw "Expected one SHA-256 entry for $asset. Installation stopped."
     }
+    $expected = ($matches[0] -split '\s+')[0]
 }
-if (-not $downloadedFromArchive -and (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) {
+if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $expected) {
     throw "Release SHA-256 mismatch. Installation stopped; do not execute files in $Destination."
-}
-if ($downloadedFromArchive) {
-    Write-Warning 'Using the repository source archive fallback (no release checksum file was available).'
 }
 
 $archive = [IO.Compression.ZipFile]::OpenRead($zip)
@@ -138,7 +124,14 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
 $source = $sourceRoot
 Write-Host "Verified and extracted to $source"
 Write-Host 'Keep this folder for deployment state and recovery. Installation incurs Azure charges.'
-if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Install Azure CLI and sign in with az login before continuing.' }
+$prerequisites = Join-Path $source 'infra\install-prerequisites.ps1'
+if (Test-Path -LiteralPath $prerequisites -PathType Leaf) {
+    . $prerequisites
+    Initialize-CloudLensAzureCli -NoToolInstall:$NoToolInstall
+    Connect-CloudLensAzure -NonInteractive:$Approve
+} elseif (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+    throw 'This older release needs Azure CLI installed in advance. Install it and sign in with az login, or use a newer verified installer-source release.'
+}
 function Invoke-BootstrapAz([string[]]$Arguments) {
     $output = & az @Arguments --only-show-errors --output json
     if ($LASTEXITCODE -ne 0) { throw "Azure CLI failed: az $($Arguments -join ' '). Resolve the error before continuing." }
@@ -148,13 +141,18 @@ function Select-InstallOption([string]$Title, [object[]]$Options, [int]$Default 
     Write-Host ''
     Write-Host $Title
     for ($i = 0; $i -lt $Options.Count; $i++) {
-        $hint = if (($i + 1) -eq $Default) { '  <- recommended' } else { '' }
+            $hint = if (($i + 1) -eq $Default) { '  <- default' } else { '' }
         Write-Host ("  {0}. {1}{2}" -f ($i + 1), $Options[$i].Label, $hint)
     }
-    $answer = (Read-Host "Choose 1-$($Options.Count) [$Default]").Trim()
-    $pick = if ($answer) { 0 + $answer } else { $Default }
-    if ($pick -lt 1 -or $pick -gt $Options.Count) { throw "Choose a number from 1 to $($Options.Count)." }
-    return $Options[$pick - 1].Value
+    do {
+        $answer = (Read-Host "Choose 1-$($Options.Count) [$Default]").Trim()
+        if (-not $answer) { return $Options[$Default - 1].Value }
+        $pick = 0
+        if ([int]::TryParse($answer, [ref]$pick) -and $pick -ge 1 -and $pick -le $Options.Count) {
+            return $Options[$pick - 1].Value
+        }
+        Write-Warning "Choose a number from 1 to $($Options.Count)."
+    } while ($true)
 }
 $DefaultAppLocation = 'centralindia'
 $DefaultAiLocation = 'eastus2'
@@ -162,7 +160,7 @@ $PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'
 $SuffixRule = '^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$'
 $original = Invoke-BootstrapAz @('account', 'show')
 if (-not $original.id) { throw 'Sign in with az login before continuing.' }
-$interactive = [Environment]::UserInteractive
+$interactive = -not $Approve -and [Environment]::UserInteractive
 $enabledSubscriptions = @(
     Invoke-BootstrapAz @('account', 'list', '--query',
         "[?state=='Enabled'].{name:name,id:id,tenantId:tenantId,isDefault:isDefault}")
@@ -242,6 +240,33 @@ try {
         if ($region -notmatch '^[a-z0-9]+$') {
             throw 'Use an approved Azure region code such as southeastasia. Installation stopped.'
         }
+    }
+    if (-not $RuntimeAccessMode -and $interactive) {
+        $RuntimeAccessMode = Select-InstallOption 'Select Azure runtime access mode:' @(
+            @{ Label = 'Managed identity only (no delegated admin-consent requirement)'; Value = 'managed-identity' }
+            @{ Label = 'Delegated user access (requires delegated ARM consent)'; Value = 'delegated-user' }
+        ) 1
+    }
+    if (-not $SignInAppMode -and $interactive) {
+        $SignInAppMode = Select-InstallOption 'Select sign-in app bootstrap mode:' @(
+            @{ Label = 'Use pre-created Entra app client ID (recommended for restricted tenants)'; Value = 'precreated' }
+            @{ Label = 'Create sign-in app during deployment (needs Graph app-registration privileges)'; Value = 'create-during-deploy' }
+        ) $(if ($EntraClientId) { 1 } else { 2 })
+    }
+    if (-not $SignInAppMode) {
+        $SignInAppMode = if ($EntraClientId) { 'precreated' } else { 'create-during-deploy' }
+    }
+    if (-not $RuntimeAccessMode) { $RuntimeAccessMode = 'managed-identity' }
+    if ($SignInAppMode -eq 'precreated' -and -not $EntraClientId) {
+        if ($interactive) {
+            $EntraClientId = (Read-Host 'Pre-created Entra app client ID (GUID)').Trim()
+        }
+    }
+    if ($SignInAppMode -eq 'precreated' -and ($EntraClientId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')) {
+        throw "Sign-in app mode '$SignInAppMode' requires -EntraClientId (GUID)."
+    }
+    if ($SignInAppMode -eq 'create-during-deploy' -and $EntraClientId) {
+        throw "Sign-in app mode '$SignInAppMode' cannot be combined with -EntraClientId. Choose -SignInAppMode precreated to reuse an app."
     }
     if (-not $PSBoundParameters.ContainsKey('Scope') -and $interactive) {
         $scopeChoice = Select-InstallOption 'Select monitoring scope:' @(
@@ -328,7 +353,9 @@ try {
         PostgresSku = $pgSku
         AppServicePlanSku = $planSku
     }
-    if ($preflightSupportsAppIdentityOnly) { $preflightOptions.AppIdentityOnly = $true }
+    if ($preflightSupportsAppIdentityOnly -and $RuntimeAccessMode -eq 'managed-identity') {
+        $preflightOptions.AppIdentityOnly = $true
+    }
     if ($managementGroupId) {
         $preflightOptions.ManagementGroupId = $managementGroupId
     } else {
@@ -340,8 +367,11 @@ try {
     $deployRaw = Get-Content -LiteralPath (Join-Path $source 'infra\deploy.ps1') -Raw
     $installerSupportsAllScope = $installerRaw -match "Kind = 'all'" -or $installerRaw -match "-Scope must be 'all'"
     $installerSupportsAppIdentityOnly = $installerRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
+    $installerSupportsRequireDelegatedArm = $installerRaw -match '(?m)^\s*\[switch\]\s*\$RequireDelegatedArm\b'
+    $installerSupportsEntraClientId = $installerRaw -match '(?m)^\s*\[string\]\s*\$EntraClientId\b'
     $deploySupportsAppIdentityOnly = $deployRaw -match '(?m)^\s*\[switch\]\s*\$AppIdentityOnly\b'
     $installerSupportsNonInteractive = $installerRaw -match '(?m)^\s*\[switch\]\s*\$NonInteractive\b'
+    $installerSupportsNoToolInstall = $installerRaw -match '(?m)^\s*\[switch\]\s*\$NoToolInstall\b'
     $effectiveScope = $Scope
     $postInstallExpandAllVisible = $false
     if ($Scope -ieq 'all' -and -not $installerSupportsAllScope) {
@@ -354,12 +384,29 @@ try {
         Scope = $effectiveScope; ResourceGroup = $ResourceGroup; EntraAppUniqueName = $ResourceGroup
         Size = $Size; InitialHistoryMonths = $InitialHistoryMonths
     }
-    if ($installerSupportsAppIdentityOnly -and $deploySupportsAppIdentityOnly) {
-        $options.AppIdentityOnly = $true
-    } elseif ($installerSupportsAppIdentityOnly -or $deploySupportsAppIdentityOnly) {
-        Write-Warning 'This installer release has partial AppIdentityOnly support; continuing without that switch for compatibility.'
+    if ($RuntimeAccessMode -eq 'managed-identity') {
+        if ($installerSupportsAppIdentityOnly -and $deploySupportsAppIdentityOnly) {
+            $options.AppIdentityOnly = $true
+        } elseif ($installerSupportsAppIdentityOnly -or $deploySupportsAppIdentityOnly) {
+            Write-Warning 'This installer release has partial AppIdentityOnly support; continuing without that switch for compatibility.'
+        }
+    } elseif ($RuntimeAccessMode -eq 'delegated-user') {
+        if ($installerSupportsRequireDelegatedArm) {
+            $options.RequireDelegatedArm = $true
+        } else {
+            Write-Warning 'This installer release does not expose -RequireDelegatedArm; delegated mode may fall back if consent is unavailable.'
+        }
+    } else {
+        throw "Unsupported runtime access mode: $RuntimeAccessMode"
+    }
+    if ($SignInAppMode -eq 'precreated') {
+        if (-not $installerSupportsEntraClientId) {
+            throw 'This installer release does not support -EntraClientId, but precreated sign-in app mode was requested.'
+        }
+        $options.EntraClientId = $EntraClientId
     }
     if ($installerSupportsNonInteractive) { $options.NonInteractive = $true }
+    if ($installerSupportsNoToolInstall -and $NoToolInstall) { $options.NoToolInstall = $true }
     if ($NamePrefix) { $options.NamePrefix = $NamePrefix }
     if ($NameSuffix) { $options.NameSuffix = $NameSuffix }
     & $installer @options -WhatIf
@@ -370,7 +417,7 @@ try {
             $approval = Select-InstallOption 'Provision CloudLens with these settings?' @(
                 @{ Label = 'Proceed with provisioning'; Value = 'proceed' }
                 @{ Label = 'Cancel'; Value = 'cancel' }
-            ) 1
+            ) 2
             if ($approval -ne 'proceed') {
                 throw "Installation not approved. Verified source remains in $source."
             }

@@ -51,7 +51,9 @@ param(
 
     [bool]$NetworkIsolation = $true,
 
-    [string]$VnetAddressPrefix = '10.70.0.0/16'
+    [string]$VnetAddressPrefix = '10.70.0.0/16',
+
+    [switch]$AppIdentityOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -177,18 +179,23 @@ try {
     Warn "could not read the tenant's app registration policy"
 }
 
-Info ""
-Info "Admin consent for delegated ARM access (user_impersonation) needs Cloud"
-Info "Application Administrator or higher, and is a one-time action per tenant."
-Info "Without it nobody can sign in, so agree who does this before deployment day."
-Warn "delegated ARM tenant consent has not been verified; subscription Owner does not establish directory consent rights"
-Info ""
-Info "Where that consent cannot be obtained, deploy with -AllowAppIdentityFallback."
-Info "CloudLens then resolves who holds a cost-capable role, which needs no directory"
-Info "rights -- but shows only subscriptions CloudLens itself was granted Reader on."
-Info "Select each scope to be analysed with -CostScopeSubscriptions (a same-tenant"
-Info "-CostScopeAllVisible sweep is opt-in), or people"
-Info "silently see less than they are entitled to."
+if ($AppIdentityOnly) {
+    Info "App-identity mode does not request delegated ARM permission or its admin consent."
+    Warn "Microsoft sign-in registration and tenant sign-in/consent policy still need identity-team approval"
+} else {
+    Info ""
+    Info "Admin consent for delegated ARM access (user_impersonation) needs Cloud"
+    Info "Application Administrator or higher, and is a one-time action per tenant."
+    Info "Without it nobody can sign in, so agree who does this before deployment day."
+    Warn "delegated ARM tenant consent has not been verified; subscription Owner does not establish directory consent rights"
+    Info ""
+    Info "Where that consent cannot be obtained, deploy with -AllowAppIdentityFallback."
+    Info "CloudLens then resolves who holds a cost-capable role, which needs no directory"
+    Info "rights -- but shows only subscriptions CloudLens itself was granted Reader on."
+    Info "Select each scope to be analysed with -CostScopeSubscriptions (a same-tenant"
+    Info "-CostScopeAllVisible sweep is opt-in), or people"
+    Info "silently see less than they are entitled to."
+}
 
 # ---------------------------------------------------------- resource providers
 
@@ -216,7 +223,7 @@ foreach ($rp in $needed) {
     } else {
         # Registering is something the deployment itself will trigger, but it can
         # take minutes and it needs Contributor -- better to know now.
-        Warn "$rp is '$state'; register it before deployment and wait for Registered status"
+        Warn "$rp is '$state'. If ARM preview needs it first, ask an approved administrator to run: az provider register --namespace $rp --subscription $($account.id) --wait"
     }
 }
 

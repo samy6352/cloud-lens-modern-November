@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { useSearch } from "@tanstack/react-router";
 import { Command } from "cmdk";
-import { Calendar, ExternalLink, Layers, LogOut, Monitor, Moon, RefreshCw, Rows3, Server, Sun } from "lucide-react";
+import { Calendar, Layers, LogOut, Monitor, Moon, RefreshCw, Rows3, Server, Sun } from "lucide-react";
 import { formatMonth, formatMoney } from "@/lib/format";
 import { setPrefs, usePrefs } from "@/lib/prefs";
 import { meQuery, periodQuery, subscriptionsQuery } from "@/lib/queries";
@@ -107,9 +107,6 @@ export function CommandPalette({ open, onOpenChange, navigate }: Props) {
           >
             <Layers /> All subscriptions
           </Command.Item>
-          <Command.Item className={item} value="classic interface old ui" onSelect={() => run(() => window.location.assign("/"))}>
-            <ExternalLink /> Open classic interface
-          </Command.Item>
           <Command.Item className={item} value="sign out logout" onSelect={() => run(() => void signOut())}>
             <LogOut /> Sign out
           </Command.Item>
@@ -120,7 +117,7 @@ export function CommandPalette({ open, onOpenChange, navigate }: Props) {
             <Command.Item
               className={item}
               value="month last 30 days rolling"
-              onSelect={() => run(() => void navigate({ to: ".", search: { ...search, month: undefined } }))}
+              onSelect={() => run(() => void navigate({ to: ".", search: { ...search, month: undefined, days: undefined, from: undefined, to: undefined } }))}
             >
               <Calendar /> Last 30 days
             </Command.Item>

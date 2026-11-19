@@ -42,6 +42,7 @@ function global:az {
         return ''
     }
     $sub = arg '--subscription'
+    if ($call -match '^(version|bicep version|account get-access-token)\b') { return }
     if ($call.StartsWith('account show')) {
         if (-not $sub) { $sub = $fixture.host }
         return (ConvertTo-Json -Depth 10 -InputObject $fixture.accounts[$sub])
@@ -86,7 +87,8 @@ param(
     [string]$AiLocation, [string]$EntraAppUniqueName,
     [string]$AppServicePlanSku, [switch]$SkipFocusExports, [switch]$EnableExportManagement,
     [bool]$ManagedExports, [int]$InitialHistoryMonths, [string[]]$CostScopeSubscriptions, [string]$CostScopeManagementGroup, [switch]$CostScopeAllVisible,
-    [string]$EntraClientId, [string]$NamePrefix, [string]$NameSuffix, [switch]$AllowAppIdentityFallback, [switch]$AppIdentityOnly, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf
+    [string]$EntraClientId, [string]$NamePrefix, [string]$NameSuffix, [switch]$AllowAppIdentityFallback, [switch]$AppIdentityOnly, [switch]$SkipEntra, [bool]$AuthAllowLocal, [string]$AuthUsers, [switch]$WhatIf,
+    [string]$PackagePython, [switch]$UsePrebuiltUi
 )
 if ($fixture.deployed) { $env:CLOUDLENS_WEBAPP_NAME = $fixture.deployed }
 $bound = [ordered]@{}
@@ -156,6 +158,7 @@ class Installer(unittest.TestCase):
         (self.root / "infra").mkdir()
         (self.root / "app" / "main.py").write_text("", encoding="utf-8")
         shutil.copy(ROOT / "infra" / "install.ps1", self.root / "infra" / "install.ps1")
+        shutil.copy(ROOT / "infra" / "install-prerequisites.ps1", self.root / "infra")
         (self.root / "infra" / "deploy.ps1").write_text(STUB_DEPLOY, encoding="utf-8")
         (self.root / "infra" / "focus-exports.ps1").write_text(STUB_EXPORTS, encoding="utf-8")
 
@@ -194,6 +197,8 @@ exit $code
     def test_default_install_monitors_every_visible_subscription_in_the_tenant(self):
         result, recorded, deploy = self.install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(deploy.pop("PackagePython"))
+        self.assertFalse(deploy.pop("UsePrebuiltUi"))
         self.assertEqual(deploy, {
             "Location": "centralindia", "ResourceGroup": "rg-cloudlens",
             "PostgresSku": "Standard_D2ds_v5", "PostgresStorageGb": 128, "AppServicePlanSku": "B2",
@@ -335,6 +340,14 @@ exit $code
         self.assertIsNotNone(deploy)
         self.assertIn(f"az provider register --namespace Microsoft.CostManagementExports --subscription {S3}",
                       result.stdout + result.stderr)
+
+    def test_denied_hosting_provider_stops_before_deployment(self):
+        data = fixture()
+        data["denied"] = [HOST]
+        result, _, deploy = self.install(data=data)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(deploy)
+        self.assertIn("Required hosting providers are not ready", result.stdout + result.stderr)
 
     def test_local_sign_in_and_existing_registration_are_passed_through(self):
         result, _, deploy = self.install("-LocalSignIn")

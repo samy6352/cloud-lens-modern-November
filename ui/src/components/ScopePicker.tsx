@@ -23,8 +23,7 @@ export function ScopePicker() {
   const names = new Map(list.map((s) => [s.id.toLowerCase(), s.name ?? s.id]));
   const selectedIds = new Set([...selected].map(id => id.toLowerCase()));
   const routePath = pathname.replace(/^\/v2(?=\/|$)/, "") || "/";
-  const liveOnly = routePath.startsWith("/govern/") || routePath.startsWith("/admin/")
-    || routePath === "/optimize/performance";
+  const liveOnly = routePath.startsWith("/govern/") || routePath.startsWith("/admin/");
   const historicalSelected = list.some(s => selectedIds.has(s.id.toLowerCase()) && s.azure_access === false);
 
   const apply = (next: Set<string>) =>

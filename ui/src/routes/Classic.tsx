@@ -7,6 +7,7 @@ export function ClassicPage() {
   const { screen } = useParams({ from: "/classic/$screen" });
   const target = screenById(screen);
   const search = useSearch({ from: "__root__" });
+  if (screen === "esu") return <Navigate to="/govern/governance" search={search} replace />;
   if (target) return <Navigate to={target.to} search={search} replace />;
 
   return (

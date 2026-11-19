@@ -52,6 +52,7 @@ from .entra import needs_admin_consent as entra_needs_consent
 from .entra import normalise_email as entra_email
 from .entra import sign as entra_sign
 from .job_policy import initial_history_months
+from .release import release_id
 from .snapshot_cache import (
     CacheContext,
     SnapshotCache,
@@ -951,7 +952,7 @@ def auth_service() -> Auth:
 # Signing in, the login page itself and the static assets it needs. Everything else — including
 # the app shell — requires a session, so an unauthenticated visitor learns nothing about the
 # estate, not even how many subscriptions there are.
-PUBLIC_PATHS = {"/login", "/healthz", "/readyz", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+PUBLIC_PATHS = {"/login", "/healthz", "/readyz", "/release.json", "/api/auth/login", "/api/auth/logout", "/api/auth/me",
                 # Admin consent has to be reachable by someone who cannot sign in yet — that is
                 # the entire situation it exists to resolve.
                 "/auth/login", "/auth/callback", "/auth/admin-consent"}
@@ -1782,6 +1783,15 @@ async def me(request: Request) -> JSONResponse:
 async def healthz() -> JSONResponse:
     """Liveness for a load balancer. Deliberately says nothing about the estate."""
     return JSONResponse({"status": "ok"})
+
+
+@app.get("/release.json", include_in_schema=False)
+async def running_release() -> JSONResponse:
+    identity = release_id()
+    return JSONResponse(
+        {"releaseId": identity}, status_code=200 if identity is not None else 503,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/readyz", include_in_schema=False)
@@ -4386,6 +4396,27 @@ async def dashboard_advisor(request: Request, category: str = "Cost",
     except Exception as exc:  # noqa: BLE001
         log.warning("advisor tab failed: %s", str(exc)[:200])
         return JSONResponse({"error": str(exc)[:300], "recommendations": []}, status_code=502)
+
+
+@app.get("/api/dashboard/advisor-score")
+async def dashboard_advisor_score(request: Request, scope: str = "") -> JSONResponse:
+    from .advisor_score import advisor_scores
+    from .cost import CostError
+
+    user = current_user(request)
+    allowed = await permitted(user)
+    picked = selected_scope(scope.split(","), allowed)
+    try:
+        async with as_user(user):
+            result = await advisor_scores(subscription_ids=picked)
+        failed = result["subscriptions"] and all(
+            row["status"] == "error" for row in result["subscriptions"])
+        return JSONResponse(result, status_code=502 if failed else 200)
+    except ValueError as exc:
+        raise HTTPException(400, "Advisor Score scope must contain subscription IDs.") from exc
+    except CostError as exc:
+        log.warning("Advisor Score discovery failed: %s", str(exc)[:200])
+        raise HTTPException(502, str(exc)[:300]) from exc
 
 
 @app.get("/api/dashboard/governance")

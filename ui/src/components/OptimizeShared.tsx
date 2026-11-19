@@ -38,7 +38,7 @@ export function OptimizeSelect({ label, value, onChange, options }: { label: str
 export function OptimizeWindow({ days, onChange, evidence = false }: { days: number; onChange: (v: number) => void; evidence?: boolean }) {
   return <OptimizeSelect label={evidence ? "Evidence window" : "Source window"} value={String(days)} onChange={v => onChange(Number(v))} options={(evidence ? [1, 7, 14] : [14, 30, 60, 90, 365]).map(v => ({ value: String(v), label: v === 1 ? "Last 24 hours" : `Last ${v} days` }))} />;
 }
-export interface OptimizeColumn<T> { id: string; label: string; value: (row: T) => string | number | null | undefined; cell?: (row: T) => ReactNode; width?: string; numeric?: boolean }
+export interface OptimizeColumn<T> { id: string; label: string; value: (row: T) => string | number | null | undefined; cell?: (row: T) => ReactNode; width?: string; numeric?: boolean; compare?: (a: T, b: T) => number }
 export function OptimizeTable<T extends RowData>({ title, rows, columns, rowKey, empty = "No records returned for this selection.", onSelect, note, rowHeight }: {
   title: string; rows: T[]; columns: OptimizeColumn<T>[]; rowKey: (r: T, i: number) => string; empty?: string; onSelect?: (r: T) => void; note?: ReactNode; rowHeight?: number;
 }) {
@@ -47,6 +47,7 @@ export function OptimizeTable<T extends RowData>({ title, rows, columns, rowKey,
   const h = columnHelper<T>();
   const defs = columns.map((c, i) => h.accessor(c.value, {
     id: c.id, header: c.label,
+    ...(c.compare ? { sortFn: (a, b) => c.compare!(a.original, b.original) } : {}),
     cell: ctx => onSelect && i === 0
       ? <button type="button" onClick={() => onSelect(ctx.row.original)} className="font-medium text-accent hover:underline">{c.cell?.(ctx.row.original) ?? String(ctx.getValue() ?? "—")}</button>
       : c.cell?.(ctx.row.original) ?? String(ctx.getValue() ?? "—"),

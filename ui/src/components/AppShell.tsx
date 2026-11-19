@@ -4,7 +4,6 @@ import { DropdownMenu } from "radix-ui";
 import {
   Check,
   ChevronDown,
-  ExternalLink,
   LogOut,
   Monitor,
   Moon,
@@ -184,9 +183,6 @@ function PrefsMenu() {
             <span className="w-4 text-center text-xs">$</span> Thousand / million {tick(prefs.numbers === "international")}
           </DropdownMenu.Item>
           <DropdownMenu.Separator className="my-1 h-px bg-border" />
-          <DropdownMenu.Item className={item} onSelect={() => window.location.assign("/")}>
-            <ExternalLink /> Classic interface
-          </DropdownMenu.Item>
           <DropdownMenu.Item className={item} onSelect={() => void signOut()}>
             <LogOut /> Sign out
           </DropdownMenu.Item>
@@ -285,7 +281,8 @@ export function AppShell() {
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="cl-content mx-auto min-w-0 w-full max-w-[1600px] flex-1 px-3 py-3 sm:px-5 sm:py-4"
+          className={cn("cl-content mx-auto w-full min-w-0 max-w-[1600px] flex-1 px-3 pb-3 sm:px-5 sm:pb-4",
+            pathname === "/v2" || pathname === "/v2/" ? "pt-2" : "pt-3 sm:pt-4")}
         >
           <Outlet />
         </m.main>

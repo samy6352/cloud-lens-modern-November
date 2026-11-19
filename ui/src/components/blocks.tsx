@@ -122,13 +122,13 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
   );
 }
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ title, subtitle, actions, compact = false }: { title: string; subtitle?: ReactNode; actions?: ReactNode; compact?: boolean }) {
   return (
-    <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-      <div>
+    <div className={cn("flex flex-wrap items-end justify-between gap-2", compact ? "mb-2" : "mb-3")}>
+      <div className={compact ? "flex flex-wrap items-baseline gap-x-3 gap-y-0.5" : undefined}>
         {/* The top bar already names the screen on phones; the heading stays for assistive technology. */}
         <h2 className="text-lg font-semibold tracking-tight max-sm:sr-only">{title}</h2>
-        {subtitle && <div className="mt-0.5 text-xs text-muted">{subtitle}</div>}
+        {subtitle && <div className={cn("text-xs text-muted", !compact && "mt-0.5")}>{subtitle}</div>}
       </div>
       {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
     </div>

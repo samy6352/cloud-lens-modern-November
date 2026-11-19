@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import fs from "node:fs";
 const base = "https://cloud-lens-web-scale-v2.azurewebsites.net";
 const routes = ["/", "/explore/billing", "/explore/uptime", "/explore/tags", "/explore/resources", "/explore/anomalies", "/explore/history", "/explore/ai-billing",
-  "/optimize/savings", "/optimize/commitments", "/optimize/performance", "/govern/budgets", "/govern/governance", "/govern/esu", "/govern/retirements", "/govern/changes",
+  "/optimize/savings", "/optimize/commitments", "/govern/budgets", "/govern/governance", "/govern/retirements", "/govern/changes",
   "/govern/azure-updates", "/reports/export", "/admin/setup", "/admin/cost-data", "/admin/audit"];
 const out = [];
 const b = await chromium.launch();

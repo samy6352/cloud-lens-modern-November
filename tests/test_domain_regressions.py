@@ -468,12 +468,19 @@ def test_anomaly_analysis_forwards_filters_and_loads_warmup(monkeypatch, fx, cod
         assert result["requested_to"] == "2026-09-14"
         assert result["count"] == len(set(codes) - {"ZZZ"})
         assert result["anomalies"][0]["day"] == "2026-09-10"
+        assert set(result["reported_daily_by_currency"]) == set(codes)
+        assert all(len(points) == 7 for points in result["reported_daily_by_currency"].values())
         if len(codes) > 1:
             assert result["currency"] is None and result["impact"] is None
             assert result["partial"] and not result["unavailable"]
             assert set(result["unavailable_currencies"]) == {"ZZZ"}
             assert {a["currency"] for a in result["anomalies"]} == {"USD", "EUR"}
             assert {a["severity"] for a in result["anomalies"]} == {"low"}
+        con.execute("DELETE FROM meta")
+        unverified = anomalies.analyse([SUB_A], 7, ("ServiceName",))
+        assert unverified["unavailable"] and unverified["incident_count"] == 0
+        assert not any(unverified["daily_by_currency"].values())
+        assert unverified["reported_daily_by_currency"] == result["reported_daily_by_currency"]
     finally:
         con.close()
 

@@ -102,7 +102,8 @@ param(
     # Never prompt (pipelines): every choice must come from parameters or defaults.
     [switch]$NonInteractive,
 
-    [switch]$WhatIf
+    [switch]$WhatIf,
+    [switch]$NoToolInstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -253,10 +254,11 @@ Step 'Checking the environment'
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw 'PowerShell 7 or later is required. In Azure Cloud Shell choose PowerShell; elsewhere install pwsh.'
 }
-if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
-    throw 'The Azure CLI (az) was not found. Azure Cloud Shell has it; elsewhere install it and run az login.'
-}
 $root = Resolve-CloudLensRoot
+. (Join-Path $root 'infra/install-prerequisites.ps1')
+Initialize-CloudLensAzureCli -NoToolInstall:$NoToolInstall
+Connect-CloudLensAzure -NonInteractive:$NonInteractive
+$buildTools = Initialize-CloudLensBuildTools -SourceRoot $root -NoToolInstall:$NoToolInstall
 $interactive = -not $NonInteractive -and [Environment]::UserInteractive
 if (-not $SubscriptionId -and $interactive) {
     $subs = @(Invoke-Az @('account', 'list', '--query', "[?state=='Enabled'].{name:name,id:id,isDefault:isDefault}"))
@@ -314,7 +316,8 @@ if ($interactive) {
         if ($mode -eq 'identity') { $AppIdentityOnly = [switch]::new($true) }
     }
 }
-if (-not $Location) { throw '-Location is required when not running in a terminal. Nothing has been changed.' }$PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'  # 2-12, as main.bicep allows
+if (-not $Location) { throw '-Location is required when not running in a terminal. Nothing has been changed.' }
+$PrefixRule = '^[a-z0-9][a-z0-9-]{0,10}[a-z0-9]$'  # 2-12, as main.bicep allows
 $SuffixRule = '^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$'  # 1-10
 if ($interactive -and -not $NamePrefix -and -not $NameSuffix) {
     Write-Host "`nResource names: {name}-web-{suffix}, {name}-postgres-{suffix}, and so on."
@@ -381,12 +384,14 @@ $wanted[$hosting] = @($HostingProviders)
 foreach ($sub in $monitored) { $wanted[$sub] = @(@($wanted[$sub]) + $MonitoredProviders | Where-Object { $_ } | Select-Object -Unique) }
 $pending = [System.Collections.Generic.List[object]]::new()
 $unregistrable = [System.Collections.Generic.List[string]]::new()
+$hostingBlockers = [System.Collections.Generic.List[string]]::new()
 foreach ($sub in $wanted.Keys) {
     try {
         $registered = @(Invoke-Az @('provider', 'list', '--subscription', $sub,
             '--query', "[?registrationState=='Registered'].namespace"))
     } catch {
         $unregistrable.Add("${sub}: $($_.Exception.Message)")
+        if ($sub -eq $hosting) { $hostingBlockers.Add("Could not read provider registrations in ${sub}: $($_.Exception.Message)") }
         continue
     }
     foreach ($namespace in $wanted[$sub]) {
@@ -397,7 +402,9 @@ foreach ($sub in $wanted.Keys) {
             $pending.Add([pscustomobject]@{ Subscription = $sub; Namespace = $namespace })
             Info "registering  : $namespace in $sub"
         } catch {
-            $unregistrable.Add("${sub}: az provider register --namespace $namespace --subscription $sub")
+            $command = "az provider register --namespace $namespace --subscription $sub"
+            $unregistrable.Add("${sub}: $command")
+            if ($sub -eq $hosting -and $namespace -in $HostingProviders) { $hostingBlockers.Add($command) }
         }
     }
 }
@@ -411,10 +418,17 @@ while ($pending.Count -and (Get-Date) -lt $deadline) {
     }
     if ($pending.Count) { Start-Sleep -Seconds 10 }
 }
-foreach ($item in $pending) { Write-Warning "$($item.Namespace) is still registering in $($item.Subscription); continuing." }
+foreach ($item in $pending) {
+    $message = "$($item.Namespace) is still registering in $($item.Subscription)."
+    if ($item.Subscription -eq $hosting -and $item.Namespace -in $HostingProviders) { $hostingBlockers.Add($message) }
+    else { Write-Warning $message }
+}
 if ($unregistrable.Count) {
     Write-Warning 'These registrations need someone with Contributor on the subscription (CloudLens reports the same on its Setup page):'
     foreach ($line in $unregistrable) { Write-Warning "  $line" }
+}
+if ($hostingBlockers.Count) {
+    throw "Required hosting providers are not ready. Ask a subscription administrator to resolve these items, then retry:`n$($hostingBlockers -join "`n")"
 }
 if (-not $pending.Count -and -not $unregistrable.Count -and -not $WhatIf) { Info 'all required providers are registered' }
 
@@ -423,6 +437,9 @@ Step 'Deploying CloudLens (infra/deploy.ps1)'
 # Pin the hosting subscription again: deploy.ps1 uses the CLI's current one, which another shell can change.
 # deploy.ps1 relies on the CLI's current subscription, and the CLI profile is shared with every other shell
 # on this machine: one `az account set` elsewhere silently redirects a long install. Work on a private copy.
+$priorConfig = $env:AZURE_CONFIG_DIR
+$private = $null
+try {
 if ((Get-Command az).CommandType -eq 'Application') {
     $source = if ($env:AZURE_CONFIG_DIR) { $env:AZURE_CONFIG_DIR } else { Join-Path $HOME '.azure' }
     $private = Join-Path ([IO.Path]::GetTempPath()) "cloudlens-az-$([guid]::NewGuid().ToString('N'))"
@@ -431,8 +448,8 @@ if ((Get-Command az).CommandType -eq 'Application') {
         Where-Object { $_.Name -notin 'logs', 'commands', 'telemetry', 'cliextensions' } |
         Copy-Item -Destination $private -Recurse -Force -ErrorAction SilentlyContinue
     $env:AZURE_CONFIG_DIR = $private
-    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Remove-Item -LiteralPath $using:private -Recurse -Force -ErrorAction SilentlyContinue } | Out-Null
-}Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
+}
+Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
 $env:CLOUDLENS_INSTALL_START = $started.ToUniversalTime().ToString('o')
 $env:CLOUDLENS_PARENT_STEP = $script:StepNumber
 $deploy = [ordered]@{
@@ -443,6 +460,8 @@ $deploy = [ordered]@{
     AppServicePlanSku      = $sizing.AppServicePlanSku
     # This installer creates paused exports after deployment; skip deploy.ps1's separate export step.
     SkipFocusExports       = $true
+    PackagePython          = $buildTools.Python
+    UsePrebuiltUi          = $buildTools.SkipUiBuild
     EnableExportManagement = $true
     ManagedExports         = $true
     InitialHistoryMonths   = $InitialHistoryMonths
@@ -551,4 +570,10 @@ if ($localPassword) {
     Info 'rerun with -LocalSignIn -ResetLocalPassword to replace it.'
 } elseif ($LocalSignIn) {
     Info 'Sign in as the existing local administrator.'
+}
+} finally {
+    $env:AZURE_CONFIG_DIR = $priorConfig
+    if ($private -and (Test-Path -LiteralPath $private)) {
+        Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction Continue
+    }
 }

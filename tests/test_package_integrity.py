@@ -70,12 +70,28 @@ class PackageIntegrity(unittest.TestCase):
         self.write(manifest=self.manifest(kind="installer-source"))
         with self.assertRaisesRegex(ValueError, "missing required files"):
             verify(self.path)
-        for name in ("infra/install.ps1", "infra/main.bicep", "tools/package.ps1",
+        for name in ("infra/install.ps1", "infra/install-prerequisites.ps1", "infra/main.bicep", "infra/add-subscriptions.ps1",
+                     "infra/CUSTOMER-DEPLOYMENT.md", "tools/package.ps1",
                      "tools/validate_package.py", "ui/package-lock.json",
                      "ui/src/main.tsx", "web/v2/index.html"):
             self.payload[name] = b"fixture"
         self.write(manifest=self.manifest(kind="installer-source"))
         self.assertEqual(verify(self.path)["kind"], "installer-source")
+        for name in ("infra/add-subscriptions.ps1", "infra/CUSTOMER-DEPLOYMENT.md"):
+            content = self.payload.pop(name)
+            self.write(manifest=self.manifest(kind="installer-source"))
+            with self.assertRaisesRegex(ValueError, "missing required files"):
+                verify(self.path)
+            self.payload[name] = content
+
+    def test_modern_frontend_does_not_require_removed_classic_entrypoint(self):
+        self.payload["web/v2/index.html"] = self.payload.pop("web/index.html")
+        self.write()
+        self.assertEqual(verify(self.path)["kind"], "app-service-runtime")
+        del self.payload["web/v2/index.html"]
+        self.write()
+        with self.assertRaisesRegex(ValueError, "frontend entrypoint"):
+            verify(self.path)
 
     def test_expected_identity_mismatches_are_refused(self):
         self.write()
@@ -89,6 +105,18 @@ class PackageIntegrity(unittest.TestCase):
         self.payload["app/main.py"] = b"bad = None\n"
         self.write(manifest=manifest)
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+            verify(self.path)
+
+    def test_running_release_identity_is_bound_to_payload_records(self):
+        manifest = self.manifest()
+        identity = "".join(f"{item['path']}:{item['sha256']}\n"
+                           for item in sorted(manifest["files"], key=lambda item: item["path"]))
+        manifest["releaseId"] = hashlib.sha256(identity.encode()).hexdigest()
+        self.write(manifest=manifest)
+        self.assertEqual(verify(self.path)["releaseId"], manifest["releaseId"])
+        manifest["releaseId"] = "0" * 64
+        self.write(manifest=manifest)
+        with self.assertRaisesRegex(ValueError, "Release identity"):
             verify(self.path)
 
     def test_size_mismatch_is_refused(self):

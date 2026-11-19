@@ -315,6 +315,9 @@ export interface AnomalyReport {
   window_from: string | null;
   window_to: string | null;
   daily: Array<{ day: string; cost: number }>;
+  daily_by_currency?: Record<string, AnomalyReport["daily"]>;
+  reported_daily_by_currency?: Record<string, AnomalyReport["daily"]>;
+  coverage_reason?: string | null;
 }
 
 /** Days that did not look like the others, collapsed into incidents. Warehouse-only on the server. */

@@ -505,6 +505,7 @@ def analyse(scope: list[str] | None = None, days: int = 60,
         if not span or not span[2]:
             return {"anomalies": [], "count": 0, "incidents": [], "incident_count": 0,
                     "algorithm": ALGORITHM,
+                    "daily": [], "daily_by_currency": {}, "reported_daily_by_currency": {},
                     "currency": fx.currency_code(display_currency),
                     "partial": True, "unavailable": True,
                     "coverage": {"basis": "validated_focus_day_receipts", "verified_days": 0},
@@ -619,7 +620,10 @@ def analyse(scope: list[str] | None = None, days: int = 60,
     high = [a for a in merged if a["severity"] == "high"]
     up = [a for a in merged if a["direction"] == "up"]
     daily_by_currency: dict[str, list[tuple]] = {}
+    reported_daily_by_currency: dict[str, list[dict[str, Any]]] = {}
     for day, code, amount in daily_rows:
+        reported_daily_by_currency.setdefault(str(code or "unknown"), []).append(
+            {"day": str(day), "cost": round(amount or 0, 2)})
         if str(day)[:10] in verified_days:
             daily_by_currency.setdefault(str(code or "unknown"), []).append((day, amount))
     for code in codes:
@@ -674,9 +678,10 @@ def analyse(scope: list[str] | None = None, days: int = 60,
                   for d, c in daily_by_currency.get(currency, [])],
         "daily_by_currency": {code: [{"day": str(d), "cost": round(c or 0, 2)} for d, c in values]
                               for code, values in daily_by_currency.items()},
-        "note": ("Some currency groups could not be assessed from verified billing coverage and currency evidence." if unavailable else
-                 coverage["reason"] if coverage_partial else
-                 "No billing data covers the selected period." if not codes else None) if merged or unavailable or not codes else (
+        "reported_daily_by_currency": reported_daily_by_currency,
+        "note": ("No billing data covers the selected period." if not codes else
+                 "Some currency groups could not be assessed from verified billing coverage and currency evidence." if unavailable else
+                 coverage["reason"] if coverage_partial else None) if merged or unavailable or not codes or coverage_partial else (
             "Nothing unusual in the loaded period. Days are compared against a rolling "
             f"{WINDOW}-day median, with a currency-normalized monetary threshold."
         ),

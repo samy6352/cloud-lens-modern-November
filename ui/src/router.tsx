@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { createRootRouteWithContext, createRoute, createRouter, Link, lazyRouteComponent } from "@tanstack/react-router";
+import { createRootRouteWithContext, createRoute, createRouter, Link, lazyRouteComponent, redirect } from "@tanstack/react-router";
 import { AppShell } from "./components/AppShell";
 import { ClassicPage } from "./routes/Classic";
 import { OverviewPage } from "./routes/Overview";
@@ -88,16 +88,18 @@ const aiBillingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/ex
   component: lazyRouteComponent(() => import("./routes/AiBilling"), "AiBillingPage") });
 const savingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/savings",
   component: lazyRouteComponent(() => import("./routes/Savings"), "SavingsPage") });
+const advisorScoreRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/advisor-score",
+  component: lazyRouteComponent(() => import("./routes/AdvisorScore"), "AdvisorScorePage") });
 const commitmentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/commitments",
   component: lazyRouteComponent(() => import("./routes/Commitments"), "CommitmentsPage") });
 const performanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/optimize/performance",
-  component: lazyRouteComponent(() => import("./routes/Performance"), "PerformancePage") });
+  beforeLoad: ({ search }) => { throw redirect({ to: "/optimize/savings", search, replace: true }); } });
 const budgetsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/budgets",
   component: lazyRouteComponent(() => import("./routes/Budgets"), "BudgetsPage") });
 const governanceRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/governance",
   component: lazyRouteComponent(() => import("./routes/Governance"), "GovernancePage") });
 const esuRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/esu",
-  component: lazyRouteComponent(() => import("./routes/Esu"), "EsuPage") });
+  beforeLoad: ({ search }) => { throw redirect({ to: "/govern/governance", search, replace: true }); } });
 const retirementsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/retirements",
   component: lazyRouteComponent(() => import("./routes/Retirements"), "RetirementsPage") });
 const changesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/govern/changes",
@@ -112,7 +114,7 @@ const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/
   component: lazyRouteComponent(() => import("./routes/Audit"), "AuditPage") });
 
 const routeTree = rootRoute.addChildren([overviewRoute, billingRoute, resourcesRoute, anomaliesRoute,
-  tagsRoute, uptimeRoute, historyRoute, setupRoute, aiBillingRoute, savingsRoute, commitmentsRoute,
+  tagsRoute, uptimeRoute, historyRoute, setupRoute, aiBillingRoute, savingsRoute, advisorScoreRoute, commitmentsRoute,
   performanceRoute, budgetsRoute, governanceRoute, esuRoute, retirementsRoute, changesRoute,
   updatesRoute, reportsRoute, costDataRoute, auditRoute, classicRoute]);
 

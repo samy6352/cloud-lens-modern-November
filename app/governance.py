@@ -21,7 +21,7 @@ import asyncio
 import logging
 from typing import Any
 
-from .cost import ARM, azure, list_subscriptions
+from .cost import ARM, arm_pages, list_subscriptions
 from .waste import _arg, _costs_for
 
 log = logging.getLogger("cloudlens.governance")
@@ -99,40 +99,25 @@ ORPHANED_RG_QUERY = """
 """
 
 
-async def _accel_capable_sizes(subscription_id: str, region: str) -> set[str]:
-    """VM sizes that support accelerated networking, from Azure's own SKU catalogue.
-
-    Without this the finding is noise: a B-series or single-vCPU machine *cannot* enable it, so
-    reporting one as "missing accelerated networking" sends someone to a blade with no such
-    checkbox. Asking Azure which sizes are capable makes the answer true.
-
-    Filtered to one region, which took this from 38 seconds to under two. Unfiltered, the SKU
-    endpoint returns every size in every region — tens of thousands of entries, paginated — and
-    whether a size supports accelerated networking does not vary by region anyway. A size that
-    is not offered in the sampled region simply will not appear, which fails towards reporting
-    it rather than hiding it.
-
-    Returned lowercase, because Resource Graph and the SKU API disagree on casing.
-    """
-    data = await azure.request(
-        "GET",
+async def _accel_sku_support(subscription_id: str, region: str) -> dict[str, bool]:
+    """Only explicit Azure SKU support flags are evidence, useful for the VM's own region."""
+    data = await arm_pages(
         f"{ARM}/subscriptions/{subscription_id}/providers/Microsoft.Compute/skus",
         params={
             "api-version": COMPUTE_API,
             "$filter": f"location eq '{region}'",
         },
     )
-    capable: set[str] = set()
-    for sku in data.get("value", []):
+    support: dict[str, bool] = {}
+    for sku in data:
         if sku.get("resourceType") != "virtualMachines":
             continue
         for cap in sku.get("capabilities", []):
-            if cap.get("name") == "AcceleratedNetworkingEnabled" and str(
-                cap.get("value", "")
-            ).lower() == "true":
-                capable.add(str(sku.get("name", "")).lower())
+            value = str(cap.get("value", "")).lower()
+            if cap.get("name") == "AcceleratedNetworkingEnabled" and value in {"true", "false"}:
+                support[str(sku.get("name") or "").lower()] = value == "true"
                 break
-    return capable
+    return support
 
 
 async def tagging(subscription_ids: list[str] | None = None,
@@ -219,48 +204,53 @@ async def accelerated_networking(subscription_ids: list[str] | None = None,
     if not subs:
         return {"empty": True, "reason": "No subscriptions in scope."}
 
-    nics = await _arg(ACCEL_QUERY, subs, top=2000)
-    if not nics:
-        return {"scanned": {"nics": 0}, "eligible": [], "enabled": 0, "not_supported": 0}
+    limit = 2000
+    nics = await _arg(ACCEL_QUERY, subs, top=limit)
+    enabled = sum(n.get("accel") is True for n in nics)
+    unverified = sum(n.get("accel") is None for n in nics)
+    off = [n for n in nics if n.get("accel") is False]
 
-    enabled = [n for n in nics if n.get("accel")]
-    off = [n for n in nics if not n.get("accel")]
+    def scope(nic: dict) -> tuple[str, str]:
+        return str(nic.get("subscriptionId") or "").lower(), str(nic.get("location") or "").lower()
 
-    # The catalogue is only needed to filter candidates. With none, the call is pure latency —
-    # and on an estate where everything is already enabled, that was the whole cost of the tab.
-    capable: set[str] = set()
-    if off:
-        region = next(
-            (str(n["location"]).lower() for n in off if n.get("location")), "eastus"
-        )
+    pairs = sorted({scope(nic) for nic in off if all(scope(nic))})
+    concurrent = asyncio.Semaphore(8)
+
+    async def lookup(pair: tuple[str, str]) -> dict[str, bool]:
         try:
-            capable = await _accel_capable_sizes(subs[0], region)
+            async with concurrent:
+                return await _accel_sku_support(*pair)
         except Exception as exc:  # noqa: BLE001
-            # Without the catalogue the finding would be a guess, so say so rather than listing
-            # machines that may have no such setting.
-            log.warning("accelerated networking: SKU catalogue unavailable: %s", str(exc)[:200])
+            log.warning("accelerated networking: SKU catalogue unavailable for %s/%s: %s",
+                        *pair, str(exc)[:200])
+            return {}
 
-    eligible, unsupported = [], []
+    catalogues = dict(zip(pairs, await asyncio.gather(*(lookup(pair) for pair in pairs)), strict=True))
+    eligible = []
+    unsupported = 0
     for n in off:
-        size = str(n.get("vmSize", "")).lower()
-        (eligible if (not capable or size in capable) else unsupported).append(n)
-
-    for n in eligible:
-        n["vm"] = n.get("vmName")
-        n["nic"] = n.get("nicName")
+        support = catalogues.get(scope(n), {}).get(str(n.get("vmSize") or "").lower())
+        if support is True and n.get("nicId") and n.get("vmId"):
+            eligible.append({**n, "vm": n.get("vmName"), "nic": n.get("nicName")})
+        elif support is False:
+            unsupported += 1
+        else:
+            unverified += 1
+    eligible.sort(key=lambda n: (scope(n), str(n["vmId"]).lower(), str(n["nicId"]).lower()))
 
     return {
         "scanned": {"nics": len(nics), "vms": len({n.get("vmId") for n in nics})},
-        "enabled": len(enabled),
-        "not_supported": len(unsupported),
-        "catalogue": bool(capable),
+        "enabled": enabled,
+        "not_supported": unsupported,
+        "unverified": unverified,
+        "catalogue": any(catalogues.values()),
+        "eligible_count": len(eligible),
+        "truncated": len(nics) >= limit or len(eligible) > top,
         "eligible": eligible[:top],
         "note": (
-            "Only sizes Azure lists as accelerated-networking capable are counted. Turning it "
-            "on requires the VM to be deallocated first."
-            if capable else
-            "The VM size catalogue could not be read, so sizes that cannot support accelerated "
-            "networking may appear here. Verify the size before changing anything."
+            "Candidates are attached NICs with Accelerated Networking off and explicit Azure VM "
+            "SKU support. Verify guest OS and driver support and plan downtime: enabling it "
+            "on an existing NIC requires deallocating the VM first."
         ),
     }
 

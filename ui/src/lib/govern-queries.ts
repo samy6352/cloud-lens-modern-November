@@ -128,14 +128,14 @@ export function subscriptionFromId(id?: string | null): string { return id?.matc
 
 export interface GovernResource {
   id?: string; name?: string; type?: string; resourceGroup?: string; location?: string; subscriptionId?: string;
-  cost?: number | null; currency?: string | null; vmName?: string; vmId?: string; nicName?: string; vmSize?: string; powerState?: string;
+  cost?: number | null; currency?: string | null; vmName?: string; vmId?: string; nicId?: string; nicName?: string; vmSize?: string; powerState?: string;
 }
 export interface GovernanceReport {
   tagging: { error?: string; note?: string; reason?: string; days?: number; coverage_pct?: number | null; untagged_total?: number;
     scanned?: { resources: number; tagged: number }; resources?: GovernResource[];
     by_type?: Array<{ type: string; full_type: string; total: number; tagged: number; untagged: number; coverage_pct: number | null }>;
     tag_keys?: Array<{ key: string; count: number }> };
-  accelerated_networking: { error?: string; note?: string; reason?: string; eligible?: GovernResource[]; enabled?: number; catalogue?: boolean; scanned?: { nics: number; vms?: number } };
+  accelerated_networking: { error?: string; note?: string; reason?: string; eligible?: GovernResource[]; eligible_count?: number; enabled?: number; unverified?: number; truncated?: boolean; catalogue?: boolean; scanned?: { nics: number; vms?: number } };
   orphaned_resource_groups: { error?: string; note?: string; reason?: string; groups?: GovernResource[]; truncated?: boolean };
 }
 export const governanceQuery = (s: Scope, days: number) => read<GovernanceReport>("governance", "dashboard/governance", { scope: s.scope, days });
@@ -146,7 +146,7 @@ export interface GovernanceFinding {
 export function governanceFindings(d: GovernanceReport): GovernanceFinding[] {
   const map = (r: GovernResource, category: string, severity: string, evidence: string, index: number): GovernanceFinding => {
     const resourceId = r.vmId || r.id || "";
-    return { id: `${category}:${resourceId}:${index}`, resource: r.vmName || r.name || r.nicName || "Unnamed resource", resourceId,
+    return { id: `${category}:${r.nicId || resourceId}:${index}`, resource: r.vmName || r.name || r.nicName || "Unnamed resource", resourceId,
       group: r.resourceGroup || "", subscription: r.subscriptionId || subscriptionFromId(resourceId), region: r.location || "",
       category, resourceType: r.type || (category === "Accelerated networking" ? "microsoft.compute/virtualmachines" : "microsoft.resources/resourcegroups"), severity, evidence, cost: r.cost, currency: r.currency };
   };

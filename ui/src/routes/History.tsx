@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type ReactNode } from "react";
+import { Chart } from "@/components/Chart";
 import { columnHelper, DataTable } from "@/components/DataTable";
 import { ErrorState, KpiTile, PageHeader } from "@/components/blocks";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { usePrefs } from "@/lib/prefs";
-import { archiveCompareQuery, archiveQuery, type ArchiveChange } from "@/lib/queries";
+import { archiveCompareQuery, archiveQuery, executiveQuery, type ArchiveChange, type Scope } from "@/lib/queries";
 
 const DATASETS: Record<string, string> = { focus: "FOCUS", amortized: "Amortized", actual: "Actual" };
 const DIMENSIONS: Array<[string, string]> = [
@@ -36,6 +37,51 @@ function Select({ label, value, onChange, children }: { label: string; value: st
 
 export function HistoryPage() {
   const search = useSearch({ from: "__root__" });
+  return (
+    <div>
+      <PageHeader title="History" subtitle="Daily Azure spend and changes to previously reported costs" />
+      <SpendHistory search={search} />
+      <div className="mt-4"><ArchiveHistory search={search} /></div>
+    </div>
+  );
+}
+
+function SpendHistory({ search }: { search: Scope }) {
+  const { numbers } = usePrefs();
+  const query = useQuery(executiveQuery(search));
+  const data = query.data;
+  const views = (data?.by_currency?.length ? data.by_currency : data ? [data] : [])
+    .filter(({ trend }) => trend.values.some((value) => value != null && Number.isFinite(value)));
+  return (
+    <Card>
+      <CardHeader title="Daily spend history" subtitle="Latest imported charges for the selected period and scope; not an archive comparison." />
+      <CardBody>
+        {query.isError && !data ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> :
+          !data ? <Skeleton className="h-[200px] w-full" /> :
+          views.length ? (
+            <div className={views.length > 1 ? "grid gap-4 xl:grid-cols-2" : undefined}>
+              {views.map(({ currency, trend }) => (
+                <div key={currency ?? "unknown"}>
+                  <h3 className="text-sm font-medium">{!currency || currency === "unknown" ? "Currency unspecified" : currency}</h3>
+                  <Chart height={200} option={{
+                    grid: { left: 8, right: 12, top: 16, bottom: 8, containLabel: true },
+                    tooltip: { trigger: "axis", valueFormatter: (v: unknown) =>
+                      typeof v === "number" ? formatMoney(v, currency, { system: numbers }) : "No data" },
+                    xAxis: { type: "category", data: trend.labels, axisLabel: { hideOverlap: true } },
+                    yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatMoney(v, currency, { compact: true, system: numbers }) } },
+                    series: [{ type: "bar", name: "Reported spend", data: trend.values }],
+                  }} />
+                  {trend.partial_last && <p className="mt-2 text-xs text-muted">The latest billing day is partial.</p>}
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-sm text-muted">No daily spend is available for this period and scope. Try a different reporting period or subscription.</p>}
+      </CardBody>
+    </Card>
+  );
+}
+
+function ArchiveHistory({ search }: { search: Scope }) {
   const { numbers } = usePrefs();
   const status = useQuery(archiveQuery);
   const a = status.data;
@@ -92,7 +138,6 @@ export function HistoryPage() {
   if (!a) {
     return (
       <div>
-        <PageHeader title="History" subtitle={<Skeleton className="h-4 w-72" />} />
         <Skeleton className="h-40 w-full" />
       </div>
     );
@@ -101,7 +146,6 @@ export function HistoryPage() {
   if (!a.enabled || !a.reachable) {
     return (
       <div>
-        <PageHeader title="History" subtitle="Cost restatements between archived daily snapshots" />
         <Card className="p-5">
           <h3 className="text-sm font-semibold">Archive unavailable</h3>
           <p className="mt-2 rounded-lg border border-warn/40 p-3 text-sm">{a.error || "The archive is not configured."}</p>
@@ -117,7 +161,6 @@ export function HistoryPage() {
       .join(", ");
     return (
       <div>
-        <PageHeader title="History" subtitle="Cost restatements between archived daily snapshots" />
         <Card className="p-5">
           <h3 className="text-sm font-semibold">More history needed</h3>
           <p className="mt-2 text-sm text-muted">
@@ -132,16 +175,8 @@ export function HistoryPage() {
   const up = (d?.total_delta ?? 0) > 0;
   return (
     <div>
-      <PageHeader
-        title="History"
-        subtitle={
-          <>
-            Cost restatements · {formatNumber(a.count, { system: numbers, digits: 0 })} snapshots in {a.account}/{a.container}
-          </>
-        }
-      />
-
       <Card>
+        <CardHeader title="Archived cost restatements" subtitle={`${formatNumber(a.count, { system: numbers, digits: 0 })} snapshots in ${a.account}/${a.container}`} />
         <CardBody>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Select label="Dataset" value={activeSet} onChange={setDataset}>

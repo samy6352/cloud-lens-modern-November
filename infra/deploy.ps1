@@ -170,6 +170,8 @@ param(
 
     # Skip the code publish and only touch infrastructure.
     [switch]$SkipCode,
+    [string]$PackagePython = '',
+    [switch]$UsePrebuiltUi,
 
     # Show what the deployment would change and stop. The equivalent of
     # `terraform plan`, and the thing to run before touching a customer's
@@ -640,6 +642,17 @@ if ($WhatIf) {
     return
 }
 
+$zip = $null
+try {
+if (-not $SkipCode) {
+    Step 'Building and verifying the application package before provisioning'
+    $zip = Join-Path $root "cloudlens-$([guid]::NewGuid().ToString('N')).zip"
+    $package = & (Join-Path $root 'tools/package.ps1') -Destination $zip -SourceRoot $root `
+        -Python $PackagePython -SkipUiBuild:$UsePrebuiltUi
+    Write-Host "    package      : $($package.Files) files, $([math]::Round($package.Bytes / 1MB, 1)) MB"
+    Write-Host "    SHA-256      : $($package.Sha256)"
+}
+
 $maxAttempts = [math]::Max(1, $InfrastructureRetryCount + 1)
 $attempt = 0
 $finalDeploymentName = ''
@@ -868,25 +881,20 @@ if ($clientId) {
 # ------------------------------------------------------------------- code
 
 if (-not $SkipCode) {
-    Step "Packaging application"
-    $zip = Join-Path $root "cloudlens-$([guid]::NewGuid().ToString('N')).zip"
-    $package = & (Join-Path $root 'tools/package.ps1') -Destination $zip -SourceRoot $root
-    Write-Host "    package      : $($package.Files) files, $([math]::Round($package.Bytes / 1MB, 1)) MB"
-    Write-Host "    SHA-256      : $($package.Sha256)"
-
     Step "Publishing to $webAppName"
     $scmHost = Get-CloudLensScmHost $webAppUrl
-    try {
-        $receipt = Publish-CloudLensPackage -ScmHost $scmHost -PackagePath $zip
-        Write-Host '    uploading, then building on Azure (the first build takes 5-10 minutes)'
-        $published = Wait-CloudLensDeployment -ScmHost $scmHost -ReceiptUrl $receipt.ReceiptUrl -Deployer $receipt.Deployer
-        Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green
-    } finally {
-        Remove-Item -LiteralPath $zip -Force
-    }
+    $receipt = Publish-CloudLensPackage -ScmHost $scmHost -PackagePath $zip
+    Write-Host '    uploading, then building on Azure (the first build takes 5-10 minutes)'
+    $published = Wait-CloudLensDeployment -ScmHost $scmHost -ReceiptUrl $receipt.ReceiptUrl -Deployer $receipt.Deployer
+    Write-Host "    build        : $($published.id) succeeded" -ForegroundColor Green
 
     Step "Checking application readiness and sign-in"
     Wait-CloudLensApplication -BaseUrl $webAppUrl -ExpectedReleaseId $package.ReleaseId
+}
+} finally {
+    if ($zip -and (Test-Path -LiteralPath $zip -PathType Leaf)) {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction Continue
+    }
 }
 
 Step "Done"

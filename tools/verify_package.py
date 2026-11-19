@@ -79,14 +79,24 @@ def verify(archive_path: Path, *, expected_sha256: str = "",
             total_bytes += size
         if recorded != archive_names - {"release-manifest.json"}:
             raise ValueError("Archive contains payload files absent from the manifest.")
-        required = {"app/main.py", "requirements.txt", "web/index.html", "web/login.html"}
+        if "releaseId" in manifest:
+            identity = "".join(f"{item['path']}:{item['sha256']}\n"
+                               for item in sorted(files, key=lambda item: item["path"]))
+            if manifest["releaseId"] != hashlib.sha256(identity.encode("utf-8")).hexdigest():
+                raise ValueError("Release identity does not match the payload manifest.")
+        required = {"app/main.py", "requirements.txt", "web/login.html"}
+        if not {"web/index.html", "web/v2/index.html"} & recorded:
+            raise ValueError("Package is missing a frontend entrypoint: web/index.html or web/v2/index.html")
         if kind == "installer-source":
-            required |= {"infra/install.ps1", "infra/main.bicep", "tools/package.ps1",
+            required |= {"infra/install.ps1", "infra/install-prerequisites.ps1",
+                         "infra/main.bicep", "infra/add-subscriptions.ps1",
+                         "infra/CUSTOMER-DEPLOYMENT.md", "tools/package.ps1",
                          "tools/validate_package.py", "ui/package-lock.json",
                          "ui/src/main.tsx", "web/v2/index.html"}
         if not required <= recorded:
             raise ValueError(f"Package is missing required files: {sorted(required - recorded)}")
     return {"path": str(archive_path.resolve()), "kind": kind, "version": version,
+            "releaseId": manifest.get("releaseId", ""),
             "files": len(recorded), "payloadBytes": total_bytes, "sha256": archive_hash}
 
 

@@ -17,6 +17,7 @@ import { formatRange, periodParam, validRange } from "@/lib/period";
 import { executiveQuery, subscriptionsQuery, type ExecutiveView, type Ranked, type Scope } from "@/lib/queries";
 import { DayContributorsPanel, dayLabel } from "@/components/DayContributors";
 import { ChangeBridge, MonthOverMonth } from "@/components/SpendPatterns";
+import { AdvisorScorePanel } from "@/components/AdvisorScore";
 
 /** A mixed-currency estate has no honest single total, so the page shows one currency at a time. */
 function useCurrencyViews(views: ExecutiveView[]) {
@@ -495,7 +496,7 @@ export function OverviewPage() {
     // money is derived from currency and numbers.
   }, [view, colors, trendStyle, landscape, currency, numbers]);
 
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
+  if (query.isError) return <div className="min-w-0"><PageHeader title="Overview" compact /><ErrorState error={query.error} onRetry={() => void query.refetch()} /><div className="mt-2"><AdvisorScorePanel /></div></div>;
 
   const topArea = view ? [...view.areas].sort((a, b) => b.cost - a.cost)[0] : undefined;
   const topMover = view?.movers.find((r) => r.delta != null);
@@ -506,6 +507,7 @@ export function OverviewPage() {
     <div className="min-w-0">
       <PageHeader
         title="Overview"
+        compact
         subtitle={
           view ? (
             <>
@@ -530,6 +532,7 @@ export function OverviewPage() {
 
       <SummaryBar view={view} money={(v) => money(v)} numbers={numbers} loading={loading} />
       {view && ordered.length > 1 && <p className="mt-1 text-right text-[11px] text-muted">One currency at a time. Totals are never combined or converted.</p>}
+      <div className="mt-2"><AdvisorScorePanel /></div>
 
       <div className="mt-3 grid grid-cols-1 gap-3 [&>*]:min-w-0 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile loading={loading} icon={<Boxes className="size-3.5" />} label="Resources billed">
