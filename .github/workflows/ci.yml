@@ -5,6 +5,7 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 # A second push to the same branch makes the first run irrelevant.
 concurrency:

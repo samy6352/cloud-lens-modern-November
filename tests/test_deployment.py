@@ -68,6 +68,9 @@ function global:az {
             Write-Host 'MANAGED_EXPORTS_IN_TEMPLATE'
             return
         }
+        if ($scenario -eq 'preview-rbac-denial') {
+            Write-Error 'InvalidTemplateDeployment: AuthorizationFailed: Microsoft.Authorization/roleAssignments/write at the planned export storage account' -ErrorAction Continue
+        }
         $global:LASTEXITCODE = 7
         return
     }
@@ -196,6 +199,15 @@ class DeploymentFailures(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Previewing the infrastructure deployment failed", result.stdout + result.stderr)
         self.assertNotIn("Preview only. Re-run", result.stdout)
+
+    def test_preview_role_assignment_denial_reports_scope_and_remediation(self):
+        result = self.run_deploy("preview-rbac-denial", "-WhatIf -SkipEntra")
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Microsoft.Authorization/roleAssignments/write at the planned export storage account", output)
+        self.assertIn("review the deploying identity's effective RBAC", output)
+        self.assertIn("No resources were provisioned", output)
+        self.assertNotIn("Preview only. Re-run", output)
 
     def test_preview_passes_adopted_storage_to_template_without_creating_resources(self):
         result = self.run_deploy("storage-preview", "-WhatIf -SkipEntra")

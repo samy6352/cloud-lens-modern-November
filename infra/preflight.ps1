@@ -127,7 +127,8 @@ if ($principalId) {
 
     $canAssign = $roleList | Where-Object { $_ -in @('Owner', 'User Access Administrator', 'Role Based Access Control Administrator') }
     if ($canAssign) {
-        Ok "can create role assignments ($($canAssign | Select-Object -First 1))"
+        Info "role-assignment role found ($($canAssign | Select-Object -First 1)); this does not prove access at the planned storage account"
+        Warn "effective role-assignment access is unverified until ARM What-If; RBAC conditions or deny assignments can still block it"
     } else {
         Bad "needs Owner or User Access Administrator to grant the app its cost access"
         Info "the deployment creates role assignments for the managed identity"
@@ -135,7 +136,7 @@ if ($principalId) {
 
     $canWrite = $roleList | Where-Object { $_ -in @('Owner', 'Contributor') }
     if ($canWrite) {
-        Ok "can create resources ($($canWrite | Select-Object -First 1))"
+        Info "resource creation role found ($($canWrite | Select-Object -First 1)); effective access and policy are checked by Azure"
     } else {
         Bad "needs Owner or Contributor to create the resource group and its resources"
     }

@@ -30,12 +30,15 @@ class CustomerBootstrap(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("requires PowerShell 7 in FullLanguage mode", result.stderr)
-                self.assertNotIn("Verify the release", result.stdout)
+                self.assertNotIn("Verify the source archive", result.stdout)
 
     def run_bootstrap(self, *, bad_hash=False, unsafe=False, approve=True, exists=False,
                       cloud_exists=False, resume=False, preview=False, blocked=False,
                       pipeline=False, offline=False, missing_hash=False, download_fail=False,
-                      explicit_options=False, preview_exit=0, restore_failed=False):
+                      explicit_options=False, preview_exit=0, restore_failed=False,
+                      many_subscriptions=False, retry_preview=False, back_from_entra=False,
+                      custom_network=False, hong_kong=False, browse_all=False,
+                      monitor_all=False, manual_regions=False):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             archive = root / "fixture.zip"
@@ -55,13 +58,25 @@ param(
     [int]$InitialHistoryMonths,
     [string]$NamePrefix,
     [string]$NameSuffix,
+    [string]$VnetAddressPrefix,
+    [string]$AppSubnetAddressPrefix,
+    [string]$PostgresSubnetAddressPrefix,
+    [string]$PrivateEndpointSubnetAddressPrefix,
     [switch]$NonInteractive,
     [switch]$WhatIf
 )
-if ($SubscriptionId -ne $Scope -or $ResourceGroup -ne $EntraAppUniqueName) { throw 'Target drift' }
+# Kind = 'all'
+if (($SubscriptionId -ne $Scope -and (-not $f.monitorAll -or $Scope -ne 'all')) -or
+    $ResourceGroup -ne $EntraAppUniqueName) { throw 'Target drift' }
 Write-Output "INSTALLED:$Location,$AiLocation,$AppIdentityOnly,preview=$WhatIf,scope=$Scope,group=$ResourceGroup"
 Write-Output "OPTIONS:$Size,history=$InitialHistoryMonths,prefix=$NamePrefix,suffix=$NameSuffix"
-if ($WhatIf -and $f.previewExit) { exit $f.previewExit }
+if ($VnetAddressPrefix) {
+    Write-Output "NETWORK:$VnetAddressPrefix,$AppSubnetAddressPrefix,$PostgresSubnetAddressPrefix,$PrivateEndpointSubnetAddressPrefix"
+}
+if ($WhatIf -and $f.previewExit -and (-not $f.retryPreview -or -not $global:previewAttempted)) {
+    $global:previewAttempted = $true
+    exit $f.previewExit
+}
 """)
                 bundle.writestr("infra/deploy.ps1", """
 param(
@@ -69,8 +84,9 @@ param(
 )
 """)
                 bundle.writestr("infra/preflight.ps1", """
-param($Location,$AiLocation,$ResourceGroup,$CostScopeSubscriptions,$PostgresSku,$AppServicePlanSku,[switch]$AppIdentityOnly)
+param($Location,$AiLocation,$ResourceGroup,$CostScopeSubscriptions,$PostgresSku,$AppServicePlanSku,[switch]$AppIdentityOnly,$VnetAddressPrefix)
 Write-Output 'CHECKED'
+if ($VnetAddressPrefix) { Write-Output "PREFLIGHT_NETWORK:$VnetAddressPrefix" }
 exit $global:preflightCode
 """)
                 if unsafe:
@@ -88,6 +104,9 @@ exit $global:preflightCode
                 "cloudExists": cloud_exists, "blocked": blocked,
                 "downloadFail": download_fail, "previewExit": preview_exit,
                 "restoreFailed": restore_failed,
+                "manySubscriptions": many_subscriptions,
+                "retryPreview": retry_preview,
+                "monitorAll": monitor_all,
             }).replace("'", "''")
             options = ("-Resume " if resume else "") + ("-Preview " if preview else "")
             if offline:
@@ -104,6 +123,9 @@ exit $global:preflightCode
                             "-NamePrefix cl -NameSuffix t1 ")
             if not pipeline:
                 options += "-SignInAppMode create-during-deploy -RuntimeAccessMode managed-identity "
+            if custom_network:
+                options += ("-VnetAddressPrefix 10.91.0.0/16 -AppSubnetAddressPrefix 10.91.1.0/24 "
+                            "-PostgresSubnetAddressPrefix 10.91.2.0/24 -PrivateEndpointSubnetAddressPrefix 10.91.3.0/24 ")
             if approve and not preview and not pipeline:
                 options += "-Approve "
 
@@ -111,21 +133,31 @@ exit $global:preflightCode
                 answers = [
                     "?",  # explain the subscription choice without consuming it
                     "1",  # hosting subscription
+                    "2" if monitor_all else "",  # monitoring scope
                     "1",  # sizing profile
                     "1",  # initial history
-                    "3",  # app region: southeastasia
-                    "1",  # AI region: eastus2
+                    "3" if hong_kong else "",  # app region
+                    "2" if hong_kong else "",  # AI region
                     "1",  # runtime: managed identity
                     "2",  # sign-in: create registration
-                    "",  # accept the default scope: hosting subscription only
                     "1",  # resource group naming mode: recommended
                     "1",  # resource naming mode: generated
                     "1" if approve else "2",  # proceed / cancel
                 ]
+                if back_from_entra:
+                    answers[8:9] = ["1", "not-a-guid", "", "2"]
+                if manual_regions:
+                    answers[5:7] = ["10", "not-a-region", "AustraliaEast", "5", "", "5", "japaneast"]
+                if browse_all:
+                    answers[:2] = [":list", "n", "p", "", SUB, "1"]
+                elif many_subscriptions:
+                    answers[:2] = ["sandbox", "n", "", "not present", SUB, "1"]
             elif approve:
                 answers = []
             else:
                 answers = ["?", ""]  # read approval guidance, then cancel with Enter
+            if retry_preview:
+                answers = ["1"]  # retry What-If; the preview flag prevents provisioning
             answers_literal = ",".join("'" + answer.replace("'", "''") + "'" for answer in answers)
             command = f"""
 $ErrorActionPreference = 'Stop'
@@ -140,11 +172,18 @@ function az {{
     $call = $args -join ' '
     if ($call -match '^(version|account get-access-token)\\b') {{ return }}
     if ($call.StartsWith('account show')) {{ return (ConvertTo-Json @{{id=$global:current;state='Enabled';name='Customer';tenantId='fixture'}}) }}
+    if ($call.StartsWith('account list-locations')) {{ return '["australiaeast","japaneast"]' }}
     if ($call.StartsWith('account list')) {{
-        return (ConvertTo-Json @(
-            @{{name='Current';id=$global:current;tenantId='fixture';isDefault=$true;state='Enabled'}},
+        $subscriptions = @(
+            @{{name='Current';id='{ORIGINAL}';tenantId='other-tenant';isDefault=$true;state='Enabled'}},
             @{{name='Target';id='{SUB}';tenantId='fixture';isDefault=$false;state='Enabled'}}
-        ))
+        )
+        if ($f.manySubscriptions) {{
+            $subscriptions += @(1..97 | ForEach-Object {{
+                @{{name="Sandbox fixture $_";id=[guid]::NewGuid().ToString();tenantId='fixture';isDefault=$false;state='Enabled'}}
+            }})
+        }}
+        return (ConvertTo-Json -InputObject $subscriptions)
     }}
     if ($call.StartsWith('account set')) {{
         $target = $args[[array]::IndexOf($args,'--subscription')+1]
@@ -214,6 +253,51 @@ exit $code
         self.assertIn("preview=False", result.stdout)
         self.assertIn("CURRENT:" + ORIGINAL, result.stdout)
 
+    def test_large_subscription_search_pages_results(self):
+        result = self.run_bootstrap(pipeline=True, many_subscriptions=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("99 enabled subscriptions", result.stdout)
+        self.assertIn("Subscriptions 1-8 of 97", result.stdout)
+        self.assertIn("Subscriptions 9-16 of 97", result.stdout)
+        self.assertIn("No enabled subscription matches", result.stdout)
+        self.assertNotIn("Subscriptions 89-96", result.stdout)
+        self.assertIn(f"scope={SUB}", result.stdout)
+
+    def test_invalid_entra_client_id_can_be_corrected_or_backed_out(self):
+        result = self.run_bootstrap(pipeline=True, back_from_entra=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Enter the Application (client) ID", result.stdout)
+        self.assertEqual(result.stdout.count("How should CloudLens users sign in?"), 2)
+        self.assertIn("create-during-deploy", result.stdout)
+
+    def test_customer_network_is_used_by_preflight_preview_and_apply(self):
+        result = self.run_bootstrap(custom_network=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PREFLIGHT_NETWORK:10.91.0.0/16", result.stdout)
+        self.assertEqual(result.stdout.count("NETWORK:10.91.0.0/16,10.91.1.0/24,10.91.2.0/24,10.91.3.0/24"), 2)
+
+    def test_hong_kong_menu_selects_eastasia_for_the_app(self):
+        result = self.run_bootstrap(pipeline=True, hong_kong=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("East Asia - Hong Kong (eastasia)", result.stdout)
+        self.assertIn("INSTALLED:eastasia,eastus2,True,preview=True", result.stdout)
+
+    def test_browse_all_subscriptions_and_monitor_all_from_the_start(self):
+        result = self.run_bootstrap(pipeline=True, many_subscriptions=True, browse_all=True, monitor_all=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("Subscriptions 1-8 of 99"), 2)
+        self.assertIn("Subscriptions 9-16 of 99", result.stdout)
+        self.assertLess(result.stdout.index("Which subscriptions should CloudLens monitor?"),
+                        result.stdout.index("Select sizing profile"))
+        self.assertIn("All 98 visible enabled subscriptions in this tenant", result.stdout)
+        self.assertIn("INSTALLED:southeastasia,southeastasia,True,preview=True,scope=all", result.stdout)
+
+    def test_manual_regions_are_validated_and_passed_to_the_installer(self):
+        result = self.run_bootstrap(pipeline=True, manual_regions=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Enter a region code listed for this subscription", result.stdout)
+        self.assertIn("INSTALLED:australiaeast,japaneast,True,preview=True", result.stdout)
+
     def test_offline_archive_requires_an_independent_hash(self):
         result = self.run_bootstrap(offline=True, missing_hash=True)
         self.assertNotEqual(result.returncode, 0)
@@ -268,6 +352,8 @@ exit $code
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("preview=True", result.stdout)
         self.assertIn("Preview complete", result.stdout)
+        self.assertIn("[5/5] Review", result.stdout)
+        self.assertNotIn("> Install", result.stdout)
         self.assertNotIn("preview=False", result.stdout)
         blocked = self.run_bootstrap(blocked=True)
         self.assertNotEqual(blocked.returncode, 0)
@@ -279,6 +365,15 @@ exit $code
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Deployment preview failed", result.stdout)
         self.assertIn("Could not restore the previous Azure CLI subscription", result.stdout)
+        self.assertNotIn("preview=False", result.stdout)
+        self.assertNotIn("Retry What-If with the same settings", result.stdout)
+
+    def test_interactive_retry_reuses_target_and_never_provisions_in_preview_mode(self):
+        result = self.run_bootstrap(preview=True, preview_exit=7, retry_preview=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Retry What-If with the same settings", result.stdout)
+        self.assertEqual(result.stdout.count(f"preview=True,scope={SUB},group=rg-customer"), 2)
+        self.assertIn("Preview complete", result.stdout)
         self.assertNotIn("preview=False", result.stdout)
 
 

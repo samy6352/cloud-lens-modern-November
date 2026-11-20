@@ -34,6 +34,62 @@ against the customer's network policy before proceeding.
 
 ### One-line download and installation
 
+Keep a reviewed copy of `Start-CloudLensSetup.ps1` from the official GitHub
+Release and run it from an approved PowerShell 7 session:
+
+```powershell
+.\Start-CloudLensSetup.ps1
+```
+
+The same launcher finds the latest published **stable** release, verifies the
+download against GitHub's SHA-256 asset digest, and starts guided setup. It
+does not run code from `main`. Setup runs readiness and What-If checks before
+asking for approval. Use `-Preview` to stop without provisioning or `-Version`
+to select an approved exact version, including a pilot. Keep the extracted
+deployment source and state for recovery. This is a new-install entry point,
+not an automatic upgrade for existing instances.
+
+If GitHub has only prereleases, the default command stops before downloading.
+For example, to try the published `pilot1` bundle without deploying:
+
+```powershell
+.\Start-CloudLensSetup.ps1 -Version 2026.11.20-pilot1 -Preview
+```
+
+Maintainers ship backend changes by tagging a reviewed commit with a new
+version, such as `v2026.11.20` for stable or `v2026.11.20-pilot2` for a pilot.
+The customer release workflow runs CI, builds the UI, packages the versioned
+customer bundle, installer source and runtime ZIP, and publishes checksums and
+commit provenance alongside the reusable launcher. The staged release is
+published only after the assets upload. Do not replace versioned release
+assets; publish a new version instead.
+
+If the identity team creates the single-tenant sign-in registration in advance,
+an Entra administrator can run `tools\New-CloudLensEntraApp.ps1 -TenantId <id>`
+from a checkout after signing in to that tenant with Azure CLI. Supply
+`-CallbackUri https://<cloudlens-host>/auth/callback` if the hostname is known.
+Pass the output `EntraClientId` to the installer and select managed identity
+for runtime Azure access. If the callback was not set, the identity team must
+add it before the installer configures sign-in, or allow the deployer to update
+that specific registration. The script does not grant consent or assign users.
+
+For a supplied customer bundle, extract the **outer** ZIP and leave the
+versioned source ZIP unopened beside `Install-CloudLens.ps1`. Verify the
+installer and archive through the approved distribution channel and obtain the
+source ZIP SHA-256 separately. From PowerShell 7 in the extracted folder:
+
+```powershell
+.\Install-CloudLens.ps1 -SourceSha256 '<approved-source-zip-sha256>'
+.\Install-CloudLens.ps1 -SourceSha256 '<approved-source-zip-sha256>' -Apply
+```
+
+The first command only previews; the second reruns the checks and still waits
+for explicit provisioning approval. Reuse the reviewed settings, including
+the same dedicated resource-group name. Confirm the network range with the
+customer's network owner; for a custom range pass `-VnetAddressPrefix`,
+`-AppSubnetAddressPrefix`, `-PostgresSubnetAddressPrefix` and
+`-PrivateEndpointSubnetAddressPrefix` to both runs.
+
 Start in PowerShell 7 in `FullLanguage` mode. Check the current mode with
 `$ExecutionContext.SessionState.LanguageMode`. The bootstrap and checkout
 preview do not support `ConstrainedLanguage`. If your workstation enforces it,
@@ -68,9 +124,8 @@ authenticate `Invoke-WebRequest`. Do not embed a token in the one-liner. In that
 case, obtain the source ZIP through the customer's approved authenticated download
 process and use the extracted installer instead.
 
-Maintainers must update the bootstrap's default `Version` and these versioned
-examples before creating a new release tag; the release workflow rejects a tag
-whose version differs from the tagged bootstrap default. The release assets are
+The legacy one-line examples below are pinned and do not drive release
+versioning. The release assets include
 the versioned source ZIP, runtime ZIP, `SHA256SUMS.txt` and a provenance JSON
 record linking the release to its exact commit SHA. Do not replace assets of an
 already published version; issue a new version instead. Local candidate ZIPs,
@@ -86,21 +141,41 @@ approved regions, an explicit hosting subscription ID and a new dedicated
 resource-group name. By default it now drives setup with numbered pick-lists
 (subscription, region, scope, sizing and import window), with recommended
 defaults selected on Enter. Type `?` at a menu to see the trade-offs without
-calling an AI service. Monitoring defaults to the hosting subscription; select
+calling an AI service. When reusing an Entra app, use its **Application (client)
+ID**, not its Object ID or secret. Press Enter at that prompt to return to the
+sign-in menu without restarting setup. When more than eight enabled subscriptions
+are visible, search by name, paste the hosting subscription ID, or type `:list`
+to browse all enabled subscriptions with `N` and `P`.
+The monitoring prompt follows the hosting choice and defaults to the hosting subscription; select
 `-Scope all` or a management group only after approving the wider access.
 The installer verifies the subscription, runs preflight and ARM What-If, and
 displays the deployment plan, including sign-in and runtime access choices.
 ARM What-If does not cover every Entra, access or export operation. Guided setup
-asks for approval before provisioning; pressing Enter cancels. Preview can install
+asks for approval before provisioning; pressing Enter cancels. Both region
+prompts default to **Southeast Asia (Singapore)**. Malaysia West and Hong Kong
+are listed near the top of the app/database menu. For either prompt, choose
+**Enter another Azure region code** to use a code reported by Azure for that
+subscription. Preflight still checks service availability and quota. For
+Hong Kong, you can also pass `-Location eastasia`. Preview can install
 local tools but does not register Azure providers or provision resources.
 If Azure requires a provider before it can preview, ask an approved subscription
 administrator to register it and retry. The prior Azure CLI subscription selection
 is restored.
+If What-If reports `Microsoft.Authorization/roleAssignments/write`, ask your
+Azure administrator to review the deploying identity's effective permission at
+the exact scope in the Azure error. A listed Owner role is not proof of effective
+access; conditions, deny assignments or inactive eligible access may apply.
+Resolve the authorization issue through your approved process. If the guided
+session is still open, choose **Retry What-If with the same settings** to reuse
+the target and verified source. Pressing Enter stops, and unattended runs fail
+immediately instead of prompting. A successful retry still requires the normal
+approval before provisioning.
 Existing resource groups are refused by default, even with a new extraction folder.
 To try the same guided preview from a checkout with built UI assets, run
 `.\tools\preview-install.ps1` in PowerShell 7 from the repository root. It builds
 and verifies a temporary ZIP and runs Azure What-If without provisioning. Use
-`-NoToolInstall` to require existing local tools.
+`-NoToolInstall` to require existing local tools, or pass `-SubscriptionId`
+to skip the hosting subscription prompt.
 
 For preview or an intentional resume, invoke the bootstrap script block with
 explicit parameters:

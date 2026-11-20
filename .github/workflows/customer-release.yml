@@ -1,0 +1,84 @@
+name: CloudLens customer release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui --no-audit --no-fund
+      - run: npm --prefix ui run build
+      - name: Build customer, source and runtime archives
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          ./tools/package-customer-release.ps1 -Version $version -Destination release-assets
+          @{
+            version = $version
+            commit = $env:GITHUB_SHA
+            workflowRun = $env:GITHUB_RUN_ID
+          } | ConvertTo-Json | Set-Content release-assets/release-provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloudlens-customer-release
+          path: release-assets
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cloudlens-customer-release
+          path: release-assets
+      - name: Publish versioned release
+        working-directory: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          bundle="CloudLens-Customer-$version.zip"
+          source="CloudLens-$version-source.zip"
+          runtime="CloudLens-$version-runtime.zip"
+          for file in "$bundle" "$source" "$runtime" Start-CloudLensSetup.ps1 SHA256SUMS.txt release-provenance.json; do
+            test -s "$file"
+          done
+          sha256sum --strict -c SHA256SUMS.txt
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace assets.' >&2
+            exit 1
+          fi
+          flags=(--latest)
+          if [[ "$version" == *-* ]]; then flags=(--prerelease --latest=false); fi
+          gh release create "$TAG" "$bundle" "$source" "$runtime" Start-CloudLensSetup.ps1 \
+            SHA256SUMS.txt release-provenance.json --verify-tag --draft --title "CloudLens $TAG" --generate-notes "${flags[@]}"
+          gh release edit "$TAG" --draft=false "${flags[@]}"

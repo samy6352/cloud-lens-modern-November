@@ -60,6 +60,10 @@ param(
     [string]$ResourceGroup = 'rg-cloudlens',
 
     [string]$AiLocation = 'eastus2',
+    [string]$VnetAddressPrefix = '10.70.0.0/16',
+    [string]$AppSubnetAddressPrefix = '10.70.1.0/24',
+    [string]$PostgresSubnetAddressPrefix = '10.70.2.0/24',
+    [string]$PrivateEndpointSubnetAddressPrefix = '10.70.3.0/24',
 
     [string]$EntraAppUniqueName = 'cloudlens',
 
@@ -381,14 +385,17 @@ if ($target.Kind -eq 'all') {
 }
 
 # ------------------------------------------------------------------ 2. providers
-Step 'Registering resource providers'
+Step $(if ($WhatIf) { 'Checking provider registrations (read-only)' } else { 'Registering resource providers' })
 $wanted = [ordered]@{}
 $wanted[$hosting] = @($HostingProviders)
 foreach ($sub in $monitored) { $wanted[$sub] = @(@($wanted[$sub]) + $MonitoredProviders | Where-Object { $_ } | Select-Object -Unique) }
 $pending = [System.Collections.Generic.List[object]]::new()
 $unregistrable = [System.Collections.Generic.List[string]]::new()
 $hostingBlockers = [System.Collections.Generic.List[string]]::new()
+$providerIndex = 0
 foreach ($sub in $wanted.Keys) {
+    $providerIndex++
+    if ($WhatIf -and $wanted.Count -gt 1) { Info "Checking subscription $providerIndex of $($wanted.Count)..." }
     try {
         $registered = @(Invoke-Az @('provider', 'list', '--subscription', $sub,
             '--query', "[?registrationState=='Registered'].namespace"))
@@ -433,7 +440,8 @@ if ($unregistrable.Count) {
 if ($hostingBlockers.Count) {
     throw "Required hosting providers are not ready. Ask a subscription administrator to resolve these items, then retry:`n$($hostingBlockers -join "`n")"
 }
-if (-not $pending.Count -and -not $unregistrable.Count -and -not $WhatIf) { Info 'all required providers are registered' }
+if ($WhatIf) { Info 'Provider check finished; no providers were registered.' }
+elseif (-not $pending.Count -and -not $unregistrable.Count) { Info 'all required providers are registered' }
 
 # ------------------------------------------------------------------ 3. deploy
 Step 'Deploying CloudLens (infra/deploy.ps1)'
@@ -441,6 +449,7 @@ Step 'Deploying CloudLens (infra/deploy.ps1)'
 # deploy.ps1 relies on the CLI's current subscription, and the CLI profile is shared with every other shell
 # on this machine: one `az account set` elsewhere silently redirects a long install. Work on a private copy.
 $priorConfig = $env:AZURE_CONFIG_DIR
+$priorTelemetry = $env:AZURE_CORE_COLLECT_TELEMETRY
 $private = $null
 try {
 if ((Get-Command az).CommandType -eq 'Application') {
@@ -451,6 +460,7 @@ if ((Get-Command az).CommandType -eq 'Application') {
         Where-Object { $_.Name -notin 'logs', 'commands', 'telemetry', 'cliextensions' } |
         Copy-Item -Destination $private -Recurse -Force -ErrorAction SilentlyContinue
     $env:AZURE_CONFIG_DIR = $private
+    $env:AZURE_CORE_COLLECT_TELEMETRY = 'no'
 }
 Invoke-Az @('account', 'set', '--subscription', $hosting) | Out-Null
 $env:CLOUDLENS_INSTALL_START = $started.ToUniversalTime().ToString('o')
@@ -477,6 +487,9 @@ else { $deploy.CostScopeSubscriptions = @($target.Id) }
 if ($EntraClientId) { $deploy.EntraClientId = $EntraClientId }
 if (-not $RequireDelegatedArm) { $deploy.AllowAppIdentityFallback = $true }
 if ($AppIdentityOnly) { $deploy.AppIdentityOnly = $true }
+foreach ($key in @('VnetAddressPrefix', 'AppSubnetAddressPrefix', 'PostgresSubnetAddressPrefix', 'PrivateEndpointSubnetAddressPrefix')) {
+    if ($PSBoundParameters.ContainsKey($key)) { $deploy[$key] = $PSBoundParameters[$key] }
+}
 if ($NamePrefix) { $deploy.NamePrefix = $NamePrefix }
 if ($NameSuffix) { $deploy.NameSuffix = $NameSuffix }
 $localPassword = $null
@@ -578,7 +591,20 @@ if ($localPassword) {
 } finally {
     Write-Progress -Activity 'CloudLens install' -Completed
     $env:AZURE_CONFIG_DIR = $priorConfig
+    $env:AZURE_CORE_COLLECT_TELEMETRY = $priorTelemetry
     if ($private -and (Test-Path -LiteralPath $private)) {
-        Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction Continue
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction Stop
+                break
+            } catch {
+                if (-not (Test-Path -LiteralPath $private)) { break }
+                if ($attempt -eq 3) {
+                    Write-Warning "Temporary Azure CLI profile could not be removed: $private. Close any process using it and remove it locally; it may contain Azure sign-in data. $($_.Exception.Message)"
+                } else {
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+        }
     }
 }

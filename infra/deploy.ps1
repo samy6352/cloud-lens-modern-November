@@ -631,12 +631,22 @@ if ($EmitArm) {
 
 if ($WhatIf) {
     Step "Previewing changes (nothing will be deployed)"
-    az deployment sub what-if `
+    $PSNativeCommandUseErrorActionPreference = $false
+    $previewOutput = & az deployment sub what-if `
         --name $deploymentName `
         --location $Location `
         --template-file $templateFile `
-        --parameters $templateParameters
-    Assert-AzSuccess 'Previewing the infrastructure deployment'
+        --parameters $templateParameters 2>&1
+    $previewExit = $LASTEXITCODE
+    if ($previewExit -ne 0) {
+        $previewDetail = $previewOutput -join "`n"
+        if ($previewDetail) { Write-Host "`nAzure What-If response:`n$previewDetail`n" }
+        if ($previewDetail -match 'Microsoft\.Authorization/roleAssignments/write') {
+            Write-Warning "Azure denied role-assignment creation. Ask the Azure administrator for '$ResourceGroup' in subscription '$($account.id)' to review the deploying identity's effective RBAC at the exact scope reported above, including role conditions, deny assignments and any required PIM activation. A listed Owner role alone does not establish access. Retry preview after an approved resolution."
+        }
+        throw "Previewing the infrastructure deployment failed (Azure CLI exit $previewExit). No resources were provisioned."
+    }
+    $previewOutput | Write-Host
     Write-Host ""
     Write-Host "Preview only. Re-run without -WhatIf to apply." -ForegroundColor Yellow
     return
